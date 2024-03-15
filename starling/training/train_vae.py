@@ -6,7 +6,11 @@ import torch.optim as optim
 from IPython import embed
 from torch.utils.data import DataLoader
 
-from starling.models.vae import VAE, vae_loss
+from starling.models.vae import (
+    VAE,
+    vae_loss_remove_padded,
+    vae_loss_without_removing_padded,
+)
 from starling.training.myloader import MyDataset
 
 
@@ -21,7 +25,12 @@ def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, devic
             data = data.to(device)
             optimizer.zero_grad()
             recon_batch, mu, logvar = model(data)
-            loss = vae_loss(recon_batch, data, mu, logvar)
+            # If we are interpolating the distance map there is no padded region
+            if args.interpolate:
+                loss = vae_loss_without_removing_padded(recon_batch, data, mu, logvar)
+            else:
+                # Here we want loss only over the non-padded region
+                loss = vae_loss_remove_padded(recon_batch, data, mu, logvar)
             accumulated_loss += loss.item()
             loss.backward()
             optimizer.step()
@@ -42,7 +51,14 @@ def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, devic
             data = validate_data["input"]
             data = data.to(device)
             recon_batch, mu, logvar = model(data)
-            validate_loss += vae_loss(recon_batch, data, mu, logvar).item()
+            if args.interpolate:
+                validate_loss += vae_loss_without_removing_padded(
+                    recon_batch, data, mu, logvar
+                ).item()
+            else:
+                validate_loss += vae_loss_remove_padded(
+                    recon_batch, data, mu, logvar
+                ).item()
             print(f"Validation Loss: {validate_loss/(num+1)}")
 
         if validate_loss / (num + 1) < lowest_loss:
