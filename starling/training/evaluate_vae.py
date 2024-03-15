@@ -78,6 +78,12 @@ parser.add_argument(
     by the accumulated count of residues for each element within a distance map*bond_length""",
 )
 
+parser.add_argument(
+    "--interpolate",
+    action="store_true",
+    help="Enable interpolation of distance maps through torch resizing using bicubic method",
+)
+
 args = parser.parse_args()
 
 # Set up data loaders (assuming you have a dataset in a folder named 'data')
