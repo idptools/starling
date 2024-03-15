@@ -38,14 +38,14 @@ def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, devic
                     )
                 )
         validate_loss = 0
-        for validate_data in validate_loader:
+        for num, validate_data in enumerate(validate_loader):
             data = validate_data["input"]
             data = data.to(device)
             recon_batch, mu, logvar = model(data)
             validate_loss += vae_loss(recon_batch, data, mu, logvar).item()
-            print(f"Validation Loss: {validate_loss}")
+            print(f"Validation Loss: {validate_loss/(num+1)}")
 
-        if validate_loss < lowest_loss:
+        if validate_loss / (num + 1) < lowest_loss:
             lowest_loss = validate_loss
             best_model_state = model.state_dict()
             Path(args.output_path).mkdir(exist_ok=True)
