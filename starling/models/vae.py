@@ -149,20 +149,46 @@ class VAE(nn.Module):
         return x_reconstructed, mu, logvar
 
 
-# Loss function for VAE
-def vae_loss(x_reconstructed, x, mu, logvar):
+# Loss function for VAE, here I am removing the padded region
+# from both the ground truth and prediction
+def vae_loss_remove_padded(x_reconstructed, x, mu, logvar):
     x = x.to(dtype=torch.float32)
-    #! Can I remove what I padded before calculating
-    #! mse_loss, because it will be small for polymers of
-    #! length 10 when padded to 750
 
-    #! What reduction should I use (I think sum makes sense, because
-    #! our sequences can be of varying length with varying amounts of padded
-    #! zeroes)
+    # Find where the padding starts by counting the number of
+    start_of_padding = torch.sum(x != 0, dim=(1, 2))[:, 0] + 1
+
+    BCE = 0
+    for num, padding_start in enumerate(start_of_padding):
+        BCE += F.mse_loss(
+            x_reconstructed[num][0][:padding_start, :padding_start],
+            x[num][0][:padding_start, :padding_start],
+        )
+
+    # Taking the mean of the loss (could also be sum)
+    BCE /= num + 1
 
     #!think about implementing weighted mse_loss where short range distance
     #! maps are more heavily weighted (i.e. more important than long range
     #! interactions)
+    # BCE = F.mse_loss(x_reconstructed, x, reduction="mean")
+
+    # See Appendix B from VAE paper:
+    # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
+    # https://arxiv.org/abs/1312.6114
+    KLD = torch.mean(
+        -0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0
+    )  # From github
+    # KLD = torch.sum(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
+    # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+    return BCE + KLD
+
+
+# Loss function for VAE, here I am removing the padded region
+# from both the ground truth and prediction
+def vae_loss_without_removing_padded(x_reconstructed, x, mu, logvar):
+    x = x.to(dtype=torch.float32)
+
     BCE = F.mse_loss(x_reconstructed, x, reduction="mean")
 
     # See Appendix B from VAE paper:
@@ -174,5 +200,4 @@ def vae_loss(x_reconstructed, x, mu, logvar):
     # KLD = torch.sum(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
     # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
-    # embed()
     return BCE + KLD
