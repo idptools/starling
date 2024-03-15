@@ -19,7 +19,7 @@ class MyDataset(torch.utils.data.Dataset):
             "length": self.normalize_by_length,
             "bond_length": self.normalize_by_normalization_matrix,
             "afrc": self.normalize_by_normalization_matrix,
-            "log": sel.normalize_by_log10,
+            "log": self.normalize_by_log10,
         }
 
         self.resizing_tactics = {"pad": self.MaxPad, "interpolate": self.interpolate}
