@@ -39,7 +39,7 @@ def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, devic
                 )
         validate_loss = 0
         for validate_data in validate_loader:
-            data = data["input"]
+            data = validate_data["input"]
             data = data.to(device)
             recon_batch, mu, logvar = model(data)
             validate_loss += vae_loss(recon_batch, data, mu, logvar).item()
