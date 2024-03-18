@@ -4,7 +4,11 @@ import torch
 from IPython import embed
 from torch.utils.data import DataLoader
 
-from starling.models.vae import VAE, vae_loss
+from starling.models.vae import (
+    VAE,
+    vae_loss_remove_padded,
+    vae_loss_without_removing_padded,
+)
 from starling.training.myloader import MyDataset
 
 
@@ -18,7 +22,13 @@ def test_vae(model, test_loader, device):
             data = data["input"]
             data = data.to(device)
             recon_batch, mu, logvar = model(data)
-            test_loss += vae_loss(recon_batch, data, mu, logvar).item()
+            if args.interpolate:
+                loss = vae_loss_without_removing_padded(recon_batch, data, mu, logvar)
+                test_loss += loss["loss"].item()
+            else:
+                # Here we want loss only over the non-padded region
+                loss = vae_loss_remove_padded(recon_batch, data, mu, logvar)
+                test_loss += loss["loss"].item()
             embed()
 
     test_loss /= len(test_loader.dataset)
@@ -84,6 +94,13 @@ parser.add_argument(
     help="Enable interpolation of distance maps through torch resizing using bicubic method",
 )
 
+parser.add_argument(
+    "--gpu_id",
+    type=int,
+    default=0,
+    help="GPU device ID for training",
+)
+
 args = parser.parse_args()
 
 # Set up data loaders (assuming you have a dataset in a folder named 'data')
@@ -91,7 +108,7 @@ test_dataset = MyDataset(args.data_file, args)
 test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True)
 
 # Set up device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device(f"cuda:{args.gpu_id}" if torch.cuda.is_available() else "cpu")
 
 # Initialize VAE model
 input_dim = 1  # Assuming distance map
@@ -101,5 +118,4 @@ vae_model = VAE(input_dim, latent_dim, deep=args.deep, kernel_size=args.kernel_s
     device
 )
 
-test_vae(vae_model, test_loader, device)
 test_vae(vae_model, test_loader, device)
