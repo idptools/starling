@@ -14,14 +14,19 @@ from starling.models.vae import (
 from starling.training.myloader import MyDataset
 
 
-def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, device):
+def train_vae(
+    model,
+    train_loader,
+    validate_loader,
+    optimizer,
+    num_epochs,
+    device,
+):
     lowest_loss = float("inf")
     model.train()
     for epoch in range(num_epochs):
-        accumulated_loss = 0
         for batch_idx, data in enumerate(train_loader):
-            data = data["input"]
-            data = data.to(dtype=torch.float32)  # Is this a problem
+            data = data["input"].to(dtype=torch.float32)
             data = data.to(device)
             optimizer.zero_grad()
             recon_batch, mu, logvar = model(data)
@@ -31,19 +36,19 @@ def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, devic
             else:
                 # Here we want loss only over the non-padded region
                 loss = vae_loss_remove_padded(recon_batch, data, mu, logvar)
-            accumulated_loss += loss.item()
-            loss.backward()
+            loss["loss"].backward()
             optimizer.step()
 
             if batch_idx % 100 == 0 and batch_idx != 0:
                 print(
-                    "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f} Average: {:.6f}".format(
+                    "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tReconstruction Loss: {:.6f}\tKLD Loss: {:.6f}".format(
                         epoch,
                         batch_idx * len(data),
                         len(train_loader.dataset),
                         100.0 * batch_idx / len(train_loader),
-                        loss.item(),
-                        accumulated_loss / batch_idx,
+                        loss["loss"].item(),
+                        loss["BCE"],
+                        loss["KLD"],
                     )
                 )
         validate_loss = 0
@@ -52,13 +57,11 @@ def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, devic
             data = data.to(device)
             recon_batch, mu, logvar = model(data)
             if args.interpolate:
-                validate_loss += vae_loss_without_removing_padded(
-                    recon_batch, data, mu, logvar
-                ).item()
+                loss = vae_loss_without_removing_padded(recon_batch, data, mu, logvar)
+                validate_loss += loss["loss"].item()
             else:
-                validate_loss += vae_loss_remove_padded(
-                    recon_batch, data, mu, logvar
-                ).item()
+                loss = vae_loss_remove_padded(recon_batch, data, mu, logvar)
+                validate_loss += loss["loss"].item()
             print(f"Validation Loss: {validate_loss/(num+1)}")
 
         if validate_loss / (num + 1) < lowest_loss:
@@ -67,7 +70,7 @@ def train_vae(model, train_loader, validate_loader, optimizer, num_epochs, devic
             Path(args.output_path).mkdir(exist_ok=True)
             torch.save(
                 best_model_state,
-                f"{args.output_path}/model_deep_{args.deep}_kernel_{args.kernel_size}_latent_{args.latent_dim}_norm_{args.normalize}.pt",
+                f"{args.output_path}/model_deep_{args.deep}_kernel_{args.kernel_size}_latent_{args.latent_dim}_norm_{args.normalize}_epoch_{epoch}.pt",
             )
 
 
@@ -155,6 +158,7 @@ args = parser.parse_args()
 
 # Set up data loaders (assuming you have a dataset in a folder named 'data')
 train_dataset = MyDataset(args.train_data, args)
+normalization_matrix = train_dataset.normalization_matrix
 train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
 validate_dataset = MyDataset(args.validation_data, args)
@@ -172,9 +176,16 @@ vae_model = VAE(input_dim, latent_dim, deep=args.deep, kernel_size=args.kernel_s
 )
 
 # Set up optimizer
-optimizer = optim.Adam(vae_model.parameters(), lr=2e-3)
-# optimizer = optim.SGD(vae_model.parameters(), lr=0.01, momentum=0.99, nesterov=True)
+# optimizer = optim.Adam(vae_model.parameters(), lr=2e-3)
+optimizer = optim.SGD(vae_model.parameters(), lr=0.01, momentum=0.99, nesterov=True)
 
 # Train the VAE
 num_epochs = args.num_epochs
-train_vae(vae_model, train_loader, validate_loader, optimizer, num_epochs, device)
+train_vae(
+    vae_model,
+    train_loader,
+    validate_loader,
+    optimizer,
+    num_epochs,
+    device,
+)
