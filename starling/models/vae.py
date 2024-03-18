@@ -158,30 +158,36 @@ def vae_loss_remove_padded(x_reconstructed, x, mu, logvar):
     start_of_padding = torch.sum(x != 0, dim=(1, 2))[:, 0] + 1
 
     BCE = 0
-    for num, padding_start in enumerate(start_of_padding):
-        BCE += F.mse_loss(
-            x_reconstructed[num][0][:padding_start, :padding_start],
-            x[num][0][:padding_start, :padding_start],
-        )
 
+    for num, padding_start in enumerate(start_of_padding):
+        x_reconstructed_no_padding = x_reconstructed[num][0][
+            :padding_start, :padding_start
+        ]
+        x_no_padding = x[num][0][:padding_start, :padding_start]
+
+        BCE += F.mse_loss(
+            x_reconstructed_no_padding,
+            x_no_padding,
+        )
     # Taking the mean of the loss (could also be sum)
     BCE /= num + 1
 
     #!think about implementing weighted mse_loss where short range distance
     #! maps are more heavily weighted (i.e. more important than long range
     #! interactions)
-    # BCE = F.mse_loss(x_reconstructed, x, reduction="mean")
 
     # See Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
     # https://arxiv.org/abs/1312.6114
-    KLD = torch.mean(
-        -0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0
-    )  # From github
+    KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
+
+    # From github
     # KLD = torch.sum(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
     # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
-    return BCE + KLD
+    loss = BCE + KLD
+
+    return {"loss": loss, "BCE": BCE, "KLD": KLD}
 
 
 # Loss function for VAE, here I am removing the padded region
@@ -200,4 +206,6 @@ def vae_loss_without_removing_padded(x_reconstructed, x, mu, logvar):
     # KLD = torch.sum(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
     # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
-    return BCE + KLD
+    loss = BCE + KLD
+
+    return {"loss": loss, "BCE": BCE, "KLD": KLD}
