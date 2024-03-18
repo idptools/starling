@@ -3,8 +3,8 @@ import glob
 import numpy as np
 import torch
 import torchvision
-from torchvision.transforms import InterpolationMode
 from IPython import embed
+from torchvision.transforms import InterpolationMode
 
 
 class MyDataset(torch.utils.data.Dataset):
@@ -39,7 +39,7 @@ class MyDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         # Get a single data sample
         sample = np.loadtxt(self.data_path[index])
-        
+
         # Normalize your distance map according to user input
         if self.args.normalize is not None:
             sample = self.normalization_tactics[self.args.normalize](sample)
@@ -50,14 +50,14 @@ class MyDataset(torch.utils.data.Dataset):
 
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
-        
+
         # embed()
 
         return {"input": sample}
-    
+
     def read_paths(self, txt_file):
         paths = []
-        with open(txt_file, 'r') as file:
+        with open(txt_file, "r") as file:
             for line in file:
                 path = line.strip()
                 paths.append(path)
@@ -77,23 +77,45 @@ class MyDataset(torch.utils.data.Dataset):
             constant_values=0,
         )
 
+    # def interpolate(self, distance_map):
+    #     # This BICUBIC method was tested to perform the best
+    #     # on distance maps (smallest error, max error ~0.07A)
+    #     method = InterpolationMode.BICUBIC
+    #     transform = torchvision.transforms.Resize(
+    #         self.target_shape, interpolation=method
+    #     )
+
+    #     # Set up the distance map shapes to be right for transform
+    #     # needed [B, C, H, W]
+    #     distance_map_upsample = torch.from_numpy(distance_map).unsqueeze(0).unsqueeze(0)
+
+    #     # Transform the data
+    #     distance_map_upsample = transform(distance_map_upsample)
+    #     # Convert back to an array with shape (H, W)
+    #     distance_map_upsample = np.array(distance_map_upsample.squeeze().tolist())
+    #     np.fill_diagonal(distance_map_upsample, 0)
+
+    #     return distance_map_upsample
+
     def interpolate(self, distance_map):
         # This BICUBIC method was tested to perform the best
         # on distance maps (smallest error, max error ~0.07A)
-        method = InterpolationMode.BICUBIC
-        transform = torchvision.transforms.Resize(
-            self.target_shape, interpolation=method
-        )
+        method = "bicubic"
 
         # Set up the distance map shapes to be right for transform
         # needed [B, C, H, W]
         distance_map_upsample = torch.from_numpy(distance_map).unsqueeze(0).unsqueeze(0)
 
         # Transform the data
-        distance_map_upsample = transform(distance_map_upsample)
+        distance_map_upsample = torch.nn.functional.interpolate(
+            distance_map_upsample, size=self.target_shape, mode=method
+        )
         # Convert back to an array with shape (H, W)
-        distance_map_upsample = np.array(distance_map_upsample.squeeze().tolist())
+        distance_map_upsample = distance_map_upsample.squeeze().numpy()
         np.fill_diagonal(distance_map_upsample, 0)
+        distance_map_upsample = distance_map_upsample.clip(
+            min=0, max=(np.max(distance_map))
+        )
 
         return distance_map_upsample
 
@@ -107,7 +129,9 @@ class MyDataset(torch.utils.data.Dataset):
     def normalize_by_normalization_matrix(self, original_array):
         # Divide by some normalization matrix
         shape = np.shape(original_array)
-        normalized_matrix = original_array / self.normalization_matrix[:shape[0],:shape[1]]
+        normalized_matrix = (
+            original_array / self.normalization_matrix[: shape[0], : shape[1]]
+        )
         return normalized_matrix
 
     def generate_normalization_matrix(self, shape, bond_length=3.81):
@@ -133,10 +157,11 @@ class MyDataset(torch.utils.data.Dataset):
         distance_map = protein.get_distance_map()
         distance_map = distance_map + distance_map.T
         distance_map[distance_map == 0] = 1
+        # embed()
 
         return distance_map
 
     def normalize_by_log10(self, original_array):
-        # Divide by some normalization matrix
+        #! We should change this by filling the diagonal with 1 which will after log10 equal to
         normalized_matrix = np.log10(original_array + 0.005)
         return normalized_matrix
