@@ -158,7 +158,6 @@ args = parser.parse_args()
 
 # Set up data loaders (assuming you have a dataset in a folder named 'data')
 train_dataset = MyDataset(args.train_data, args)
-normalization_matrix = train_dataset.normalization_matrix
 train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
 validate_dataset = MyDataset(args.validation_data, args)
@@ -177,7 +176,9 @@ vae_model = VAE(input_dim, latent_dim, deep=args.deep, kernel_size=args.kernel_s
 
 # Set up optimizer
 # optimizer = optim.Adam(vae_model.parameters(), lr=2e-3)
-optimizer = optim.SGD(vae_model.parameters(), lr=0.01, momentum=0.99, nesterov=True)
+optimizer = optim.SGD(
+    vae_model.parameters(), lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.001
+)
 
 # Train the VAE
 num_epochs = args.num_epochs
