@@ -22,7 +22,7 @@ class VAE(nn.Module):
 
         self.hidden_dims = [starting_hidden_dim * 2**i for i in range(deep)]
         # This is hard coded in
-        size_of_distance_map = 768
+        size_of_distance_map = 192
 
         shape = int(size_of_distance_map / 2 ** len(self.hidden_dims))
         modules = []
@@ -38,13 +38,13 @@ class VAE(nn.Module):
                         padding=2 if kernel_size == 5 else 1,
                     ),
                     # PrintLayer("encoder"),
-                    # nn.LayerNorm(
-                    #     [
-                    #         hidden_dim,
-                    #         int(size_of_distance_map / (2 ** (num + 1))),
-                    #         int(size_of_distance_map / (2 ** (num + 1))),
-                    #     ]
-                    # ),
+                    nn.LayerNorm(
+                        [
+                            hidden_dim,
+                            int(size_of_distance_map / (2 ** (num + 1))),
+                            int(size_of_distance_map / (2 ** (num + 1))),
+                        ]
+                    ),
                     nn.ReLU(),
                 )
             )
@@ -76,13 +76,13 @@ class VAE(nn.Module):
                         output_padding=1,
                     ),
                     # PrintLayer("Decoder"),
-                    # nn.LayerNorm(
-                    #     [
-                    #         reverse_hidden_dims[num + 1],
-                    #         int(shape * (2 ** (num + 1))),
-                    #         int(shape * (2 ** (num + 1))),
-                    #     ]
-                    # ),
+                    nn.LayerNorm(
+                        [
+                            reverse_hidden_dims[num + 1],
+                            int(shape * (2 ** (num + 1))),
+                            int(shape * (2 ** (num + 1))),
+                        ]
+                    ),
                     nn.ReLU(),
                 )
             )
@@ -99,13 +99,14 @@ class VAE(nn.Module):
                 output_padding=1,
             ),
             # PrintLayer("Final layer"),
-            # nn.LayerNorm(
-            #     [
-            #         reverse_hidden_dims[-1],
-            #         size_of_distance_map,
-            #         size_of_distance_map,
-            #     ]
-            # ),
+            nn.LayerNorm(
+                [
+                    reverse_hidden_dims[-1],
+                    size_of_distance_map,
+                    size_of_distance_map,
+                ]
+            ),
+            # nn.BatchNorm2d(1),
             nn.Conv2d(
                 reverse_hidden_dims[-1],
                 out_channels=1,
@@ -113,7 +114,7 @@ class VAE(nn.Module):
                 padding=2 if kernel_size == 5 else 1,
             ),
             # PrintLayer("Final layer"),
-            nn.ReLU(),
+            nn.Tanh(),
         )
 
     def encode(self, x: torch.Tensor):
@@ -179,13 +180,23 @@ def vae_loss_remove_padded(x_reconstructed, x, mu, logvar):
     # See Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
     # https://arxiv.org/abs/1312.6114
-    KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
+    # KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
+    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+    KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+    # eps = 1e-6
+    # KLD = torch.mean(
+    #     -0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp().clamp(eps), dim=1), dim=0
+    # )
 
     # From github
     # KLD = torch.sum(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
     # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
-    loss = BCE + KLD
+    # KLD = 0
+
+    beta = 0.01
+    # beta = 1
+    loss = BCE + beta * KLD
 
     return {"loss": loss, "BCE": BCE, "KLD": KLD}
 
