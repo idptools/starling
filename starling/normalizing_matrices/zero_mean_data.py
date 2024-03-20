@@ -27,9 +27,9 @@ def MaxPad(original_array):
 def calculate_running_mean(dir):
     files_to_load = glob.glob(f"{dir}*gz")
     distances = np.array([np.loadtxt(i) for i in files_to_load])
-    mean = np.mean(distances, axis=0)
-    distances = [MaxPad(dist) for dist in distances]
-    return mean
+    means = np.mean(distances, axis=0)
+    means = MaxPad(means)
+    return means
 
 
 dirs = sorted(

@@ -31,8 +31,8 @@ def calculate_running_mean(dir):
     files_to_load = glob.glob(f"{dir}*gz")
     distances = np.array([np.loadtxt(i) for i in files_to_load])
     shapes = distances.shape
-    deviations = (distances - mean_matrix[: shapes[1], : shapes[2]]) ** 2
-    deviations = np.mean(deviations, axis=0)
+    deviations = abs((distances - mean_matrix[: shapes[1], : shapes[2]])) ** 2
+    deviations = np.sum(deviations, axis=0)
     deviations = MaxPad(deviations)
     return deviations
 
@@ -52,7 +52,7 @@ with mp.Pool(processes=32) as pool:
 
 np.save("deviations_per_sequence.npy", deviations_per_sequence)
 
-non_zero_counts = np.count_nonzero(deviations_per_sequence, axis=0)
+non_zero_counts = np.count_nonzero(deviations_per_sequence, axis=0) * 1000
 non_zero_counts[non_zero_counts == 0] = 1
 
 total_deviations = np.sum(deviations_per_sequence, axis=0)
