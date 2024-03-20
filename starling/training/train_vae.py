@@ -39,7 +39,7 @@ def train_vae(
             loss["loss"].backward()
             optimizer.step()
 
-            if batch_idx % 100 == 0 and batch_idx != 0:
+            if batch_idx % 10 == 0 and batch_idx != 0:
                 print(
                     "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tReconstruction Loss: {:.6f}\tKLD Loss: {:.6f}".format(
                         epoch,
@@ -47,8 +47,8 @@ def train_vae(
                         len(train_loader.dataset),
                         100.0 * batch_idx / len(train_loader),
                         loss["loss"].item(),
-                        loss["BCE"],
-                        loss["KLD"],
+                        loss["BCE"].item(),
+                        loss["KLD"].item(),
                     )
                 )
         validate_loss = 0
@@ -176,9 +176,10 @@ vae_model = VAE(input_dim, latent_dim, deep=args.deep, kernel_size=args.kernel_s
 
 # Set up optimizer
 # optimizer = optim.Adam(vae_model.parameters(), lr=2e-3)
-optimizer = optim.SGD(
-    vae_model.parameters(), lr=0.001, momentum=0.9, nesterov=True, weight_decay=0.001
-)
+# optimizer = optim.SGD(
+# vae_model.parameters(), lr=0.01, momentum=0.9, nesterov=True, weight_decay=0.001
+# )
+optimizer = optim.SGD(vae_model.parameters(), lr=0.01, momentum=0.9, nesterov=True)
 
 # Train the VAE
 num_epochs = args.num_epochs
