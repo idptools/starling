@@ -6,6 +6,8 @@ import torchvision
 from IPython import embed
 from torchvision.transforms import InterpolationMode
 
+from starling.data import load_norm_matrices
+
 
 class MyDataset(torch.utils.data.Dataset):
     def __init__(self, txt_file, args):
@@ -13,13 +15,15 @@ class MyDataset(torch.utils.data.Dataset):
         self.data_path = self.read_paths(txt_file)
 
         # Hard coded in so that the dimensions during encoding and decoding match
-        self.target_shape = (768, 768)
+        # self.target_shape = (768, 768)
+        self.target_shape = (192, 192)
 
         self.normalization_tactics = {
             "length": self.normalize_by_length,
             "bond_length": self.normalize_by_normalization_matrix,
             "afrc": self.normalize_by_normalization_matrix,
             "log": self.normalize_by_log10,
+            "normalize_and_scale": self.normalize_and_scale,
         }
 
         self.resizing_tactics = {"pad": self.MaxPad, "interpolate": self.interpolate}
@@ -32,6 +36,14 @@ class MyDataset(torch.utils.data.Dataset):
             self.normalization_matrix = self.generate_afrc_distance_map(
                 self.target_shape
             )
+        elif args.normalize == "normalize_and_scale":
+            (
+                self.mean_matrix,
+                self.std_matrix,
+                self.max_standard,
+                self.min_standard,
+                self.max_expected_distances,
+            ) = load_norm_matrices.load_matrices()
 
     def __len__(self):
         return len(self.data_path)
@@ -165,3 +177,24 @@ class MyDataset(torch.utils.data.Dataset):
         #! We should change this by filling the diagonal with 1 which will after log10 equal to
         normalized_matrix = np.log10(original_array + 0.005)
         return normalized_matrix
+
+    def normalize_and_scale(self, original_array):
+        height, width = original_array.shape
+        standardized_data = (
+            original_array - self.mean_matrix[:height, :width]
+        ) / self.std_matrix[:height, :width]
+
+        denominator = (
+            self.max_standard[:height, :width] - self.min_standard[:height, :width]
+        )
+        denominator[denominator == 0] = 1
+
+        scaled_data = (
+            2 * (standardized_data - self.min_standard[:height, :width]) / (denominator)
+            - 1
+        )
+        # scaled_data = original_array / (
+        #     self.max_expected_distances[:height, :width] + 1e-5
+        # )
+
+        return scaled_data
