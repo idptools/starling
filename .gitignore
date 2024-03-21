@@ -2,3 +2,4 @@ starling.egg-info/
 starling/__pycache__/
 starling/models/__pycache__/
 *cpython*
+lightning_logs/
