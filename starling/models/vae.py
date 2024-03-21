@@ -1,3 +1,4 @@
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,9 +15,14 @@ class PrintLayer(nn.Module):
         return x
 
 
-class VAE(nn.Module):
+torch.set_float32_matmul_precision("high")
+
+
+class VAE(pl.LightningModule):
     def __init__(self, in_channels: int, latent_dim: int, deep: int, kernel_size: int):
-        super(VAE, self).__init__()
+        super().__init__()
+
+        self.save_hyperparameters()
         # Hard coded, should we actually start at 8 or 16
         starting_hidden_dim = 32
 
@@ -114,8 +120,13 @@ class VAE(nn.Module):
                 padding=2 if kernel_size == 5 else 1,
             ),
             # PrintLayer("Final layer"),
-            nn.Tanh(),
+            # nn.Tanh(),
+            nn.ReLU(),
         )
+
+    def configure_optimizers(self):
+        # return torch.optim.Adam(self.parameters(), lr=1e-4)
+        return torch.optim.SGD(self.parameters(), lr=1e-4, momentum=0.9)
 
     def encode(self, x: torch.Tensor):
         z = self.encoder(x)
@@ -139,8 +150,47 @@ class VAE(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
+    def vae_loss_remove_padded(self, x_reconstructed, x, mu, logvar):
+        # Loss function for VAE, here I am removing the padded region
+        # from both the ground truth and prediction
+
+        # Find where the padding starts by counting the number of
+        start_of_padding = torch.sum(x != 0, dim=(1, 2))[:, 0] + 1
+
+        BCE = 0
+
+        for num, padding_start in enumerate(start_of_padding):
+            x_reconstructed_no_padding = x_reconstructed[num][0][
+                :padding_start, :padding_start
+            ]
+            x_no_padding = x[num][0][:padding_start, :padding_start]
+
+            BCE += F.mse_loss(
+                x_reconstructed_no_padding,
+                x_no_padding,
+            )
+        # Taking the mean of the loss (could also be sum)
+        BCE /= num + 1
+
+        #!think about implementing weighted mse_loss where short range distance
+        #! maps are more heavily weighted (i.e. more important than long range
+        #! interactions)
+
+        # See Appendix B from VAE paper:
+        # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
+        # https://arxiv.org/abs/1312.6114
+        # KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+
+        beta = 0.01
+        # beta = 1
+        # KLD *= 0
+        loss = BCE + beta * KLD
+
+        return {"loss": loss, "BCE": BCE, "KLD": KLD}
+
     def forward(self, x):
-        x = x.to(dtype=torch.float32)
         mu, logvar = self.encode(x)
 
         latent_encoding = self.reparameterize(mu, logvar)
@@ -149,74 +199,40 @@ class VAE(nn.Module):
 
         return x_reconstructed, mu, logvar
 
+    def training_step(self, batch, batch_idx):
+        x = batch["input"]
 
-# Loss function for VAE, here I am removing the padded region
-# from both the ground truth and prediction
-def vae_loss_remove_padded(x_reconstructed, x, mu, logvar):
-    x = x.to(dtype=torch.float32)
+        x_reconstructed, mu, logvar = self.forward(x)
 
-    # Find where the padding starts by counting the number of
-    start_of_padding = torch.sum(x != 0, dim=(1, 2))[:, 0] + 1
+        loss = self.vae_loss_remove_padded(x_reconstructed, x, mu, logvar)
 
-    BCE = 0
+        if batch_idx % 100 == 0:
+            print(
+                "\t\tLoss:",
+                round(loss["loss"].item(), 4),
+                "Recon",
+                round(loss["BCE"].item(), 4),
+                "KLD",
+                round(loss["KLD"].item(), 4),
+            )
 
-    for num, padding_start in enumerate(start_of_padding):
-        x_reconstructed_no_padding = x_reconstructed[num][0][
-            :padding_start, :padding_start
-        ]
-        x_no_padding = x[num][0][:padding_start, :padding_start]
+        return loss["loss"]
 
-        BCE += F.mse_loss(
-            x_reconstructed_no_padding,
-            x_no_padding,
-        )
-    # Taking the mean of the loss (could also be sum)
-    BCE /= num + 1
+    def validation_step(self, batch, batch_idx):
+        x = batch["input"]
 
-    #!think about implementing weighted mse_loss where short range distance
-    #! maps are more heavily weighted (i.e. more important than long range
-    #! interactions)
+        x_reconstructed, mu, logvar = self.forward(x)
 
-    # See Appendix B from VAE paper:
-    # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
-    # https://arxiv.org/abs/1312.6114
-    # KLD = torch.mean(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
-    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-    KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
-    # eps = 1e-6
-    # KLD = torch.mean(
-    #     -0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp().clamp(eps), dim=1), dim=0
-    # )
+        loss = self.vae_loss_remove_padded(x_reconstructed, x, mu, logvar)
 
-    # From github
-    # KLD = torch.sum(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
-    # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        if batch_idx % 100 == 0:
+            print(
+                "\t\tLoss:",
+                round(loss["loss"].item(), 4),
+                "Recon",
+                round(loss["BCE"].item(), 4),
+                "KLD",
+                round(loss["KLD"].item(), 4),
+            )
 
-    # KLD = 0
-
-    beta = 0.01
-    # beta = 1
-    loss = BCE + beta * KLD
-
-    return {"loss": loss, "BCE": BCE, "KLD": KLD}
-
-
-# Loss function for VAE, here I am removing the padded region
-# from both the ground truth and prediction
-def vae_loss_without_removing_padded(x_reconstructed, x, mu, logvar):
-    x = x.to(dtype=torch.float32)
-
-    BCE = F.mse_loss(x_reconstructed, x, reduction="mean")
-
-    # See Appendix B from VAE paper:
-    # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
-    # https://arxiv.org/abs/1312.6114
-    KLD = torch.mean(
-        -0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0
-    )  # From github
-    # KLD = torch.sum(-0.5 * torch.sum(1 + logvar - mu**2 - logvar.exp(), dim=1), dim=0)
-    # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-
-    loss = BCE + KLD
-
-    return {"loss": loss, "BCE": BCE, "KLD": KLD}
+        return loss["loss"]
