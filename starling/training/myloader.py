@@ -1,10 +1,7 @@
-import glob
-
 import numpy as np
+import pytorch_lightning as pl
 import torch
-import torchvision
 from IPython import embed
-from torchvision.transforms import InterpolationMode
 
 from starling.data import load_norm_matrices
 
@@ -50,7 +47,7 @@ class MyDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         # Get a single data sample
-        sample = np.loadtxt(self.data_path[index])
+        sample = np.loadtxt(self.data_path[index], dtype=np.float32)
 
         # Normalize your distance map according to user input
         if self.args.normalize is not None:
@@ -88,26 +85,6 @@ class MyDataset(torch.utils.data.Dataset):
             mode="constant",
             constant_values=0,
         )
-
-    # def interpolate(self, distance_map):
-    #     # This BICUBIC method was tested to perform the best
-    #     # on distance maps (smallest error, max error ~0.07A)
-    #     method = InterpolationMode.BICUBIC
-    #     transform = torchvision.transforms.Resize(
-    #         self.target_shape, interpolation=method
-    #     )
-
-    #     # Set up the distance map shapes to be right for transform
-    #     # needed [B, C, H, W]
-    #     distance_map_upsample = torch.from_numpy(distance_map).unsqueeze(0).unsqueeze(0)
-
-    #     # Transform the data
-    #     distance_map_upsample = transform(distance_map_upsample)
-    #     # Convert back to an array with shape (H, W)
-    #     distance_map_upsample = np.array(distance_map_upsample.squeeze().tolist())
-    #     np.fill_diagonal(distance_map_upsample, 0)
-
-    #     return distance_map_upsample
 
     def interpolate(self, distance_map):
         # This BICUBIC method was tested to perform the best
@@ -198,3 +175,36 @@ class MyDataset(torch.utils.data.Dataset):
         # )
 
         return scaled_data
+
+
+# Step 2: Create a data module
+class LightningModule(pl.LightningDataModule):
+    def __init__(self, train_data, val_data, test_data, args, batch_size=32):
+        super().__init__()
+        self.train_data = train_data
+        self.val_data = val_data
+        self.test_data = test_data
+        self.batch_size = batch_size
+        self.args = args
+
+    def prepare_data(self):
+        # Implement any data download or preprocessing here
+        pass
+
+    def setup(self, stage=None):
+        self.train_dataset = MyDataset(self.train_data, self.args)
+        self.val_dataset = MyDataset(self.val_data, self.args)
+        self.test_dataset = MyDataset(self.test_data, self.args)
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.train_dataset, batch_size=self.batch_size, shuffle=True
+        )
+
+    def val_dataloader(self):
+        return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
+
+    def test_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.test_dataset, batch_size=self.batch_size
+        )
