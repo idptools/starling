@@ -2,7 +2,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from IPython import embed
-
+import os
 from starling.data import load_norm_matrices
 
 
@@ -186,6 +186,7 @@ class MatrixDataModule(pl.LightningDataModule):
         self.test_data = test_data
         self.batch_size = batch_size
         self.args = args
+        self.num_workers = os.cpu_count() / 4
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -198,13 +199,15 @@ class MatrixDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
-            self.train_dataset, batch_size=self.batch_size, shuffle=True
+            self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers,
         )
 
     def val_dataloader(self):
-        return torch.utils.data.DataLoader(self.val_dataset, batch_size=self.batch_size)
+        return torch.utils.data.DataLoader(
+            self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+        )
 
     def test_dataloader(self):
         return torch.utils.data.DataLoader(
-            self.test_dataset, batch_size=self.batch_size
+            self.test_dataset, batch_size=1, num_workers=self.num_workers,
         )
