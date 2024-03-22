@@ -255,11 +255,11 @@ class VAE(pl.LightningModule):
         # return torch.optim.SGD(self.parameters(), lr=1e-4, momentum=0.9)
 
         optimizer = torch.optim.SGD(
-            self.parameters(), lr=1e-1, momentum=0.99, nesterov=True
+            self.parameters(), lr=0.05, momentum=0.99, nesterov=True
         )
 
         lr_scheduler = {
-            "scheduler": CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=1e-4),
+            "scheduler": CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=1e-4),
             "monitor": self.monitor,
             "interval": "epoch",
         }
