@@ -6,7 +6,7 @@ from IPython import embed
 from starling.data import load_norm_matrices
 
 
-class MyDataset(torch.utils.data.Dataset):
+class MatrixDataset(torch.utils.data.Dataset):
     def __init__(self, txt_file, args):
         self.args = args
         self.data_path = self.read_paths(txt_file)
@@ -178,7 +178,7 @@ class MyDataset(torch.utils.data.Dataset):
 
 
 # Step 2: Create a data module
-class LightningModule(pl.LightningDataModule):
+class MatrixDataModule(pl.LightningDataModule):
     def __init__(self, train_data, val_data, test_data, batch_size, args):
         super().__init__()
         self.train_data = train_data
@@ -192,9 +192,9 @@ class LightningModule(pl.LightningDataModule):
         pass
 
     def setup(self, stage=None):
-        self.train_dataset = MyDataset(self.train_data, self.args)
-        self.val_dataset = MyDataset(self.val_data, self.args)
-        self.test_dataset = MyDataset(self.test_data, self.args)
+        self.train_dataset = MatrixDataset(self.train_data, self.args)
+        self.val_dataset = MatrixDataset(self.val_data, self.args)
+        self.test_dataset = MatrixDataset(self.test_data, self.args)
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(

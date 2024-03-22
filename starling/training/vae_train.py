@@ -11,7 +11,7 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 
 from starling.models.vae import VAE
-from starling.training.myloader import LightningModule
+from starling.training.myloader import MatrixDataModule
 
 
 def train_vae():
