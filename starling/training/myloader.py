@@ -179,7 +179,7 @@ class MyDataset(torch.utils.data.Dataset):
 
 # Step 2: Create a data module
 class LightningModule(pl.LightningDataModule):
-    def __init__(self, train_data, val_data, test_data, args, batch_size=32):
+    def __init__(self, train_data, val_data, test_data, batch_size, args):
         super().__init__()
         self.train_data = train_data
         self.val_data = val_data
