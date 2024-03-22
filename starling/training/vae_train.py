@@ -109,7 +109,7 @@ def train_vae():
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     # Set up data loaders (assuming you have a dataset in a folder named 'data')
-    dataset = LightningModule(
+    dataset = MatrixDataModule(
         args.train_data,
         args.validation_data,
         args.validation_data,

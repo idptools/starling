@@ -186,7 +186,7 @@ class MatrixDataModule(pl.LightningDataModule):
         self.test_data = test_data
         self.batch_size = batch_size
         self.args = args
-        self.num_workers = os.cpu_count() / 4
+        self.num_workers = int(os.cpu_count() / 4)
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -200,7 +200,7 @@ class MatrixDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
             self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers,
-        )
+            )
 
     def val_dataloader(self):
         return torch.utils.data.DataLoader(
