@@ -170,11 +170,16 @@ class VAE(pl.LightningModule):
                     :padding_start, :padding_start
                 ]
                 x_no_padding = x[num][0][:padding_start, :padding_start]
+                weights = torch.reciprocal(x_no_padding)
+                weights[weights == float("inf")] = 0
 
-                BCE += F.mse_loss(
-                    x_reconstructed_no_padding,
-                    x_no_padding,
+                mse_loss = F.mse_loss(
+                    x_reconstructed_no_padding, x_no_padding, reduction="none"
                 )
+                embed()
+
+                BCE += ((mse_loss * weights) / (weights.sum() / 2)).sum()
+
             # Taking the mean of the loss (could also be sum)
             BCE /= num + 1
 
