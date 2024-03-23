@@ -156,7 +156,7 @@ class VAE(pl.LightningModule):
         return mu + eps * std
 
     def vae_loss(self, x_reconstructed, x, mu, logvar, loss_type: str):
-        if loss_type == "mse":
+        if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
             # from both the ground truth and prediction
 
@@ -170,15 +170,23 @@ class VAE(pl.LightningModule):
                     :padding_start, :padding_start
                 ]
                 x_no_padding = x[num][0][:padding_start, :padding_start]
-                weights = torch.reciprocal(x_no_padding)
-                weights[weights == float("inf")] = 0
 
-                mse_loss = F.mse_loss(
-                    x_reconstructed_no_padding, x_no_padding, reduction="none"
-                )
-                embed()
+                # Mean squared error weighted by ground truth distance
+                if loss_type == "weighted_mse":
+                    weights = torch.reciprocal(x_no_padding)
+                    weights[weights == float("inf")] = 0
 
-                BCE += ((mse_loss * weights) / (weights.sum() / 2)).sum()
+                    mse_loss = F.mse_loss(
+                        x_reconstructed_no_padding, x_no_padding, reduction="none"
+                    )
+
+                    BCE += ((mse_loss * weights) / (weights.sum() / 2)).sum()
+
+                # Mean squared error not weighted by ground truth distance
+                else:
+                    BCE += F.mse_loss(
+                        x_reconstructed_no_padding, x_no_padding, reduction="mean"
+                    )
 
             # Taking the mean of the loss (could also be sum)
             BCE /= num + 1
@@ -194,7 +202,8 @@ class VAE(pl.LightningModule):
             KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
             KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
-            beta = 0.01
+            # beta = 0.01
+            beta = 0.1
             # beta = 1
             # KLD *= 0
             loss = BCE + beta * KLD
