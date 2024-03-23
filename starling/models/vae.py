@@ -20,10 +20,18 @@ torch.set_float32_matmul_precision("high")
 
 
 class VAE(pl.LightningModule):
-    def __init__(self, in_channels: int, latent_dim: int, deep: int, kernel_size: int):
+    def __init__(
+        self,
+        in_channels: int,
+        latent_dim: int,
+        deep: int,
+        kernel_size: int,
+        loss_type: str,
+    ):
         super().__init__()
 
         self.save_hyperparameters()
+        self.loss_type = loss_type
 
         # these are used to monitor the training losses for the *EPOCH*
         self.total_train_step_losses = []
@@ -227,7 +235,7 @@ class VAE(pl.LightningModule):
 
         x_reconstructed, mu, logvar = self.forward(x)
 
-        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type="mse")
+        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type=self.loss_type)
 
         self.total_train_step_losses.append(loss["loss"])
         self.recon_step_losses.append(loss["BCE"])
@@ -258,7 +266,7 @@ class VAE(pl.LightningModule):
 
         x_reconstructed, mu, logvar = self.forward(x)
 
-        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type="mse")
+        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type=self.loss_type)
 
         self.log("epoch_val_loss", loss["loss"], prog_bar=True)
 
