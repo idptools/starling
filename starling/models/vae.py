@@ -176,7 +176,9 @@ class VAE(pl.LightningModule):
             weights = weights / weights.sum()
             return weights
 
-    def vae_loss(self, x_reconstructed, x, mu, logvar, loss_type: str, scale="linear"):
+    def vae_loss(
+        self, x_reconstructed, x, mu, logvar, loss_type: str, scale="reciprocal"
+    ):
         if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
             # from both the ground truth and prediction
