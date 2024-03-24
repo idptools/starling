@@ -12,8 +12,8 @@ class MatrixDataset(torch.utils.data.Dataset):
         self.data_path = self.read_paths(txt_file)
 
         # Hard coded in so that the dimensions during encoding and decoding match
-        # self.target_shape = (768, 768)
-        self.target_shape = (192, 192)
+        self.target_shape = (768, 768)
+        #self.target_shape = (192, 192)
 
         self.normalization_tactics = {
             "length": self.normalize_by_length,

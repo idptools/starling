@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from IPython import embed
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR
 
 
 class PrintLayer(nn.Module):
@@ -37,7 +37,7 @@ class VAE(pl.LightningModule):
 
         self.hidden_dims = [starting_hidden_dim * 2**i for i in range(deep)]
         # This is hard coded in
-        size_of_distance_map = 192
+        size_of_distance_map = 768
 
         shape = int(size_of_distance_map / 2 ** len(self.hidden_dims))
         modules = []
@@ -67,6 +67,7 @@ class VAE(pl.LightningModule):
 
         # Encoder
         self.encoder = nn.Sequential(*modules)
+        print(self.hidden_dims)
         self.fc_mu = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
         self.fc_var = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
 
@@ -176,7 +177,6 @@ class VAE(pl.LightningModule):
                 mse_loss = F.mse_loss(
                     x_reconstructed_no_padding, x_no_padding, reduction="none"
                 )
-                embed()
 
                 BCE += ((mse_loss * weights) / (weights.sum() / 2)).sum()
 
@@ -194,7 +194,7 @@ class VAE(pl.LightningModule):
             KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
             KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
-            beta = 0.01
+            beta = 0.1
             # beta = 1
             # KLD *= 0
             loss = BCE + beta * KLD
@@ -231,13 +231,13 @@ class VAE(pl.LightningModule):
 
     def on_train_epoch_end(self):
         epoch_mean = torch.stack(self.total_train_step_losses).mean()
-        self.log("epoch_train_loss", epoch_mean, prog_bar=True)
+        self.log("epoch_train_loss", epoch_mean, prog_bar=True,sync_dist=True)
 
         recon_mean = torch.stack(self.recon_step_losses).mean()
-        self.log("epoch_recon_loss", recon_mean, prog_bar=True)
+        self.log("epoch_recon_loss", recon_mean, prog_bar=True,sync_dist=True)
 
         KLD_mean = torch.stack(self.KLD_step_losses).mean()
-        self.log("epoch_KLD_loss", KLD_mean, prog_bar=True)
+        self.log("epoch_KLD_loss", KLD_mean, prog_bar=True,sync_dist=True)
 
         # free up the memory
         self.total_train_step_losses.clear()
@@ -251,7 +251,7 @@ class VAE(pl.LightningModule):
 
         loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type="mse")
 
-        self.log("epoch_val_loss", loss["loss"], prog_bar=True)
+        self.log("epoch_val_loss", loss["loss"], prog_bar=True,sync_dist=True)
 
         return loss["loss"]
 
@@ -263,10 +263,16 @@ class VAE(pl.LightningModule):
             self.parameters(), lr=0.05, momentum=0.99, nesterov=True
         )
 
+        #lr_scheduler = {
+        #    "scheduler": CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=1e-4),
+        #    "monitor": self.monitor,
+        #    "interval": "epoch",
+        #}
+       
         lr_scheduler = {
-            "scheduler": CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=1e-4),
+            "scheduler": OneCycleLR(optimizer, max_lr=0.01, total_steps=self.trainer.estimated_stepping_batches),
             "monitor": self.monitor,
-            "interval": "epoch",
+            "interval": "step",
         }
 
         return [optimizer], [lr_scheduler]

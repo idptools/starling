@@ -131,7 +131,7 @@ def train_vae():
         kernel_size=args.kernel_size,
     )
 
-    wandb_logger = WandbLogger(project="train_vae")
+    wandb_logger = WandbLogger(project="full_data_vae")
     wandb_logger.watch(vae)
 
     trainer = pl.Trainer(
