@@ -20,10 +20,18 @@ torch.set_float32_matmul_precision("high")
 
 
 class VAE(pl.LightningModule):
-    def __init__(self, in_channels: int, latent_dim: int, deep: int, kernel_size: int):
+    def __init__(
+        self,
+        in_channels: int,
+        latent_dim: int,
+        deep: int,
+        kernel_size: int,
+        loss_type: str,
+    ):
         super().__init__()
 
         self.save_hyperparameters()
+        self.loss_type = loss_type
 
         # these are used to monitor the training losses for the *EPOCH*
         self.total_train_step_losses = []
@@ -156,8 +164,23 @@ class VAE(pl.LightningModule):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def vae_loss(self, x_reconstructed, x, mu, logvar, loss_type: str):
-        if loss_type == "mse":
+    def get_weights(self, ground_truth, scale="linear"):
+        if scale == "linear":
+            max_distance = ground_truth.max()
+            min_distance = ground_truth.min()
+            weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
+            weights = weights / weights.sum()
+            return weights
+        if scale == "reciprocal":
+            weights = torch.reciprocal(ground_truth)
+            weights[weights == float("inf")] = 0
+            weights = weights / weights.sum()
+            return weights
+
+    def vae_loss(
+        self, x_reconstructed, x, mu, logvar, loss_type: str, scale="reciprocal"
+    ):
+        if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
             # from both the ground truth and prediction
 
@@ -171,21 +194,25 @@ class VAE(pl.LightningModule):
                     :padding_start, :padding_start
                 ]
                 x_no_padding = x[num][0][:padding_start, :padding_start]
-                weights = torch.reciprocal(x_no_padding)
-                weights[weights == float("inf")] = 0
 
-                mse_loss = F.mse_loss(
-                    x_reconstructed_no_padding, x_no_padding, reduction="none"
-                )
+                # Mean squared error weighted by ground truth distance
+                if loss_type == "weighted_mse":
+                    weights = self.get_weights(x_no_padding, scale=scale)
 
-                BCE += ((mse_loss * weights) / (weights.sum() / 2)).sum()
+                    mse_loss = F.mse_loss(
+                        x_reconstructed_no_padding, x_no_padding, reduction="none"
+                    )
+
+                    BCE += (mse_loss * weights).sum()
+
+                # Mean squared error not weighted by ground truth distance
+                else:
+                    BCE += F.mse_loss(
+                        x_reconstructed_no_padding, x_no_padding, reduction="mean"
+                    )
 
             # Taking the mean of the loss (could also be sum)
             BCE /= num + 1
-
-            #!think about implementing weighted mse_loss where short range distance
-            #! maps are more heavily weighted (i.e. more important than long range
-            #! interactions)
 
             # See Appendix B from VAE paper:
             # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
@@ -195,8 +222,6 @@ class VAE(pl.LightningModule):
             KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
             beta = 0.1
-            # beta = 1
-            # KLD *= 0
             loss = BCE + beta * KLD
 
             return {"loss": loss, "BCE": BCE, "KLD": KLD}
@@ -218,7 +243,7 @@ class VAE(pl.LightningModule):
 
         x_reconstructed, mu, logvar = self.forward(x)
 
-        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type="mse")
+        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type=self.loss_type)
 
         self.total_train_step_losses.append(loss["loss"])
         self.recon_step_losses.append(loss["BCE"])
@@ -249,7 +274,7 @@ class VAE(pl.LightningModule):
 
         x_reconstructed, mu, logvar = self.forward(x)
 
-        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type="mse")
+        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type=self.loss_type)
 
         self.log("epoch_val_loss", loss["loss"], prog_bar=True,sync_dist=True)
 

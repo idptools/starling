@@ -74,6 +74,14 @@ def train_vae():
     )
 
     parser.add_argument(
+        "--loss_type",
+        type=str,
+        default="weighted_mse",
+        help="""What loss to calculate for the reconstruction loss, current losses include 
+        mse and weighted_mse""",
+    )
+
+    parser.add_argument(
         "--normalize",
         type=str,
         default=None,
@@ -108,7 +116,7 @@ def train_vae():
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
-    # Set up data loaders (assuming you have a dataset in a folder named 'data')
+    # Set up data loaders
     dataset = MatrixDataModule(
         args.train_data,
         args.validation_data,
@@ -129,6 +137,7 @@ def train_vae():
         latent_dim=latent_dim,
         deep=args.deep,
         kernel_size=args.kernel_size,
+        loss_type=args.loss_type,
     )
 
     wandb_logger = WandbLogger(project="full_data_vae")
