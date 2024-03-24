@@ -163,7 +163,20 @@ class VAE(pl.LightningModule):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def vae_loss(self, x_reconstructed, x, mu, logvar, loss_type: str):
+    def get_weights(self, ground_truth, scale="linear"):
+        if scale == "linear":
+            max_distance = ground_truth.max()
+            min_distance = ground_truth.min()
+            weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
+            weights = weights / weights.sum()
+            return weights
+        if scale == "reciprocal":
+            weights = torch.reciprocal(ground_truth)
+            weights[weights == float("inf")] = 0
+            weights = weights / weights.sum()
+            return weights
+
+    def vae_loss(self, x_reconstructed, x, mu, logvar, loss_type: str, scale="linear"):
         if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
             # from both the ground truth and prediction
@@ -181,14 +194,13 @@ class VAE(pl.LightningModule):
 
                 # Mean squared error weighted by ground truth distance
                 if loss_type == "weighted_mse":
-                    weights = torch.reciprocal(x_no_padding)
-                    weights[weights == float("inf")] = 0
+                    weights = self.get_weights(x_no_padding, scale=scale)
 
                     mse_loss = F.mse_loss(
                         x_reconstructed_no_padding, x_no_padding, reduction="none"
                     )
 
-                    BCE += ((mse_loss * weights) / (weights.sum() / 2)).sum()
+                    BCE += (mse_loss * weights).sum()
 
                 # Mean squared error not weighted by ground truth distance
                 else:
@@ -199,10 +211,6 @@ class VAE(pl.LightningModule):
             # Taking the mean of the loss (could also be sum)
             BCE /= num + 1
 
-            #!think about implementing weighted mse_loss where short range distance
-            #! maps are more heavily weighted (i.e. more important than long range
-            #! interactions)
-
             # See Appendix B from VAE paper:
             # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
             # https://arxiv.org/abs/1312.6114
@@ -210,10 +218,7 @@ class VAE(pl.LightningModule):
             KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
             KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
-            # beta = 0.01
             beta = 0.1
-            # beta = 1
-            # KLD *= 0
             loss = BCE + beta * KLD
 
             return {"loss": loss, "BCE": BCE, "KLD": KLD}
