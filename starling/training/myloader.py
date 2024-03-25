@@ -14,8 +14,9 @@ class MatrixDataset(torch.utils.data.Dataset):
         self.data_path = self.read_paths(txt_file)
 
         # Hard coded in so that the dimensions during encoding and decoding match
-        self.target_shape = (768, 768)
-        #self.target_shape = (192, 192)
+        # self.target_shape = (768, 768)
+        # self.target_shape = (192, 192)
+        self.target_shape = (384, 384)
 
         self.normalization_tactics = {
             "length": self.normalize_by_length,
@@ -203,14 +204,13 @@ class MatrixDataModule(pl.LightningDataModule):
         # Implement any data download or preprocessing here
         pass
 
-    def setup(self, stage=None):
-        if self.train is not None:
+    def setup(self, stage: str):
+        if stage == "fit":
             self.train_dataset = MatrixDataset(self.train_data, self.args)
-        if self.val_data is not None:
             self.val_dataset = MatrixDataset(self.val_data, self.args)
-        if self.test_data is not None:
+        if stage == "test":
             self.test_dataset = MatrixDataset(self.test_data, self.args)
-        if self.predict_data is not None:
+        if stage == "predict":
             self.predict_dataset = MatrixDataset(self.predict_data, self.args)
 
     def train_dataloader(self):
