@@ -45,7 +45,7 @@ class VAE(pl.LightningModule):
 
         self.hidden_dims = [starting_hidden_dim * 2**i for i in range(deep)]
         # This is hard coded in
-        size_of_distance_map = 768
+        size_of_distance_map = 192
 
         shape = int(size_of_distance_map / 2 ** len(self.hidden_dims))
         modules = []
@@ -210,8 +210,9 @@ class VAE(pl.LightningModule):
                 # Make the reconstructed map symmetric so that weights are freed to learn other
                 # patterns
                 x_reconstructed_no_padding = self.symmetrize(x_reconstructed_no_padding)
+
+                # Get unpadded ground truth
                 x_no_padding = x[num][0][:padding_start, :padding_start]
-                embed()
 
                 # Mean squared error weighted by ground truth distance
                 if loss_type == "weighted_mse":
@@ -275,13 +276,13 @@ class VAE(pl.LightningModule):
 
     def on_train_epoch_end(self):
         epoch_mean = torch.stack(self.total_train_step_losses).mean()
-        self.log("epoch_train_loss", epoch_mean, prog_bar=True,sync_dist=True)
+        self.log("epoch_train_loss", epoch_mean, prog_bar=True, sync_dist=True)
 
         recon_mean = torch.stack(self.recon_step_losses).mean()
-        self.log("epoch_recon_loss", recon_mean, prog_bar=True,sync_dist=True)
+        self.log("epoch_recon_loss", recon_mean, prog_bar=True, sync_dist=True)
 
         KLD_mean = torch.stack(self.KLD_step_losses).mean()
-        self.log("epoch_KLD_loss", KLD_mean, prog_bar=True,sync_dist=True)
+        self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
 
         # free up the memory
         self.total_train_step_losses.clear()
@@ -295,7 +296,7 @@ class VAE(pl.LightningModule):
 
         loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type=self.loss_type)
 
-        self.log("epoch_val_loss", loss["loss"], prog_bar=True,sync_dist=True)
+        self.log("epoch_val_loss", loss["loss"], prog_bar=True, sync_dist=True)
 
         return loss["loss"]
 
@@ -304,14 +305,18 @@ class VAE(pl.LightningModule):
             self.parameters(), lr=0.05, momentum=0.99, nesterov=True
         )
 
-        #lr_scheduler = {
+        # lr_scheduler = {
         #    "scheduler": CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=1e-4),
         #    "monitor": self.monitor,
         #    "interval": "epoch",
-        #}
-       
+        # }
+
         lr_scheduler = {
-            "scheduler": OneCycleLR(optimizer, max_lr=0.01, total_steps=self.trainer.estimated_stepping_batches),
+            "scheduler": OneCycleLR(
+                optimizer,
+                max_lr=0.01,
+                total_steps=self.trainer.estimated_stepping_batches,
+            ),
             "monitor": self.monitor,
             "interval": "step",
         }
