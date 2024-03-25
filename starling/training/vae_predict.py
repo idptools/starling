@@ -86,14 +86,16 @@ def vae_predict():
     dataset.setup()
     predict_dataloader = dataset.predict_dataloader()
 
-    embed()
+    # embed()
 
-    # for batch in predict_dataloader:
-    #     x = batch["input"].to(f"cuda:{args.gpu_id[0]}")
-    #     x_reconstructed = model(x)[0]
-    #     np.save("ground_truth.npy", x.cpu().detach().numpy())
-    #     np.save("reconstructed_array.npy", x_reconstructed.cpu().detach().numpy())
-    #     break
+    for batch in predict_dataloader:
+        x = batch["input"].to(f"cuda:{args.gpu_id[0]}")
+        x_reconstructed = model(x)[0]
+        np.save("ground_truth_linear.npy", x.cpu().detach().numpy())
+        np.save(
+            "reconstructed_array_linear.npy", x_reconstructed.cpu().detach().numpy()
+        )
+        break
 
     # trainer = pl.Trainer(
     #     devices=args.gpu_id,
