@@ -140,7 +140,7 @@ def train_vae():
         loss_type=args.loss_type,
     )
 
-    wandb_logger = WandbLogger(project="train_vae_weighted_mse")
+    wandb_logger = WandbLogger(project="full_data_vae")
     wandb_logger.watch(vae)
 
     trainer = pl.Trainer(
