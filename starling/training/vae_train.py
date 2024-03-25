@@ -118,12 +118,13 @@ def train_vae():
 
     # Set up data loaders
     dataset = MatrixDataModule(
-        args.train_data,
-        args.validation_data,
-        args.validation_data,
-        args.batch_size,
+        train_data=args.train_data,
+        val_data=args.validation_data,
+        batch_size=args.batch_size,
         args=args,
     )
+
+    dataset.setup(stage="fit")
 
     # Initialize VAE model
     input_dim = 1  # Assuming distance map
@@ -140,7 +141,7 @@ def train_vae():
         loss_type=args.loss_type,
     )
 
-    wandb_logger = WandbLogger(project="full_data_vae")
+    wandb_logger = WandbLogger(project="length_384_dm")
     wandb_logger.watch(vae)
 
     trainer = pl.Trainer(
