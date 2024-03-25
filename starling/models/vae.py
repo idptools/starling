@@ -170,14 +170,28 @@ class VAE(pl.LightningModule):
             weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
             weights = weights / weights.sum()
             return weights
-        if scale == "reciprocal":
+        elif scale == "reciprocal":
             weights = torch.reciprocal(ground_truth)
             weights[weights == float("inf")] = 0
             weights = weights / weights.sum()
             return weights
+        else:
+            raise ValueError(f"Variable name '{scale}' for get_weights does not exist")
+
+    def symmetrize(self, data_reconstructed):
+        upper_triangle = data_reconstructed.triu()
+        symmetrized_array = upper_triangle + upper_triangle.t()
+        return symmetrized_array.fill_diagonal_(0)
 
     def vae_loss(
-        self, x_reconstructed, x, mu, logvar, loss_type: str, scale="reciprocal"
+        self,
+        x_reconstructed,
+        x,
+        mu,
+        logvar,
+        loss_type: str,
+        scale="reciprocal",
+        beta=0.1,
     ):
         if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
@@ -192,7 +206,11 @@ class VAE(pl.LightningModule):
                 x_reconstructed_no_padding = x_reconstructed[num][0][
                     :padding_start, :padding_start
                 ]
+                # Make the reconstructed map symmetric so that weights are freed to learn other
+                # patterns
+                x_reconstructed_no_padding = self.symmetrize(x_reconstructed_no_padding)
                 x_no_padding = x[num][0][:padding_start, :padding_start]
+                embed()
 
                 # Mean squared error weighted by ground truth distance
                 if loss_type == "weighted_mse":
@@ -205,10 +223,12 @@ class VAE(pl.LightningModule):
                     BCE += (mse_loss * weights).sum()
 
                 # Mean squared error not weighted by ground truth distance
-                else:
+                elif loss_type == "mse":
                     BCE += F.mse_loss(
                         x_reconstructed_no_padding, x_no_padding, reduction="mean"
                     )
+                else:
+                    raise ValueError(f"loss type of name '{loss_type}' does not exist")
 
             # Taking the mean of the loss (could also be sum)
             BCE /= num + 1
@@ -220,7 +240,6 @@ class VAE(pl.LightningModule):
             KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
             KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
-            beta = 0.1
             loss = BCE + beta * KLD
 
             return {"loss": loss, "BCE": BCE, "KLD": KLD}
@@ -280,9 +299,6 @@ class VAE(pl.LightningModule):
         return loss["loss"]
 
     def configure_optimizers(self):
-        # return torch.optim.Adam(self.parameters(), lr=1e-4)
-        # return torch.optim.SGD(self.parameters(), lr=1e-4, momentum=0.9)
-
         optimizer = torch.optim.SGD(
             self.parameters(), lr=0.05, momentum=0.99, nesterov=True
         )
