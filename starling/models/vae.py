@@ -192,7 +192,7 @@ class VAE(pl.LightningModule):
         logvar,
         loss_type: str,
         scale="reciprocal",
-        beta=0.1,
+        beta=2,
     ):
         if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
