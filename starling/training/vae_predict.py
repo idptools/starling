@@ -83,7 +83,7 @@ def vae_predict():
     model = VAE.load_from_checkpoint(args.model_path, map_location=device)
     model.eval()
 
-    dataset.setup()
+    dataset.setup(stage="predict")
     predict_dataloader = dataset.predict_dataloader()
 
     # embed()
@@ -91,10 +91,8 @@ def vae_predict():
     for batch in predict_dataloader:
         x = batch["input"].to(f"cuda:{args.gpu_id[0]}")
         x_reconstructed = model(x)[0]
-        np.save("ground_truth_linear.npy", x.cpu().detach().numpy())
-        np.save(
-            "reconstructed_array_linear.npy", x_reconstructed.cpu().detach().numpy()
-        )
+        np.save("ground_truth_384.npy", x.cpu().detach().numpy())
+        np.save("reconstructed_array_384.npy", x_reconstructed.cpu().detach().numpy())
         break
 
     # trainer = pl.Trainer(
