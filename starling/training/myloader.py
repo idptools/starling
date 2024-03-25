@@ -1,8 +1,10 @@
+import os
+
 import numpy as np
 import pytorch_lightning as pl
 import torch
 from IPython import embed
-import os
+
 from starling.data import load_norm_matrices
 
 
@@ -179,11 +181,20 @@ class MatrixDataset(torch.utils.data.Dataset):
 
 # Step 2: Create a data module
 class MatrixDataModule(pl.LightningDataModule):
-    def __init__(self, train_data, val_data, test_data, batch_size, args):
+    def __init__(
+        self,
+        train_data=None,
+        val_data=None,
+        test_data=None,
+        predict_data=None,
+        batch_size=None,
+        args=None,
+    ):
         super().__init__()
         self.train_data = train_data
         self.val_data = val_data
         self.test_data = test_data
+        self.predict_data = predict_data
         self.batch_size = batch_size
         self.args = args
         self.num_workers = int(os.cpu_count() / 4)
@@ -193,21 +204,40 @@ class MatrixDataModule(pl.LightningDataModule):
         pass
 
     def setup(self, stage=None):
-        self.train_dataset = MatrixDataset(self.train_data, self.args)
-        self.val_dataset = MatrixDataset(self.val_data, self.args)
-        self.test_dataset = MatrixDataset(self.test_data, self.args)
+        if self.train is not None:
+            self.train_dataset = MatrixDataset(self.train_data, self.args)
+        if self.val_data is not None:
+            self.val_dataset = MatrixDataset(self.val_data, self.args)
+        if self.test_data is not None:
+            self.test_dataset = MatrixDataset(self.test_data, self.args)
+        if self.predict_data is not None:
+            self.predict_dataset = MatrixDataset(self.predict_data, self.args)
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
-            self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers,
-            )
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+        )
 
     def val_dataloader(self):
         return torch.utils.data.DataLoader(
-            self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+            self.val_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
         )
 
     def test_dataloader(self):
         return torch.utils.data.DataLoader(
-            self.test_dataset, batch_size=1, num_workers=self.num_workers,
+            self.test_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+        )
+
+    def predict_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.predict_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
         )
