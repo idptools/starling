@@ -45,7 +45,9 @@ class VAE(pl.LightningModule):
 
         self.hidden_dims = [starting_hidden_dim * 2**i for i in range(deep)]
         # This is hard coded in
-        size_of_distance_map = 192
+        # size_of_distance_map = 192
+        size_of_distance_map = 384
+        # size_of_distance_map = 768
 
         shape = int(size_of_distance_map / 2 ** len(self.hidden_dims))
         modules = []
@@ -68,6 +70,8 @@ class VAE(pl.LightningModule):
                             int(size_of_distance_map / (2 ** (num + 1))),
                         ]
                     ),
+                    # nn.GroupNorm(int(hidden_dim / 4), int(hidden_dim)),
+                    # nn.InstanceNorm2d(hidden_dim),
                     nn.ReLU(),
                 )
             )
@@ -75,7 +79,6 @@ class VAE(pl.LightningModule):
 
         # Encoder
         self.encoder = nn.Sequential(*modules)
-        print(self.hidden_dims)
         self.fc_mu = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
         self.fc_var = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
 
@@ -107,6 +110,11 @@ class VAE(pl.LightningModule):
                             int(shape * (2 ** (num + 1))),
                         ]
                     ),
+                    # nn.InstanceNorm2d(reverse_hidden_dims[num + 1]),
+                    # nn.GroupNorm(
+                    #     int(reverse_hidden_dims[num + 1] / 4),
+                    #     int(reverse_hidden_dims[num + 1]),
+                    # ),
                     nn.ReLU(),
                 )
             )
@@ -130,7 +138,10 @@ class VAE(pl.LightningModule):
                     size_of_distance_map,
                 ]
             ),
-            # nn.BatchNorm2d(1),
+            # nn.InstanceNorm2d(reverse_hidden_dims[-1]),
+            # nn.GroupNorm(
+            #     int(reverse_hidden_dims[num + 1] / 4), int(reverse_hidden_dims[num + 1])
+            # ),
             nn.Conv2d(
                 reverse_hidden_dims[-1],
                 out_channels=1,
@@ -138,8 +149,9 @@ class VAE(pl.LightningModule):
                 padding=2 if kernel_size == 5 else 1,
             ),
             # PrintLayer("Final layer"),
-            # nn.Tanh(),
-            nn.ReLU(),
+            nn.ReLU()
+            if self.loss_type == "mse" or self.loss_type == "weighted_mse"
+            else nn.Tanh(),
         )
 
     def encode(self, x: torch.Tensor):
@@ -184,6 +196,21 @@ class VAE(pl.LightningModule):
         symmetrized_array = upper_triangle + upper_triangle.t()
         return symmetrized_array.fill_diagonal_(0)
 
+    def linear_KLD_beta(self, start, stop, n_epoch, n_cycle=5, ratio=1):
+        # Compute the linear schedule for KLD weighting in the loss function
+        L = torch.ones(n_epoch).to(self.device)
+        period = n_epoch / n_cycle  # Compute period length with floating-point division
+        step = (stop - start) / (period * ratio)  # Linear schedule step size
+
+        for c in range(n_cycle):
+            v, i = start, 0
+            while v <= stop and int(i + c * period) < n_epoch:
+                L[int(i + c * period)] = v
+                v += step
+                i += 1
+
+        return L
+
     def vae_loss(
         self,
         x_reconstructed,
@@ -192,7 +219,7 @@ class VAE(pl.LightningModule):
         logvar,
         loss_type: str,
         scale="reciprocal",
-        beta=2,
+        beta=0.1,
     ):
         if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
@@ -261,9 +288,25 @@ class VAE(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x = batch["input"]
 
+        # Calculate the schedule for linear scaling of beta for KLD loss
+        # Only calculate if we just started to train
+        #! This makes an array of n_epoch numbers; is it better to calculate
+        #! every step?
+        if self.trainer.global_step == 0:
+            self.KLD_betas = self.linear_KLD_beta(
+                start=0, stop=5, n_epoch=self.trainer.max_epochs, ratio=1
+            )
+
         x_reconstructed, mu, logvar = self.forward(x)
 
-        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type=self.loss_type)
+        loss = self.vae_loss(
+            x_reconstructed,
+            x,
+            mu,
+            logvar,
+            loss_type=self.loss_type,
+            beta=self.KLD_betas[self.current_epoch],
+        )
 
         self.total_train_step_losses.append(loss["loss"])
         self.recon_step_losses.append(loss["BCE"])
@@ -294,7 +337,17 @@ class VAE(pl.LightningModule):
 
         x_reconstructed, mu, logvar = self.forward(x)
 
-        loss = self.vae_loss(x_reconstructed, x, mu, logvar, loss_type=self.loss_type)
+        # What loss do we want to use in validation step
+        # A regular sum I think makes sense, instead of an
+        # ever changing beta
+        loss = self.vae_loss(
+            x_reconstructed,
+            x,
+            mu,
+            logvar,
+            loss_type=self.loss_type,
+            beta=1,
+        )
 
         self.log("epoch_val_loss", loss["loss"], prog_bar=True, sync_dist=True)
 
@@ -305,20 +358,20 @@ class VAE(pl.LightningModule):
             self.parameters(), lr=0.05, momentum=0.99, nesterov=True
         )
 
-        # lr_scheduler = {
-        #    "scheduler": CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=1e-4),
-        #    "monitor": self.monitor,
-        #    "interval": "epoch",
-        # }
-
         lr_scheduler = {
-            "scheduler": OneCycleLR(
-                optimizer,
-                max_lr=0.01,
-                total_steps=self.trainer.estimated_stepping_batches,
-            ),
+            "scheduler": CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=1e-4),
             "monitor": self.monitor,
-            "interval": "step",
+            "interval": "epoch",
         }
+
+        # lr_scheduler = {
+        #     "scheduler": OneCycleLR(
+        #         optimizer,
+        #         max_lr=0.01,
+        #         total_steps=self.trainer.estimated_stepping_batches,
+        #     ),
+        #     "monitor": self.monitor,
+        #     "interval": "step",
+        # }
 
         return [optimizer], [lr_scheduler]
