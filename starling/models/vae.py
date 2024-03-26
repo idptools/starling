@@ -149,9 +149,7 @@ class VAE(pl.LightningModule):
                 padding=2 if kernel_size == 5 else 1,
             ),
             # PrintLayer("Final layer"),
-            nn.ReLU()
-            if self.loss_type == "mse" or self.loss_type == "weighted_mse"
-            else nn.Tanh(),
+            nn.ReLU(),
         )
 
     def encode(self, x: torch.Tensor):
