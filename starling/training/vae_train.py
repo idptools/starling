@@ -76,7 +76,7 @@ def train_vae():
     parser.add_argument(
         "--loss_type",
         type=str,
-        default="weighted_mse",
+        default="elbo",
         help="""What loss to calculate for the reconstruction loss, current losses include 
         mse and weighted_mse""",
     )
@@ -129,8 +129,6 @@ def train_vae():
     # Initialize VAE model
     input_dim = 1  # Assuming distance map
     latent_dim = args.latent_dim  # Adjust as needed
-
-    # Train the VAE
     num_epochs = args.num_epochs
 
     vae = VAE(
@@ -141,7 +139,7 @@ def train_vae():
         loss_type=args.loss_type,
     )
 
-    wandb_logger = WandbLogger(project="length_384_dm")
+    wandb_logger = WandbLogger(project="testing_elbo")
     wandb_logger.watch(vae)
 
     trainer = pl.Trainer(
