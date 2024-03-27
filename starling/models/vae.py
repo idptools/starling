@@ -45,8 +45,8 @@ class VAE(pl.LightningModule):
 
         self.hidden_dims = [starting_hidden_dim * 2**i for i in range(deep)]
         # This is hard coded in
-        # size_of_distance_map = 192
-        size_of_distance_map = 384
+        size_of_distance_map = 192
+        # size_of_distance_map = 384
         # size_of_distance_map = 768
 
         shape = int(size_of_distance_map / 2 ** len(self.hidden_dims))
@@ -76,6 +76,9 @@ class VAE(pl.LightningModule):
                 )
             )
             in_channels = hidden_dim
+
+        # Get the shape of the output of the final layer
+        self.shape_from_final_encoding_layer = self.hidden_dims[-1], shape, shape
 
         # Encoder
         self.encoder = nn.Sequential(*modules)
@@ -152,9 +155,16 @@ class VAE(pl.LightningModule):
             nn.ReLU(),
         )
 
+        if self.loss_type == "elbo":
+            # self.log_scale = nn.Parameter(
+            #     torch.zeros(size_of_distance_map, size_of_distance_map)
+            # )
+            self.log_scale = nn.Parameter(
+                torch.zeros((size_of_distance_map * (size_of_distance_map + 1) // 2))
+            )
+
     def encode(self, x: torch.Tensor):
         z = self.encoder(x)
-        self.final_encoded_shape = z.shape
         z = torch.flatten(z, start_dim=1)
         mu = self.fc_mu(z)
         log_var = self.fc_var(z)
@@ -163,7 +173,7 @@ class VAE(pl.LightningModule):
 
     def decode(self, z: torch.Tensor):
         x = self.first_decode_layer(z)
-        x = x.view(self.final_encoded_shape)
+        x = x.view(-1, *self.shape_from_final_encoding_layer)
         x = self.decoder(x)
         x = self.final_decode_layer(x)
 
@@ -174,7 +184,7 @@ class VAE(pl.LightningModule):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def get_weights(self, ground_truth, scale="linear"):
+    def get_weights(self, ground_truth, scale="reciprocal"):
         if scale == "linear":
             max_distance = ground_truth.max()
             min_distance = ground_truth.min()
@@ -209,22 +219,57 @@ class VAE(pl.LightningModule):
 
         return L
 
+    def gaussian_likelihood(self, x_hat, logscale, x):
+        scale = torch.exp(logscale)
+        mean = x_hat
+        input_size = mean.shape[0]
+        matrix_scale = torch.zeros(input_size, input_size).to(self.device)
+        triu_indices = torch.triu_indices(input_size, input_size, offset=0)
+        matrix_scale[triu_indices[0], triu_indices[1]] = scale[
+            : input_size * (input_size + 1) // 2
+        ]
+        matrix_scale = matrix_scale + matrix_scale.t() - torch.diag(matrix_scale.diag())
+        dist = torch.distributions.Normal(mean, matrix_scale)
+        # measure prob of seeing image under p(x|z)
+        log_pxz = dist.log_prob(x)
+        weights = self.get_weights(x, scale="reciprocal")
+        log_pxz *= weights
+        return log_pxz.sum()
+
+    def kl_divergence(self, z, mu, std):
+        # --------------------------
+        # Monte carlo KL divergence
+        # --------------------------
+        # 1. define the first two probabilities (in this case Normal for both)
+        p = torch.distributions.Normal(torch.zeros_like(mu), torch.ones_like(std))
+        q = torch.distributions.Normal(mu, std)
+
+        # 2. get the probabilities from the equation
+        log_qzx = q.log_prob(z)
+        log_pz = p.log_prob(z)
+
+        # kl
+        kl = log_qzx - log_pz
+        kl = kl.sum(-1)
+        return kl
+
     def vae_loss(
         self,
         x_reconstructed,
         x,
+        latent_encoding,
         mu,
         logvar,
         loss_type: str,
         scale="reciprocal",
-        beta=0.1,
+        beta=1,
     ):
+        # Find where the padding starts by counting the number of
+        start_of_padding = torch.sum(x != 0, dim=(1, 2))[:, 0] + 1
+
         if loss_type == "mse" or loss_type == "weighted_mse":
             # Loss function for VAE, here I am removing the padded region
             # from both the ground truth and prediction
-
-            # Find where the padding starts by counting the number of
-            start_of_padding = torch.sum(x != 0, dim=(1, 2))[:, 0] + 1
 
             BCE = 0
 
@@ -272,38 +317,74 @@ class VAE(pl.LightningModule):
             return {"loss": loss, "BCE": BCE, "KLD": KLD}
 
         elif loss_type == "elbo":
-            pass
+            total_recon_loss = 0
+            for num, padding_start in enumerate(start_of_padding):
+                x_reconstructed_no_padding = x_reconstructed[num][0][
+                    :padding_start, :padding_start
+                ]
+                # Make the reconstructed map symmetric so that weights are
+                # freed to learn other patterns
+                x_reconstructed_no_padding = self.symmetrize(x_reconstructed_no_padding)
+
+                # Get unpadded ground truth
+                x_no_padding = x[num][0][:padding_start, :padding_start]
+
+                # Get the reconstruction loss
+                recon_loss = self.gaussian_likelihood(
+                    x_reconstructed_no_padding, self.log_scale, x_no_padding
+                )
+                total_recon_loss += recon_loss
+
+            # Take the mean of all the losses in batch
+            total_recon_loss /= num + 1
+
+            # std = torch.exp(logvar / 2)
+            # KLD = self.kl_divergence(latent_encoding, mu, std)
+            KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+            KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+            elbo = beta * KLD - total_recon_loss
+            # elbo = KLD.mean() - total_recon_loss
+
+            return {"loss": elbo, "BCE": total_recon_loss, "KLD": KLD}
 
     def forward(self, x):
         mu, logvar = self.encode(x)
 
-        latent_encoding = self.reparameterize(mu, logvar)
+        if self.loss_type in ["mse", "weighted_mse"]:
+            latent_encoding = self.reparameterize(mu, logvar)
+
+        elif self.loss_type == "elbo":
+            # std = torch.exp(logvar / 2)
+            # q = torch.distributions.Normal(mu, std)
+            # latent_encoding = q.rsample()
+            latent_encoding = self.reparameterize(mu, logvar)
+
+        else:
+            raise ValueError(f"loss type of name {self.loss_type} not implemented")
 
         x_reconstructed = self.decode(latent_encoding)
 
-        return x_reconstructed, mu, logvar
+        return x_reconstructed, mu, logvar, latent_encoding
 
     def training_step(self, batch, batch_idx):
         x = batch["input"]
 
         # Calculate the schedule for linear scaling of beta for KLD loss
         # Only calculate if we just started to train
-        #! This makes an array of n_epoch numbers; is it better to calculate
-        #! every step?
-        if self.trainer.global_step == 0:
-            self.KLD_betas = self.linear_KLD_beta(
-                start=0, stop=5, n_epoch=self.trainer.max_epochs, ratio=1
-            )
+        # if self.trainer.global_step == 0:
+        #     self.KLD_betas = self.linear_KLD_beta(
+        #         start=0, stop=5, n_epoch=self.trainer.max_epochs, ratio=1
+        #     )
 
-        x_reconstructed, mu, logvar = self.forward(x)
+        x_reconstructed, mu, logvar, latent_encoding = self.forward(x)
 
         loss = self.vae_loss(
-            x_reconstructed,
-            x,
-            mu,
-            logvar,
+            x_reconstructed=x_reconstructed,
+            x=x,
+            latent_encoding=latent_encoding,
+            mu=mu,
+            logvar=logvar,
             loss_type=self.loss_type,
-            beta=self.KLD_betas[self.current_epoch],
         )
 
         self.total_train_step_losses.append(loss["loss"])
@@ -333,16 +414,17 @@ class VAE(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         x = batch["input"]
 
-        x_reconstructed, mu, logvar = self.forward(x)
+        x_reconstructed, mu, logvar, latent_encoding = self.forward(x)
 
         # What loss do we want to use in validation step
         # A regular sum I think makes sense, instead of an
         # ever changing beta
         loss = self.vae_loss(
-            x_reconstructed,
-            x,
-            mu,
-            logvar,
+            x_reconstructed=x_reconstructed,
+            x=x,
+            latent_encoding=latent_encoding,
+            mu=mu,
+            logvar=logvar,
             loss_type=self.loss_type,
             beta=1,
         )
