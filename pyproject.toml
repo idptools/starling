@@ -31,6 +31,7 @@ requires-python = ">=3.8"
 
 [project.scripts]
 vae-train = "starling.training.vae_train:train_vae"
+vae-generate = "starling.training.vae_generate:vae_generate"
 
 [project.optional-dependencies]
 test = [
