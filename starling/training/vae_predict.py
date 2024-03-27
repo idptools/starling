@@ -82,6 +82,7 @@ def vae_predict():
     device = torch.device(f"cuda:{args.gpu_id[0]}")
     model = VAE.load_from_checkpoint(args.model_path, map_location=device)
     model.eval()
+    embed()
 
     dataset.setup(stage="predict")
     predict_dataloader = dataset.predict_dataloader()
@@ -91,8 +92,8 @@ def vae_predict():
     for batch in predict_dataloader:
         x = batch["input"].to(f"cuda:{args.gpu_id[0]}")
         x_reconstructed = model(x)[0]
-        np.save("ground_truth_384.npy", x.cpu().detach().numpy())
-        np.save("reconstructed_array_384.npy", x_reconstructed.cpu().detach().numpy())
+        np.save("ground_truth_elbo.npy", x.cpu().detach().numpy())
+        np.save("reconstructed_array_elbo.npy", x_reconstructed.cpu().detach().numpy())
         break
 
     # trainer = pl.Trainer(
