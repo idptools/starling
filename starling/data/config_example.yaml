@@ -1,0 +1,26 @@
+data:
+  interpolate: false
+  normalize: false
+  test_data: null
+  train_data: /prog40/train_384_small.txt
+  val_data: /prog40/validation_384_small.txt
+  batch_size: 128
+device:
+  cuda:
+  - 0
+model:
+  KLD_weight: 1
+  dimension: 384
+  in_channels: 1
+  kernel_size: 3
+  latent_dim: 128
+  loss_type: elbo
+  lr_scheduler: CosineAnnealingWarmRestarts
+  num_layers: 6
+  starting_hidden_dim: 32
+  weights_type: reciprocal
+training:
+  learning_rate: null
+  num_epochs: 20
+  output_path: sweep_test
+  project_name: sweep_test
