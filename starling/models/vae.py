@@ -65,7 +65,9 @@ class VAE(pl.LightningModule):
                         out_channels=hidden_dim,
                         kernel_size=kernel_size,
                         stride=2,
-                        padding=2 if kernel_size == 5 else 1,
+                        padding=2
+                        if kernel_size == 5
+                        else (3 if kernel_size == 7 else 1),
                     ),
                     # PrintLayer("encoder"),
                     nn.LayerNorm(
@@ -107,7 +109,9 @@ class VAE(pl.LightningModule):
                         reverse_hidden_dims[num + 1],
                         kernel_size=kernel_size,
                         stride=2,
-                        padding=2 if kernel_size == 5 else 1,
+                        padding=2
+                        if kernel_size == 5
+                        else (3 if kernel_size == 7 else 1),
                         output_padding=1,
                     ),
                     # PrintLayer("Decoder"),
@@ -135,7 +139,7 @@ class VAE(pl.LightningModule):
                 out_channels=reverse_hidden_dims[-1],
                 kernel_size=kernel_size,
                 stride=2,
-                padding=2 if kernel_size == 5 else 1,
+                padding=2 if kernel_size == 5 else (3 if kernel_size == 7 else 1),
                 output_padding=1,
             ),
             # PrintLayer("Final layer"),
@@ -154,7 +158,7 @@ class VAE(pl.LightningModule):
                 reverse_hidden_dims[-1],
                 out_channels=1,
                 kernel_size=kernel_size,
-                padding=2 if kernel_size == 5 else 1,
+                padding=2 if kernel_size == 5 else (3 if kernel_size == 7 else 1),
             ),
             # PrintLayer("Final layer"),
             nn.ReLU(),
