@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from IPython import embed
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR
 
+from starling.models import blocks
+
 
 class PrintLayer(nn.Module):
     def __init__(self, layer_name):
@@ -55,119 +57,37 @@ class VAE(pl.LightningModule):
         self.hidden_dims = [starting_hidden_dim * 2**i for i in range(num_layers)]
 
         shape = int(dimension / 2 ** len(self.hidden_dims))
-        modules = []
-
-        for num, hidden_dim in enumerate(self.hidden_dims):
-            modules.append(
-                nn.Sequential(
-                    nn.Conv2d(
-                        in_channels,
-                        out_channels=hidden_dim,
-                        kernel_size=kernel_size,
-                        stride=2,
-                        padding=2
-                        if kernel_size == 5
-                        else (3 if kernel_size == 7 else 1),
-                    ),
-                    # PrintLayer("encoder"),
-                    nn.LayerNorm(
-                        [
-                            hidden_dim,
-                            int(dimension / (2 ** (num + 1))),
-                            int(dimension / (2 ** (num + 1))),
-                        ]
-                    ),
-                    # nn.GroupNorm(int(hidden_dim / 4), int(hidden_dim)),
-                    # nn.InstanceNorm2d(hidden_dim),
-                    nn.ReLU(),
-                )
-            )
-            in_channels = hidden_dim
 
         # Get the shape of the output of the final layer
         self.shape_from_final_encoding_layer = self.hidden_dims[-1], shape, shape
 
         # Encoder
-        self.encoder = nn.Sequential(*modules)
+        self.encoder = blocks.vanilla_Encoder(
+            in_channels=in_channels,
+            out_channels=self.hidden_dims,
+            kernel_size=kernel_size,
+            stride=2,
+        )
+
         self.fc_mu = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
         self.fc_var = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
-
-        # Building a decoder
-        modules = []
 
         self.first_decode_layer = nn.Linear(
             latent_dim, self.hidden_dims[-1] * shape * shape
         )
 
+        # Decoder
         reverse_hidden_dims = list(self.hidden_dims[::-1])
+        reverse_hidden_dims.append(in_channels)
 
-        for num in range(len(reverse_hidden_dims) - 1):
-            modules.append(
-                nn.Sequential(
-                    nn.ConvTranspose2d(
-                        reverse_hidden_dims[num],
-                        reverse_hidden_dims[num + 1],
-                        kernel_size=kernel_size,
-                        stride=2,
-                        padding=2
-                        if kernel_size == 5
-                        else (3 if kernel_size == 7 else 1),
-                        output_padding=1,
-                    ),
-                    # PrintLayer("Decoder"),
-                    nn.LayerNorm(
-                        [
-                            reverse_hidden_dims[num + 1],
-                            int(shape * (2 ** (num + 1))),
-                            int(shape * (2 ** (num + 1))),
-                        ]
-                    ),
-                    # nn.InstanceNorm2d(reverse_hidden_dims[num + 1]),
-                    # nn.GroupNorm(
-                    #     int(reverse_hidden_dims[num + 1] / 4),
-                    #     int(reverse_hidden_dims[num + 1]),
-                    # ),
-                    nn.ReLU(),
-                )
-            )
-
-        self.decoder = nn.Sequential(*modules)
-
-        self.final_decode_layer = nn.Sequential(
-            nn.ConvTranspose2d(
-                reverse_hidden_dims[-1],
-                out_channels=reverse_hidden_dims[-1],
-                kernel_size=kernel_size,
-                stride=2,
-                padding=2 if kernel_size == 5 else (3 if kernel_size == 7 else 1),
-                output_padding=1,
-            ),
-            # PrintLayer("Final layer"),
-            nn.LayerNorm(
-                [
-                    reverse_hidden_dims[-1],
-                    dimension,
-                    dimension,
-                ]
-            ),
-            # nn.InstanceNorm2d(reverse_hidden_dims[-1]),
-            # nn.GroupNorm(
-            #     int(reverse_hidden_dims[num + 1] / 4), int(reverse_hidden_dims[num + 1])
-            # ),
-            nn.Conv2d(
-                reverse_hidden_dims[-1],
-                out_channels=1,
-                kernel_size=kernel_size,
-                padding=2 if kernel_size == 5 else (3 if kernel_size == 7 else 1),
-            ),
-            # PrintLayer("Final layer"),
-            nn.ReLU(),
+        self.decoder = blocks.vanilla_Decoder(
+            in_channels=reverse_hidden_dims,
+            out_channels=reverse_hidden_dims,
+            kernel_size=kernel_size,
+            stride=2,
         )
 
         if self.loss_type == "elbo":
-            # self.log_std = nn.Parameter(
-            #     torch.zeros(dimension, dimension)
-            # )
             self.log_std = nn.Parameter(torch.zeros((dimension * (dimension + 1) // 2)))
 
     def encode(self, x: torch.Tensor):
@@ -182,8 +102,6 @@ class VAE(pl.LightningModule):
         x = self.first_decode_layer(z)
         x = x.view(-1, *self.shape_from_final_encoding_layer)
         x = self.decoder(x)
-        x = self.final_decode_layer(x)
-
         return x
 
     def reparameterize(self, mu, logvar):
