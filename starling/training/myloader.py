@@ -9,14 +9,11 @@ from starling.data import load_norm_matrices
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, txt_file, args):
-        self.args = args
+    def __init__(self, txt_file, interpolate, normalize, target_shape):
         self.data_path = self.read_paths(txt_file)
-
-        # Hard coded in so that the dimensions during encoding and decoding match
-        # self.target_shape = (768, 768)
-        # self.target_shape = (192, 192)
-        self.target_shape = (384, 384)
+        self.resize = interpolate
+        self.normalize = normalize
+        self.target_shape = (target_shape, target_shape)
 
         self.normalization_tactics = {
             "length": self.normalize_by_length,
@@ -28,22 +25,27 @@ class MatrixDataset(torch.utils.data.Dataset):
 
         self.resizing_tactics = {"pad": self.MaxPad, "interpolate": self.interpolate}
 
-        if args.normalize == "bond_length":
-            self.normalization_matrix = self.generate_normalization_matrix(
-                self.target_shape
-            )
-        elif args.normalize == "afrc":
-            self.normalization_matrix = self.generate_afrc_distance_map(
-                self.target_shape
-            )
-        elif args.normalize == "normalize_and_scale":
-            (
-                self.mean_matrix,
-                self.std_matrix,
-                self.max_standard,
-                self.min_standard,
-                self.max_expected_distances,
-            ) = load_norm_matrices.load_matrices()
+        if self.normalize:
+            if self.normalize == "bond_length":
+                self.normalization_matrix = self.generate_normalization_matrix(
+                    self.target_shape
+                )
+            elif self.normalize == "afrc":
+                self.normalization_matrix = self.generate_afrc_distance_map(
+                    self.target_shape
+                )
+            elif self.normalize == "normalize_and_scale":
+                (
+                    self.mean_matrix,
+                    self.std_matrix,
+                    self.max_standard,
+                    self.min_standard,
+                    self.max_expected_distances,
+                ) = load_norm_matrices.load_matrices()
+            else:
+                raise ValueError(
+                    f"{self.normalize} normalization method is not implemented"
+                )
 
     def __len__(self):
         return len(self.data_path)
@@ -53,17 +55,15 @@ class MatrixDataset(torch.utils.data.Dataset):
         sample = np.loadtxt(self.data_path[index], dtype=np.float32)
 
         # Normalize your distance map according to user input
-        if self.args.normalize is not None:
-            sample = self.normalization_tactics[self.args.normalize](sample)
+        if self.normalize:
+            sample = self.normalization_tactics[self.normalize](sample)
 
         # Resize the input distance map with padding or resizing
-        tactic = "interpolate" if self.args.interpolate else "pad"
+        tactic = "interpolate" if self.resize else "pad"
         sample = self.resizing_tactics[tactic](sample)
 
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
-
-        # embed()
 
         return {"input": sample}
 
@@ -173,9 +173,6 @@ class MatrixDataset(torch.utils.data.Dataset):
             2 * (standardized_data - self.min_standard[:height, :width]) / (denominator)
             - 1
         )
-        # scaled_data = original_array / (
-        #     self.max_expected_distances[:height, :width] + 1e-5
-        # )
 
         return scaled_data
 
@@ -187,17 +184,19 @@ class MatrixDataModule(pl.LightningDataModule):
         train_data=None,
         val_data=None,
         test_data=None,
-        predict_data=None,
         batch_size=None,
-        args=None,
+        normalize=False,
+        interpolate=False,
+        target_shape=None,
     ):
         super().__init__()
         self.train_data = train_data
         self.val_data = val_data
         self.test_data = test_data
-        self.predict_data = predict_data
         self.batch_size = batch_size
-        self.args = args
+        self.normalize = normalize
+        self.interpolate = interpolate
+        self.target_shape = target_shape
         self.num_workers = int(os.cpu_count() / 4)
 
     def prepare_data(self):
@@ -206,12 +205,32 @@ class MatrixDataModule(pl.LightningDataModule):
 
     def setup(self, stage: str):
         if stage == "fit":
-            self.train_dataset = MatrixDataset(self.train_data, self.args)
-            self.val_dataset = MatrixDataset(self.val_data, self.args)
+            self.train_dataset = MatrixDataset(
+                self.train_data,
+                normalize=self.normalize,
+                interpolate=self.interpolate,
+                target_shape=self.target_shape,
+            )
+            self.val_dataset = MatrixDataset(
+                self.val_data,
+                normalize=self.normalize,
+                interpolate=self.interpolate,
+                target_shape=self.target_shape,
+            )
         if stage == "test":
-            self.test_dataset = MatrixDataset(self.test_data, self.args)
+            self.test_dataset = MatrixDataset(
+                self.test_data,
+                normalize=self.normalize,
+                interpolate=self.interpolate,
+                target_shape=self.target_shape,
+            )
         if stage == "predict":
-            self.predict_dataset = MatrixDataset(self.predict_data, self.args)
+            self.predict_dataset = MatrixDataset(
+                self.predict_data,
+                normalize=self.normalize,
+                interpolate=self.interpolate,
+                target_shape=self.target_shape,
+            )
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
@@ -231,13 +250,6 @@ class MatrixDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return torch.utils.data.DataLoader(
             self.test_dataset,
-            batch_size=self.batch_size,
-            num_workers=self.num_workers,
-        )
-
-    def predict_dataloader(self):
-        return torch.utils.data.DataLoader(
-            self.predict_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
         )
