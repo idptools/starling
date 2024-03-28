@@ -35,7 +35,6 @@ class vanilla_Encoder(nn.Module):
                         stride=stride,
                         padding=padding,
                     ),
-                    # nn.BatchNorm2d(hidden_dim),
                     instance_norm(hidden_dim),
                     nn.ReLU(),
                 )
@@ -55,7 +54,8 @@ class vanilla_Decoder(nn.Module):
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
 
         modules = []
-        for num in range(len(out_channels) - 1):
+        num_layers = len(out_channels) - 1
+        for num in range(num_layers):
             modules.append(
                 nn.Sequential(
                     nn.ConvTranspose2d(
@@ -66,11 +66,24 @@ class vanilla_Decoder(nn.Module):
                         padding=padding,
                         output_padding=1,
                     ),
-                    # nn.BatchNorm2d(out_channels[num + 1]),
                     instance_norm(out_channels[num + 1]),
                     nn.ReLU(),
                 )
             )
+
+        # Final output layer
+        modules.append(
+            nn.Sequential(
+                nn.Conv2d(
+                    in_channels=out_channels[-1],
+                    out_channels=out_channels[-1],
+                    kernel_size=kernel_size,
+                    stride=1,
+                    padding=padding,
+                ),
+                nn.ReLU(),
+            )
+        )
 
         self.decoder = nn.Sequential(*modules)
 
