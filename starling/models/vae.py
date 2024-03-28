@@ -228,13 +228,9 @@ class VAE(pl.LightningModule):
         log_pxz *= weights
         return log_pxz.sum()
 
-    def vae_loss(
-        self,
-        data_reconstructed,
-        data,
-        mu,
-        logvar,
-    ):
+    def vae_loss(self, data_reconstructed, data, mu, logvar, KLD_weight=None):
+        if KLD_weight is None:
+            KLD_weight = self.KLD_weight
         # Find where the padding starts by counting the number of
         start_of_padding = torch.sum(data != 0, dim=(1, 2))[:, 0] + 1
 
@@ -287,7 +283,7 @@ class VAE(pl.LightningModule):
             KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
             KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
-            loss = BCE + self.KLD_weight * KLD
+            loss = BCE + KLD_weight * KLD
 
             return {"loss": loss, "BCE": BCE, "KLD": KLD}
 
@@ -319,7 +315,7 @@ class VAE(pl.LightningModule):
 
             KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
             KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
-            elbo = self.KLD_weight * KLD - total_recon_loss
+            elbo = KLD_weight * KLD - total_recon_loss
 
             return {"loss": elbo, "BCE": total_recon_loss, "KLD": KLD}
 
@@ -376,6 +372,7 @@ class VAE(pl.LightningModule):
             data=data,
             mu=mu,
             logvar=logvar,
+            KLD_weight=1,
         )
 
         self.log("epoch_val_loss", loss["loss"], prog_bar=True, sync_dist=True)
