@@ -7,7 +7,7 @@ data:
   batch_size: 128
 device:
   cuda:
-  - 0
+  - 3
 model:
   KLD_weight: 1
   dimension: 384
@@ -16,11 +16,10 @@ model:
   latent_dim: 128
   loss_type: elbo
   lr_scheduler: CosineAnnealingWarmRestarts
-  num_layers: 6
   starting_hidden_dim: 32
-  weights_type: reciprocal
+  weights_type: linear
 training:
   learning_rate: null
-  num_epochs: 20
+  num_epochs: 30
   output_path: sweep_test
   project_name: sweep_test

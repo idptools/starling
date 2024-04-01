@@ -9,7 +9,6 @@ def get_params(config_file=None):
     default_config = {
         "model": {
             "in_channels": 1,
-            "num_layers": 6,
             "latent_dim": 128,
             "kernel_size": 3,
             "starting_hidden_dim": 32,
