@@ -1,3 +1,4 @@
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -24,11 +25,10 @@ torch.set_float32_matmul_precision("high")
 class VAE(pl.LightningModule):
     def __init__(
         self,
+        model,
         in_channels,
         latent_dim,
-        num_layers,
         kernel_size,
-        starting_hidden_dim,
         dimension,
         loss_type,
         weights_type,
@@ -38,6 +38,16 @@ class VAE(pl.LightningModule):
         super().__init__()
 
         self.save_hyperparameters()
+
+        # Setting params for the ResNet
+        if model == "Resnet18":
+            num_blocks = [2, 2, 2, 2]
+        elif model == "Resnet34":
+            num_blocks = [3, 3, 3, 3]
+        else:
+            raise ValueError(
+                f"Requested model _{model}_ is not implemented, please choose from Resnet18, Resnet34 or Resnet50"
+            )
 
         # Loss params
         self.loss_type = loss_type
@@ -54,55 +64,46 @@ class VAE(pl.LightningModule):
 
         self.monitor = "epoch_val_loss"
 
-        self.hidden_dims = [starting_hidden_dim * 2**i for i in range(num_layers)]
+        num_layers = int(np.log2(dimension / 3))
 
-        shape = int(dimension / 2 ** len(self.hidden_dims))
-
+        # shape = int(dimension / 2 ** (len(num_blocks) + 1))
         # Get the shape of the output of the final layer
-        self.shape_from_final_encoding_layer = self.hidden_dims[-1], shape, shape
+        self.shape_from_final_encoding_layer = 512, 1, 1
 
         # Encoder
-        self.encoder = blocks.vanilla_Encoder(
+        self.encoder = blocks.ResNet_Encoder(
             in_channels=in_channels,
-            out_channels=self.hidden_dims,
+            num_blocks=num_blocks,
             kernel_size=kernel_size,
-            stride=2,
         )
 
-        self.fc_mu = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
-        self.fc_var = nn.Linear(self.hidden_dims[-1] * shape * shape, latent_dim)
+        self.fc_mu = nn.Linear(512 * 1 * 1, latent_dim)
+        self.fc_var = nn.Linear(512 * 1 * 1, latent_dim)
 
-        self.first_decode_layer = nn.Linear(
-            latent_dim, self.hidden_dims[-1] * shape * shape
-        )
+        self.first_decode_layer = nn.Linear(latent_dim, 512 * 1 * 1)
 
-        # Decoder
-        reverse_hidden_dims = list(self.hidden_dims[::-1])
-        reverse_hidden_dims.append(in_channels)
-
-        self.decoder = blocks.vanilla_Decoder(
-            in_channels=reverse_hidden_dims,
-            out_channels=reverse_hidden_dims,
+        self.decoder = blocks.ResNet_Decoder(
+            out_channels=in_channels,
+            num_blocks=num_blocks,
             kernel_size=kernel_size,
-            stride=2,
         )
 
         if self.loss_type == "elbo":
             self.log_std = nn.Parameter(torch.zeros((dimension * (dimension + 1) // 2)))
 
-    def encode(self, x: torch.Tensor):
-        z = self.encoder(x)
-        z = torch.flatten(z, start_dim=1)
-        mu = self.fc_mu(z)
-        log_var = self.fc_var(z)
+    def encode(self, data: torch.Tensor):
+        data = self.encoder(data)
+        data = torch.flatten(data, start_dim=1)
+        mu = self.fc_mu(data)
+        log_var = self.fc_var(data)
 
         return [mu, log_var]
 
-    def decode(self, z: torch.Tensor):
-        x = self.first_decode_layer(z)
-        x = x.view(-1, *self.shape_from_final_encoding_layer)
-        x = self.decoder(x)
-        return x
+    def decode(self, data: torch.Tensor):
+        data = self.first_decode_layer(data)
+        data = data.view(-1, *self.shape_from_final_encoding_layer)
+        data = self.decoder(data)
+        return data
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -256,9 +257,10 @@ class VAE(pl.LightningModule):
             logvar=logvar,
         )
 
-        self.total_train_step_losses.append(loss["loss"])
-        self.recon_step_losses.append(loss["BCE"])
-        self.KLD_step_losses.append(loss["KLD"])
+        if batch_idx % 100 == 0:
+            self.total_train_step_losses.append(loss["loss"])
+            self.recon_step_losses.append(loss["BCE"])
+            self.KLD_step_losses.append(loss["KLD"])
 
         self.log("train_loss", loss["loss"], prog_bar=True)
         self.log("recon_loss", loss["BCE"], prog_bar=True)
@@ -290,7 +292,6 @@ class VAE(pl.LightningModule):
             data=data,
             mu=mu,
             logvar=logvar,
-            KLD_weight=1,
         )
 
         self.log("epoch_val_loss", loss["loss"], prog_bar=True, sync_dist=True)
