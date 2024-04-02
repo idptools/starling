@@ -48,6 +48,9 @@ def train_vae():
 
     vae = VAE(**config["model"])
 
+    with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
+        f.write(str(vae))
+
     wandb_logger = WandbLogger(project=config["training"]["project_name"])
     wandb_logger.watch(vae)
 
