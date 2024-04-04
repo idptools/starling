@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from IPython import embed
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR
 
-from starling.models import blocks
+from starling.models.vae_components import ResNet_Decoder, ResNet_Encoder
 
 
 class PrintLayer(nn.Module):
@@ -39,11 +39,11 @@ class VAE(pl.LightningModule):
 
         self.save_hyperparameters()
 
-        # Setting params for the ResNet
+        # Setting the building blocks for the ResNets
         if model == "Resnet18":
             num_blocks = [2, 2, 2, 2]
         elif model == "Resnet34":
-            num_blocks = [3, 3, 3, 3]
+            num_blocks = [3, 4, 6, 3]
         else:
             raise ValueError(
                 f"Requested model _{model}_ is not implemented, please choose from Resnet18, Resnet34 or Resnet50"
@@ -64,25 +64,25 @@ class VAE(pl.LightningModule):
 
         self.monitor = "epoch_val_loss"
 
-        num_layers = int(np.log2(dimension / 3))
-
-        # shape = int(dimension / 2 ** (len(num_blocks) + 1))
         # Get the shape of the output of the final layer
-        self.shape_from_final_encoding_layer = 512, 1, 1
+        # 64 is te number of channels after 1st convolution
+        # common for ResNets
+        linear_layer_params = int(64 * 2 ** (len(num_blocks) - 1))
+        self.shape_from_final_encoding_layer = linear_layer_params, 1, 1
 
         # Encoder
-        self.encoder = blocks.ResNet_Encoder(
+        self.encoder = ResNet_Encoder(
             in_channels=in_channels,
             num_blocks=num_blocks,
             kernel_size=kernel_size,
         )
 
-        self.fc_mu = nn.Linear(512 * 1 * 1, latent_dim)
-        self.fc_var = nn.Linear(512 * 1 * 1, latent_dim)
+        self.fc_mu = nn.Linear(linear_layer_params * 1 * 1, latent_dim)
+        self.fc_var = nn.Linear(linear_layer_params * 1 * 1, latent_dim)
 
-        self.first_decode_layer = nn.Linear(latent_dim, 512 * 1 * 1)
+        self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 1 * 1)
 
-        self.decoder = blocks.ResNet_Decoder(
+        self.decoder = ResNet_Decoder(
             out_channels=in_channels,
             num_blocks=num_blocks,
             kernel_size=kernel_size,
@@ -90,6 +90,7 @@ class VAE(pl.LightningModule):
 
         if self.loss_type == "elbo":
             self.log_std = nn.Parameter(torch.zeros((dimension * (dimension + 1) // 2)))
+            # self.log_std = nn.Parameter(torch.Tensor([0.0]))
 
     def encode(self, data: torch.Tensor):
         data = self.encoder(data)
