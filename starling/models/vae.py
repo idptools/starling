@@ -75,6 +75,7 @@ class VAE(pl.LightningModule):
             in_channels=in_channels,
             num_blocks=num_blocks,
             kernel_size=kernel_size,
+            dimension=dimension,
         )
 
         self.fc_mu = nn.Linear(linear_layer_params * 1 * 1, latent_dim)
@@ -86,6 +87,7 @@ class VAE(pl.LightningModule):
             out_channels=in_channels,
             num_blocks=num_blocks,
             kernel_size=kernel_size,
+            dimension=dimension,
         )
 
         if self.loss_type == "elbo":
