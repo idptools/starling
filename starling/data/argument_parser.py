@@ -9,9 +9,9 @@ def get_params(config_file=None):
     default_config = {
         "model": {
             "in_channels": 1,
+            "model": "ResNet18",
             "latent_dim": 128,
             "kernel_size": 3,
-            "starting_hidden_dim": 32,
             "loss_type": "elbo",
             "weights_type": "reciprocal",
             "KLD_weight": 1,
@@ -28,8 +28,7 @@ def get_params(config_file=None):
             "train_data": None,
             "val_data": None,
             "test_data": None,
-            "interpolate": False,
-            "normalize": False,
+            "normalize": None,
             "batch_size": 64,
         },
         "device": {"cuda": [0]},
