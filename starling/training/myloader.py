@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+import pkg_resources
 import pytorch_lightning as pl
 import torch
 from IPython import embed
@@ -9,9 +10,8 @@ from starling.data import load_norm_matrices
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, txt_file, interpolate, normalize, target_shape):
+    def __init__(self, txt_file, normalize, target_shape):
         self.data_path = self.read_paths(txt_file)
-        self.resize = interpolate
         self.normalize = normalize
         self.target_shape = (target_shape, target_shape)
 
@@ -21,11 +21,10 @@ class MatrixDataset(torch.utils.data.Dataset):
             "afrc": self.normalize_by_normalization_matrix,
             "log": self.normalize_by_log10,
             "normalize_and_scale": self.normalize_and_scale,
+            "mean": self.normalize_by_mean_gSAW,
         }
 
-        self.resizing_tactics = {"pad": self.MaxPad, "interpolate": self.interpolate}
-
-        if self.normalize:
+        if self.normalize is not None:
             if self.normalize == "bond_length":
                 self.normalization_matrix = self.generate_normalization_matrix(
                     self.target_shape
@@ -35,17 +34,18 @@ class MatrixDataset(torch.utils.data.Dataset):
                     self.target_shape
                 )
             elif self.normalize == "normalize_and_scale":
-                (
-                    self.mean_matrix,
-                    self.std_matrix,
-                    self.max_standard,
-                    self.min_standard,
-                    self.max_expected_distances,
-                ) = load_norm_matrices.load_matrices()
-            else:
-                raise ValueError(
-                    f"{self.normalize} normalization method is not implemented"
+                directory_path = pkg_resources.resource_filename("starling", "data/")
+                self.mean_dataset = np.load(directory_path + "mean_384_dataset.npy")
+                self.std_dataset = np.load(directory_path + "std_384_dataset.npy")
+                self.max_standard = np.load(
+                    directory_path + "max_standard_384_dataset.npy"
                 )
+                self.min_standard = np.load(
+                    directory_path + "min_standard_384_dataset.npy"
+                )
+            elif self.normalize == "mean":
+                directory_path = pkg_resources.resource_filename("starling", "data/")
+                self.mean_dataset = np.load(directory_path + "mean_384_dataset.npy")
 
     def __len__(self):
         return len(self.data_path)
@@ -55,12 +55,11 @@ class MatrixDataset(torch.utils.data.Dataset):
         sample = np.loadtxt(self.data_path[index], dtype=np.float32)
 
         # Normalize your distance map according to user input
-        if self.normalize:
+        if self.normalize is not None:
             sample = self.normalization_tactics[self.normalize](sample)
 
-        # Resize the input distance map with padding or resizing
-        tactic = "interpolate" if self.resize else "pad"
-        sample = self.resizing_tactics[tactic](sample)
+        # Resize the input distance map with padding
+        sample = self.MaxPad(sample)
 
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
@@ -76,10 +75,7 @@ class MatrixDataset(torch.utils.data.Dataset):
         return paths
 
     def MaxPad(self, original_array):
-        # Pad the distance map to a desired shape, here we are using
-        # (768, 768) because largest sequences are 750 residues long
-        # and 768 can be divided by 2 a bunch of times leading to nice
-        # behavior during conv2d and conv2transpose down- and up-sampling
+        # Pad the distance map to a desired shape
         pad_height = max(0, self.target_shape[0] - original_array.shape[0])
         pad_width = max(0, self.target_shape[1] - original_array.shape[1])
         return np.pad(
@@ -88,28 +84,6 @@ class MatrixDataset(torch.utils.data.Dataset):
             mode="constant",
             constant_values=0,
         )
-
-    def interpolate(self, distance_map):
-        # This BICUBIC method was tested to perform the best
-        # on distance maps (smallest error, max error ~0.07A)
-        method = "bicubic"
-
-        # Set up the distance map shapes to be right for transform
-        # needed [B, C, H, W]
-        distance_map_upsample = torch.from_numpy(distance_map).unsqueeze(0).unsqueeze(0)
-
-        # Transform the data
-        distance_map_upsample = torch.nn.functional.interpolate(
-            distance_map_upsample, size=self.target_shape, mode=method
-        )
-        # Convert back to an array with shape (H, W)
-        distance_map_upsample = distance_map_upsample.squeeze().numpy()
-        np.fill_diagonal(distance_map_upsample, 0)
-        distance_map_upsample = distance_map_upsample.clip(
-            min=0, max=(np.max(distance_map))
-        )
-
-        return distance_map_upsample
 
     def normalize_by_length(self, original_array):
         # Normalize the distances by square root of N where N is num_residues
@@ -149,32 +123,53 @@ class MatrixDataset(torch.utils.data.Dataset):
         distance_map = protein.get_distance_map()
         distance_map = distance_map + distance_map.T
         distance_map[distance_map == 0] = 1
-        # embed()
 
         return distance_map
 
     def normalize_by_log10(self, original_array):
-        #! We should change this by filling the diagonal with 1 which will after log10 equal to
-        normalized_matrix = np.log10(original_array + 0.005)
+        np.fill_diagonal(original_array, 1)
+        normalized_matrix = np.log10(original_array)
         return normalized_matrix
 
-    def normalize_and_scale(self, original_array):
-        height, width = original_array.shape
-        standardized_data = (
-            original_array - self.mean_matrix[:height, :width]
-        ) / self.std_matrix[:height, :width]
+    def reciprocal_log(self, data):
+        data_recip = 1 / (np.log(data))
+        data_recip[np.isinf(data_recip)] = 0
+        return data_recip
 
-        denominator = (
-            self.max_standard[:height, :width] - self.min_standard[:height, :width]
-        )
+    def calculate_min_max_reference(self, array):
+        self.max_array = np.maximum(array, self.max_array)
+        array[array == 0] = np.inf
+        self.min_array = np.minimum(array, self.min_array)
+
+    def min_max_scale(self, data):
+        denominator = self.max_array - self.min_array
         denominator[denominator == 0] = 1
+        normalized_data = (data - self.min_array) / denominator
+        return normalized_data
 
-        scaled_data = (
-            2 * (standardized_data - self.min_standard[:height, :width]) / (denominator)
-            - 1
-        )
+    def reciprocal_log_normalization(self, original_array):
+        reciprocal_log_data = self.reciprocal_log(original_array)
+        self.calculate_min_max_reference(reciprocal_log_data)
+        normalized_data = self.min_max_scale(reciprocal_log_data)
+        return normalized_data
 
-        return scaled_data
+    def normalize_and_scale(self, data):
+        self.std_dataset[self.std_dataset.round(3) == 0] = 1
+        # Zero mean the data and standardize std
+        data_standard = (data - self.mean_dataset) / self.std_dataset
+
+        denominator = self.max_standard - self.min_standard
+        denominator[denominator.round(3) == 0] = 1
+
+        data_normal = (data_standard - self.min_standard) / denominator
+        np.fill_diagonal(data_normal, 0)
+        return data_normal.astype(np.float32)
+
+    def normalize_by_mean_gSAW(self, data):
+        self.mean_dataset[self.mean_dataset == 0] = 1
+        data_norm = data / self.mean_dataset
+        np.fill_diagonal(data_norm, 0)
+        return data_norm.astype(np.float32)
 
 
 # Step 2: Create a data module
@@ -185,8 +180,7 @@ class MatrixDataModule(pl.LightningDataModule):
         val_data=None,
         test_data=None,
         batch_size=None,
-        normalize=False,
-        interpolate=False,
+        normalize=None,
         target_shape=None,
     ):
         super().__init__()
@@ -195,7 +189,6 @@ class MatrixDataModule(pl.LightningDataModule):
         self.test_data = test_data
         self.batch_size = batch_size
         self.normalize = normalize
-        self.interpolate = interpolate
         self.target_shape = target_shape
         self.num_workers = int(os.cpu_count() / 4)
 
@@ -208,27 +201,23 @@ class MatrixDataModule(pl.LightningDataModule):
             self.train_dataset = MatrixDataset(
                 self.train_data,
                 normalize=self.normalize,
-                interpolate=self.interpolate,
                 target_shape=self.target_shape,
             )
             self.val_dataset = MatrixDataset(
                 self.val_data,
                 normalize=self.normalize,
-                interpolate=self.interpolate,
                 target_shape=self.target_shape,
             )
         if stage == "test":
             self.test_dataset = MatrixDataset(
                 self.test_data,
                 normalize=self.normalize,
-                interpolate=self.interpolate,
                 target_shape=self.target_shape,
             )
         if stage == "predict":
             self.predict_dataset = MatrixDataset(
                 self.predict_data,
                 normalize=self.normalize,
-                interpolate=self.interpolate,
                 target_shape=self.target_shape,
             )
 
