@@ -46,7 +46,9 @@ def vae_predict():
 
     # Set up data loaders
     dataset = MatrixDataModule(
-        test_data=args.test_data, batch_size=args.batch_size, target_shape=192
+        test_data=args.test_data,
+        batch_size=args.batch_size,
+        target_shape=192,
     )
 
     device = torch.device(f"cuda:{args.gpu_id[0]}")
@@ -61,8 +63,11 @@ def vae_predict():
     for batch in predict_dataloader:
         x = batch["input"].to(f"cuda:{args.gpu_id[0]}")
         x_reconstructed = model(x)[0]
-        np.save("ground_truth_mse.npy", x.cpu().detach().numpy())
-        np.save("reconstructed_array_mse.npy", x_reconstructed.cpu().detach().numpy())
+        np.save("ground_truth_small_384_model.npy", x.cpu().detach().numpy())
+        np.save(
+            "reconstructed_array_small_384_model.npy",
+            x_reconstructed.cpu().detach().numpy(),
+        )
         break
 
     # trainer = pl.Trainer(
