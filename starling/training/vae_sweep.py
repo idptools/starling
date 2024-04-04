@@ -34,7 +34,7 @@ def train_vae():
 
     config["model"]["kernel_size"] = wandb.config.kernel_size
     config["model"]["latent_dim"] = wandb.config.latent_dim
-    config["model"]["num_layers"] = wandb.config.num_layers
+    config["model"]["starting_hidden_dim"] = wandb.config.starting_hidden_dim
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
@@ -64,14 +64,14 @@ def train_vae():
 
 if __name__ == "__main__":
     sweep_configuration = {
-        "method": "bayes",
+        "method": "grid",
         "metric": {"goal": "minimize", "name": "epoch_val_loss"},
         "parameters": {
-            "kernel_size": {"values": [3, 5, 7]},
-            "latent_dim": {"values": [16, 32, 64, 128, 256, 512, 1024]},
-            "num_layers": {"values": [5, 6, 7]},
+            "kernel_size": {"values": [5, 7]},
+            "latent_dim": {"values": [16, 64, 256, 512, 1024]},
+            "starting_hidden_dim": {"values": [16, 32, 64]},
         },
     }
 
-    sweep_id = wandb.sweep(sweep=sweep_configuration, project="small_model_sweep")
-    wandb.agent(sweep_id, function=train_vae, count=40)
+    sweep_id = wandb.sweep(sweep=sweep_configuration, project="384_sweep_grid")
+    wandb.agent(sweep_id, function=train_vae, count=45)
