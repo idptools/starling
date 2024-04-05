@@ -25,7 +25,7 @@ class ResNet_Encoder_Original(nn.Module):
             # nn.LayerNorm([self.in_channels, int(dimension / 2), int(dimension / 2)]),
             # AvgPool2d, might not be the best thing one can do here,
             # We might need a convolution layer instead
-            nn.AvgPool2d(kernel_size=3, stride=2, padding=1),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
         self.layers = nn.ModuleList()
