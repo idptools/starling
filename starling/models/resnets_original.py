@@ -22,9 +22,6 @@ class ResNet_Encoder_Original(nn.Module):
                 padding=3,
             ),
             nn.BatchNorm2d(self.in_channels),
-            # nn.LayerNorm([self.in_channels, int(dimension / 2), int(dimension / 2)]),
-            # AvgPool2d, might not be the best thing one can do here,
-            # We might need a convolution layer instead
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
@@ -188,3 +185,42 @@ class ResNet_Decoder_Original(nn.Module):
         data = self.reshaping_conv(data)
         data = self.output_layer(data)
         return data
+
+
+# Current implementations of ResNets
+
+
+def Resnet18_Encoder(in_channels, kernel_size, dimension):
+    return ResNet_Encoder_Original(
+        in_channels,
+        num_blocks=[2, 2, 2, 2],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet18_Decoder(out_channels, kernel_size, dimension):
+    return ResNet_Decoder_Original(
+        out_channels,
+        num_blocks=[2, 2, 2, 2],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet34_Encoder(in_channels, kernel_size, dimension):
+    return ResNet_Encoder_Original(
+        in_channels,
+        num_blocks=[3, 4, 6, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet34_Decoder(out_channels, kernel_size, dimension):
+    return ResNet_Decoder_Original(
+        out_channels,
+        num_blocks=[3, 4, 6, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
