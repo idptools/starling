@@ -26,26 +26,37 @@ class MinPool2d(nn.Module):
 
 class ResizeConv2d(nn.Module):
     def __init__(
-        self, in_channels, out_channels, kernel_size, size=(12, 12), mode="nearest"
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        size=None,
+        scale_factor=None,
+        mode="nearest",
     ):
         super().__init__()
         self.size = size
+        self.scale_factor = scale_factor
         self.mode = mode
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=1),
-            # nn.BatchNorm2d(out_channels),
-            nn.LayerNorm([out_channels, self.size[0], self.size[1]]),
+            nn.BatchNorm2d(out_channels),
+            # nn.LayerNorm([out_channels, self.size[0], self.size[1]]),
             nn.ReLU(),
         )
 
     def forward(self, x):
-        x = F.interpolate(x, size=self.size, mode=self.mode)
+        x = F.interpolate(
+            x, size=self.size, scale_factor=self.scale_factor, mode=self.mode
+        )
         x = self.conv(x)
         return x
 
 
 class ResBlockEncBasic(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, dimension) -> None:
+    def __init__(
+        self, in_channels, out_channels, kernel_size, dimension, stride
+    ) -> None:
         super().__init__()
 
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
@@ -58,12 +69,12 @@ class ResBlockEncBasic(nn.Module):
             nn.Conv2d(
                 in_channels=in_channels,
                 out_channels=out_channels,
-                stride=2 if in_channels != out_channels else 1,
+                stride=stride,
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            # nn.BatchNorm2d(out_channels),
-            layer_norm(out_channels, dimension),
+            nn.BatchNorm2d(out_channels),
+            # layer_norm(out_channels, dimension),
             nn.ReLU(),
         )
 
@@ -78,13 +89,13 @@ class ResBlockEncBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            # nn.BatchNorm2d(out_channels),
-            layer_norm(out_channels, dimension),
+            nn.BatchNorm2d(out_channels),
+            # layer_norm(out_channels, dimension),
         )
 
         # Set up the shortcut if downsampling is done
         # (b, c, h, w) -> (b, c*2, h /2, w /2 ) stride = 2
-        if in_channels != out_channels:
+        if stride > 1:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(
                     in_channels=in_channels,
@@ -93,8 +104,8 @@ class ResBlockEncBasic(nn.Module):
                     stride=2,
                     padding=0,
                 ),
-                # nn.BatchNorm2d(out_channels),
-                layer_norm(out_channels, dimension),
+                nn.BatchNorm2d(out_channels),
+                # layer_norm(out_channels, dimension),
             )
         else:
             self.shortcut = nn.Sequential()
@@ -113,7 +124,9 @@ class ResBlockEncBasic(nn.Module):
 
 
 class ResBlockDecBasic(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, dimension) -> None:
+    def __init__(
+        self, in_channels, out_channels, kernel_size, dimension, stride
+    ) -> None:
         super().__init__()
 
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
@@ -128,8 +141,8 @@ class ResBlockDecBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            # nn.BatchNorm2d(in_channels),
-            layer_norm(in_channels, dimension),
+            nn.BatchNorm2d(in_channels),
+            # layer_norm(in_channels, dimension),
             nn.ReLU(),
         )
 
@@ -137,18 +150,18 @@ class ResBlockDecBasic(nn.Module):
         # of the tensor need to be upsampled
         # (b, c, h, w) -> (b, c, h, w) stride = 1, conv2d
         # (b, c, h, w) -> (b, c/2, h*2, w*2 ) stride = 2, convtranspose2d
-        if in_channels != out_channels:
+        if stride > 1:
             self.conv2 = nn.Sequential(
                 nn.ConvTranspose2d(
                     in_channels=in_channels,
                     out_channels=out_channels,
-                    stride=2,
+                    stride=stride,
                     kernel_size=kernel_size,
                     padding=padding,
                     output_padding=1,
                 ),
-                # nn.BatchNorm2d(out_channels),
-                layer_norm(out_channels, dimension),
+                nn.BatchNorm2d(out_channels),
+                # layer_norm(out_channels, dimension),
             )
             # Setup a shortcut connection
             self.shortcut = nn.Sequential(
@@ -160,8 +173,8 @@ class ResBlockDecBasic(nn.Module):
                     padding=0,
                     output_padding=1,
                 ),
-                # nn.BatchNorm2d(out_channels),
-                layer_norm(out_channels, dimension),
+                nn.BatchNorm2d(out_channels),
+                # layer_norm(out_channels, dimension),
             )
         else:
             self.conv2 = nn.Sequential(
@@ -172,8 +185,8 @@ class ResBlockDecBasic(nn.Module):
                     padding=padding,
                     kernel_size=kernel_size,
                 ),
-                # nn.BatchNorm2d(out_channels),
-                layer_norm(out_channels, dimension),
+                nn.BatchNorm2d(out_channels),
+                # layer_norm(out_channels, dimension),
             )
             self.shortcut = nn.Sequential()
 
