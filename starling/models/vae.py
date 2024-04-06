@@ -4,7 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from IPython import embed
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, OneCycleLR
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR,
+    CosineAnnealingWarmRestarts,
+    OneCycleLR,
+)
 
 from starling.models import resnets_original, vae_components
 
@@ -322,9 +326,44 @@ class VAE(pl.LightningModule):
         return loss["loss"]
 
     def configure_optimizers(self):
+        # NVIDIA configs for ResNet50, they used it with CosineAnnealingLR
+        # https://catalog.ngc.nvidia.com/orgs/nvidia/resources/resnet_50_v1_5_for_pytorch
+        # optimizer = torch.optim.SGD(
+        #     self.parameters(),
+        #     lr=self.set_lr,  # 0.256 for batch of 256
+        #     momentum=0.875,
+        #     nesterov=True,
+        #     weight_decay=1 / 32768,
+        # )
+
+        # Here we are not doing weight decay on batch normalization parameters
         optimizer = torch.optim.SGD(
-            self.parameters(), lr=0.05, momentum=0.99, nesterov=True
+            [
+                {
+                    "params": [
+                        param
+                        for name, param in self.named_parameters()
+                        if not any(nd in name for nd in ["bn"])
+                    ]
+                },
+                {
+                    "params": [
+                        param
+                        for name, param in self.named_parameters()
+                        if any(nd in name for nd in ["bn"])
+                    ],
+                    "weight_decay": 0.0,
+                },
+            ],
+            lr=self.set_lr,  # 0.256 for batch of 256
+            momentum=0.875,
+            nesterov=True,
+            weight_decay=1 / 32768,
         )
+
+        # optimizer = torch.optim.SGD(
+        #     self.parameters(), lr=0.05, momentum=0.99, nesterov=True
+        # )
 
         if self.config_scheduler == "CosineAnnealingWarmRestarts":
             lr_scheduler = {
@@ -344,6 +383,17 @@ class VAE(pl.LightningModule):
                 ),
                 "monitor": self.monitor,
                 "interval": "step",
+            }
+        elif self.config_scheduler == "CosineAnnealingLR":
+            num_epochs = self.trainer.max_epochs
+            lr_scheduler = {
+                "scheduler": CosineAnnealingLR(
+                    optimizer,
+                    T_max=num_epochs,
+                    eta_min=1e-4,
+                ),
+                "monitor": self.monitor,
+                "interval": "epoch",
             }
         else:
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
