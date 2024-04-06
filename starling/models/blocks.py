@@ -206,6 +206,52 @@ class ResBlockDecBasic(nn.Module):
         return self.activation(out)
 
 
+class ResBlockEncBottleneck(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        dimension,
+        stride,
+        base_width=64,
+        expansion=4,
+    ) -> None:
+        super().__init__()
+        self.expansion = expansion
+
+        width = int(out_channels * (base_width / 64.0))
+
+        # self.conv1 = (
+        #     nn.Sequential(
+        #         nn.Conv2d(
+        #             in_channels=in_channels,
+        #             out_channels=,
+        #             kernel_size=1,
+        #             stride=stride,
+        #         )
+        #     ),
+        #     nn.BatchNorm2d(),
+        #     nn.ReLU(),
+        # )
+
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(
+                in_channels=None, out_channels=None, kernel_size=3, stride=stride
+            ),
+            nn.BatchNorm2d(),
+            nn.ReLU(),
+        )
+
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(
+                in_channels=None, out_channels=None, kernel_size=1, stride=stride
+            ),
+            nn.BatchNorm2d(),
+            nn.ReLU(),
+        )
+
+
 def instance_norm(features, eps=1e-6, **kwargs):
     return nn.InstanceNorm2d(features, affine=True, eps=eps, **kwargs)
 
