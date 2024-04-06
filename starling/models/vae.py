@@ -34,36 +34,45 @@ class VAE(pl.LightningModule):
         weights_type,
         KLD_weight,
         lr_scheduler,
-        type="modified",
+        set_lr,
+        encoder_block="original",
+        decoder_block="original",
     ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        # Setting the building blocks for the ResNets
-        if model == "Resnet18":
-            if type == "modified":
-                encoder = vae_components.Resnet18_Encoder
-                decoder = vae_components.Resnet18_Decoder
-            elif type == "original":
-                encoder = resnets_original.Resnet18_Encoder
-                decoder = resnets_original.Resnet18_Decoder
-        elif model == "Resnet34":
-            if type == "modified":
-                encoder = vae_components.Resnet34_Encoder
-                decoder = vae_components.Resnet34_Decoder
-            elif type == "original":
-                encoder = resnets_original.Resnet34_Encoder
-                decoder = resnets_original.Resnet34_Decoder
-        else:
-            raise ValueError(
-                f"Requested model _{model}_ is not implemented, please choose from Resnet18, Resnet34 or Resnet50"
-            )
+        # Set up the ResNet Encoder and Decoder combinations
+        resnets = {
+            "Resnet18": {
+                "encoder": {
+                    "original": resnets_original.Resnet18_Encoder,
+                    "modified": vae_components.Resnet18_Encoder,
+                },
+                "decoder": {
+                    "original": resnets_original.Resnet18_Decoder,
+                    "modified": vae_components.Resnet18_Decoder,
+                },
+            },
+            "Resnet34": {
+                "encoder": {
+                    "original": resnets_original.Resnet34_Encoder,
+                    "modified": vae_components.Resnet34_Encoder,
+                },
+                "decoder": {
+                    "original": resnets_original.Resnet34_Decoder,
+                    "modified": vae_components.Resnet34_Decoder,
+                },
+            },
+        }
 
         # Loss params
         self.loss_type = loss_type
         self.weights_type = weights_type
+
+        # Learning rate params
         self.config_scheduler = lr_scheduler
+        self.set_lr = set_lr
 
         # KLD loss params
         self.KLD_weight = KLD_weight
@@ -84,7 +93,7 @@ class VAE(pl.LightningModule):
         self.shape_from_final_encoding_layer = linear_layer_params, 1, 1
 
         # Encoder
-        self.encoder = encoder(
+        self.encoder = resnets[model]["encoder"][encoder_block](
             in_channels=in_channels,
             kernel_size=kernel_size,
             dimension=dimension,
@@ -95,7 +104,7 @@ class VAE(pl.LightningModule):
         self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 1 * 1)
 
         # Decoder
-        self.decoder = decoder(
+        self.decoder = resnets[model]["decoder"][decoder_block](
             out_channels=in_channels,
             kernel_size=kernel_size,
             dimension=dimension,
