@@ -6,8 +6,17 @@ from starling.models.blocks import ResBlockDecBasic, ResBlockEncBasic, ResizeCon
 
 
 class ResNet_Encoder_Original(nn.Module):
-    def __init__(self, in_channels, num_blocks, kernel_size, dimension) -> None:
+    def __init__(
+        self,
+        in_channels,
+        num_blocks,
+        kernel_size,
+        dimension,
+        block_type=ResBlockEncBasic,
+    ) -> None:
         super().__init__()
+
+        self.block_type = block_type
 
         # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
         # with kernel=7 and stride=2 AvgPool2d reduces spatial dimensions by / 2
@@ -31,7 +40,7 @@ class ResNet_Encoder_Original(nn.Module):
             if num == 0:
                 self.layers.append(
                     self._make_layer(
-                        ResBlockEncBasic,
+                        self.block_type,
                         self.in_channels,
                         block,
                         kernel_size,
@@ -42,7 +51,7 @@ class ResNet_Encoder_Original(nn.Module):
             else:
                 self.layers.append(
                     self._make_layer(
-                        ResBlockEncBasic,
+                        self.block_type,
                         int(self.in_channels * 2),
                         block,
                         kernel_size,
@@ -79,17 +88,13 @@ class ResNet_Encoder_Original(nn.Module):
 
 class ResNet_Decoder_Original(nn.Module):
     def __init__(
-        self,
-        out_channels,
-        num_blocks,
-        kernel_size,
-        dimension,
+        self, out_channels, num_blocks, kernel_size, dimension, in_channels=64
     ) -> None:
         super().__init__()
 
         # Calculate the input channels from the encoder, assuming
         # symmetric encoder and decoder setup
-        self.in_channels = int(64 * 2 ** (len(num_blocks) - 1))
+        self.in_channels = int(in_channels * 2 ** (len(num_blocks) - 1))
         self.interpolate = int(dimension / (2 ** (len(num_blocks) + 1)))
 
         # This part can be done in many ways, this is just one of them
