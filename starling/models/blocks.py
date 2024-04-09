@@ -42,7 +42,7 @@ class ResizeConv2d(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=1),
             nn.BatchNorm2d(out_channels),
             # nn.LayerNorm([out_channels, self.size[0], self.size[1]]),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x):
@@ -54,11 +54,14 @@ class ResizeConv2d(nn.Module):
 
 
 class ResBlockEncBasic(nn.Module):
+    expansion = 1
+
     def __init__(
-        self, in_channels, out_channels, kernel_size, dimension, stride
+        self, in_channels, out_channels, stride, kernel_size=None, dimension=None
     ) -> None:
         super().__init__()
 
+        kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
 
         # First convolution of the ResNet with or without downsampling
@@ -75,7 +78,7 @@ class ResBlockEncBasic(nn.Module):
             ),
             nn.BatchNorm2d(out_channels),
             # layer_norm(out_channels, dimension),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         # Second convolution which doesn't do any downsampling, but needs
@@ -109,7 +112,7 @@ class ResBlockEncBasic(nn.Module):
             )
         else:
             self.shortcut = nn.Sequential()
-        self.activation = nn.ReLU()
+        self.activation = nn.ReLU(inplace=True)
 
     def forward(self, data):
         # Set up the shortcut connection if necessary
@@ -124,11 +127,20 @@ class ResBlockEncBasic(nn.Module):
 
 
 class ResBlockDecBasic(nn.Module):
+    contraction = 1
+
     def __init__(
-        self, in_channels, out_channels, kernel_size, dimension, stride
+        self,
+        in_channels,
+        out_channels,
+        stride,
+        kernel_size=None,
+        dimension=None,
+        last_layer=None,
     ) -> None:
         super().__init__()
 
+        kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
 
         # First convolution which doesn't change the shape of the tensor
@@ -143,7 +155,7 @@ class ResBlockDecBasic(nn.Module):
             ),
             nn.BatchNorm2d(in_channels),
             # layer_norm(in_channels, dimension),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         # Here we figure out whether the spatial dimensions
@@ -190,7 +202,7 @@ class ResBlockDecBasic(nn.Module):
             )
             self.shortcut = nn.Sequential()
 
-        self.activation = nn.ReLU()
+        self.activation = nn.ReLU(inplace=True)
 
     def forward(self, data):
         # Setup the shortcut connection if necessary
@@ -207,26 +219,26 @@ class ResBlockDecBasic(nn.Module):
 
 
 class ResBlockEncBottleneck(nn.Module):
+    expansion = 8
+
     def __init__(
         self,
         in_channels,
         out_channels,
         stride,
-        expansion=4,
+        expansion=8,
     ) -> None:
         super().__init__()
         self.expansion = expansion
 
-        self.conv1 = (
-            nn.Sequential(
-                nn.Conv2d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=1,
-                )
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=1,
             ),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         self.conv2 = nn.Sequential(
@@ -235,9 +247,10 @@ class ResBlockEncBottleneck(nn.Module):
                 out_channels=out_channels,
                 kernel_size=3,
                 stride=stride,
+                padding=1,
             ),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         self.conv3 = nn.Sequential(
@@ -247,7 +260,7 @@ class ResBlockEncBottleneck(nn.Module):
                 kernel_size=1,
             ),
             nn.BatchNorm2d(int(out_channels * self.expansion)),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         if stride != 1 or in_channels != int(out_channels * self.expansion):
@@ -263,14 +276,101 @@ class ResBlockEncBottleneck(nn.Module):
         else:
             self.shortcut = nn.Sequential()
 
-        self.activation = nn.ReLU()
+        self.activation = nn.ReLU(inplace=True)
 
     def forward(self, data):
         identity = self.shortcut(data)
         out = self.conv1(data)
         out = self.conv2(out)
         out = self.conv3(out)
-        out += identity
+        out = out + identity
+        return self.activation(out)
+
+
+class ResBlockDecBottleneck(nn.Module):
+    contraction = 8
+
+    def __init__(
+        self, in_channels, out_channels, stride, contraction=8, last_layer=False
+    ) -> None:
+        super().__init__()
+
+        self.contraction = contraction
+
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=1,
+            ),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+        if stride != 1:
+            self.conv2 = nn.Sequential(
+                nn.ConvTranspose2d(
+                    in_channels=out_channels,
+                    out_channels=out_channels,
+                    kernel_size=3,
+                    stride=stride,
+                    output_padding=1,
+                    padding=1,
+                ),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+            )
+        else:
+            self.conv2 = nn.Sequential(
+                nn.Conv2d(
+                    in_channels=out_channels,
+                    out_channels=out_channels,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                ),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+            )
+
+        expansion = (
+            self.contraction
+            if stride == 1 and not last_layer
+            else (1 if last_layer else int(self.contraction / 2))
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(
+                in_channels=out_channels,
+                out_channels=out_channels * expansion,
+                kernel_size=1,
+            ),
+            nn.BatchNorm2d(out_channels * expansion),
+            nn.ReLU(inplace=True),
+        )
+
+        if stride != 1 or last_layer:
+            expansion = 1 if last_layer else int(self.contraction / 2)
+            self.shortcut = nn.Sequential(
+                nn.ConvTranspose2d(
+                    in_channels=in_channels,
+                    out_channels=int(out_channels * expansion),
+                    kernel_size=1,
+                    stride=stride,
+                    output_padding=1 if stride > 1 else 0,
+                ),
+                nn.BatchNorm2d(int(out_channels * expansion)),
+            )
+        else:
+            self.shortcut = nn.Sequential()
+
+        self.activation = nn.ReLU(inplace=True)
+
+    def forward(self, data):
+        identity = self.shortcut(data)
+        out = self.conv1(data)
+        out = self.conv2(out)
+        out = self.conv3(out)
+        out = out + identity
         return self.activation(out)
 
 
@@ -302,7 +402,7 @@ class vanilla_Encoder(nn.Module):
                         padding=padding,
                     ),
                     nn.BatchNorm2d(hidden_dim),
-                    nn.ReLU(),
+                    nn.ReLU(inplace=True),
                 )
             )
             in_channels = hidden_dim
@@ -317,7 +417,7 @@ class vanilla_Encoder(nn.Module):
                     padding=0,
                 ),
                 nn.BatchNorm2d(out_channels[-1]),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
             )
         )
 
@@ -345,7 +445,7 @@ class vanilla_Decoder(nn.Module):
                     padding=0,
                 ),
                 nn.BatchNorm2d(out_channels[0]),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
             )
         )
 
@@ -362,7 +462,7 @@ class vanilla_Decoder(nn.Module):
                         output_padding=1,
                     ),
                     nn.BatchNorm2d(out_channels[num + 1]),
-                    nn.ReLU(),
+                    nn.ReLU(inplace=True),
                 )
             )
 
@@ -376,7 +476,7 @@ class vanilla_Decoder(nn.Module):
                     stride=1,
                     padding=padding,
                 ),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
             )
         )
 
@@ -401,7 +501,7 @@ class DownsampleBlock(nn.Module):
                 padding=padding,
             ),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, data):
@@ -424,8 +524,9 @@ class UpsampleBlock(nn.Module):
                 output_padding=1,
             ),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, data):
+        return self.conv_transpose(data)
         return self.conv_transpose(data)
