@@ -2,7 +2,13 @@ import torch.nn.functional as F
 from IPython import embed
 from torch import nn
 
-from starling.models.blocks import ResBlockDecBasic, ResBlockEncBasic, ResizeConv2d
+from starling.models.blocks import (
+    ResBlockDecBasic,
+    ResBlockDecBottleneck,
+    ResBlockEncBasic,
+    ResBlockEncBottleneck,
+    ResizeConv2d,
+)
 
 
 class ResNet_Encoder_Original(nn.Module):
@@ -10,8 +16,8 @@ class ResNet_Encoder_Original(nn.Module):
         self,
         in_channels,
         num_blocks,
-        kernel_size,
-        dimension,
+        kernel_size=None,
+        dimension=None,
         block_type=ResBlockEncBasic,
     ) -> None:
         super().__init__()
@@ -20,7 +26,6 @@ class ResNet_Encoder_Original(nn.Module):
 
         # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
         # with kernel=7 and stride=2 AvgPool2d reduces spatial dimensions by / 2
-        # self.dimension = int(dimension / 2)
         self.in_channels = 64
         self.first_conv = nn.Sequential(
             nn.Conv2d(
@@ -34,67 +39,53 @@ class ResNet_Encoder_Original(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
-        self.layers = nn.ModuleList()
+        self.layer1 = self._make_layer(self.block_type, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(self.block_type, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(self.block_type, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(self.block_type, 512, num_blocks[3], stride=2)
 
-        for num, block in enumerate(num_blocks):
-            if num == 0:
-                self.layers.append(
-                    self._make_layer(
-                        self.block_type,
-                        self.in_channels,
-                        block,
-                        kernel_size,
-                        dimension,
-                        stride=1,
-                    )
-                )
-            else:
-                self.layers.append(
-                    self._make_layer(
-                        self.block_type,
-                        int(self.in_channels * 2),
-                        block,
-                        kernel_size,
-                        dimension,
-                        stride=2,
-                    )
-                )
+        self.average_pool = nn.AdaptiveAvgPool2d((1, 1))
 
-        self.average_pool = nn.AdaptiveAvgPool2d(1)
-
-    def _make_layer(
-        self, residual_block, out_channels, num_blocks, kernel_size, dimension, stride
-    ):
-        strides = [stride] + [1] * (num_blocks - 1)
+    def _make_layer(self, block, out_channels, blocks, stride=1):
         layers = []
-        for num, block in enumerate(range(num_blocks)):
-            layers += [
-                residual_block(
-                    self.in_channels, out_channels, kernel_size, dimension, strides[num]
-                )
-            ]
-            self.in_channels = out_channels
-
+        layers.append(block(self.in_channels, out_channels, stride))
+        self.in_channels = out_channels * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.in_channels, out_channels, stride=1))
         return nn.Sequential(*layers)
 
     def forward(self, data):
         data = self.first_conv(data)
-        for layer in self.layers:
-            data = layer(data)
+        # for layer in self.layers:
+        #     data = layer(data)
         # The final adaptive average can also be done through convolution
+        data = self.layer1(data)
+        data = self.layer2(data)
+        data = self.layer3(data)
+        data = self.layer4(data)
         data = self.average_pool(data)
         return data
 
 
 class ResNet_Decoder_Original(nn.Module):
     def __init__(
-        self, out_channels, num_blocks, kernel_size, dimension, in_channels=64
+        self,
+        out_channels,
+        num_blocks,
+        kernel_size,
+        dimension,
+        block_type=ResBlockDecBasic,
     ) -> None:
         super().__init__()
 
         # Calculate the input channels from the encoder, assuming
         # symmetric encoder and decoder setup
-        self.in_channels = int(in_channels * 2 ** (len(num_blocks) - 1))
+        self.block_type = block_type
+        if self.block_type == ResBlockDecBasic:
+            self.in_channels = 512
+        else:
+            self.in_channels = 4096
+
         self.interpolate = int(dimension / (2 ** (len(num_blocks) + 1)))
 
         # This part can be done in many ways, this is just one of them
@@ -109,31 +100,17 @@ class ResNet_Decoder_Original(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        for num, block in enumerate(num_blocks):
-            if num == len(num_blocks) - 1:
-                self.layers.append(
-                    self._make_layer(
-                        ResBlockDecBasic,
-                        self.in_channels,
-                        block,
-                        kernel_size,
-                        dimension,
-                        stride=1,
-                    )
-                )
-            else:
-                self.layers.append(
-                    self._make_layer(
-                        ResBlockDecBasic,
-                        int(self.in_channels / 2),
-                        block,
-                        kernel_size,
-                        dimension,
-                        stride=2,
-                    )
-                )
+        self.layer1 = self._make_layer(self.block_type, 512, num_blocks[0], stride=2)
+        self.layer2 = self._make_layer(self.block_type, 256, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(self.block_type, 128, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(
+            self.block_type, 64, num_blocks[3], stride=1, last_layer=True
+        )
 
-        # This part could be done through interpolation (analogous to MaxPool)
+        # for layer in [self.layer1, self.layer2, self.layer3, self.layer4]:
+        #     self.layers.append(layer)
+
+        # # This part could be done through interpolation (analogous to MaxPool)
         self.reshaping_conv = nn.Sequential(
             nn.ConvTranspose2d(
                 in_channels=64,
@@ -145,7 +122,7 @@ class ResNet_Decoder_Original(nn.Module):
             ),
             nn.BatchNorm2d(64),
             # nn.LayerNorm([64, int(dimension / 2), int(dimension / 2)]),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
         # Final output layer that looks similar to the first layer of
@@ -159,34 +136,28 @@ class ResNet_Decoder_Original(nn.Module):
                 padding=3,
                 output_padding=1,
             ),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
         )
 
-    def _make_layer(
-        self, residual_block, out_channels, num_blocks, kernel_size, dimension, stride
-    ):
+    def _make_layer(self, block, out_channels, blocks, stride=1, last_layer=False):
         layers = []
-        for block in range(num_blocks - 1):
-            layers += [
-                residual_block(
-                    self.in_channels, self.in_channels, kernel_size, dimension, stride=1
-                )
-            ]
-
-        layers += [
-            residual_block(
-                self.in_channels, out_channels, kernel_size, dimension, stride
-            )
-        ]
-
-        self.in_channels = out_channels
+        self.in_channels = out_channels * block.contraction
+        for _ in range(1, blocks):
+            layers.append(block(self.in_channels, out_channels, stride=1))
+        if stride > 1 and block == ResBlockDecBasic:
+            out_channels = int(out_channels / 2)
+        layers.append(
+            block(self.in_channels, out_channels, stride, last_layer=last_layer)
+        )
         return nn.Sequential(*layers)
 
     def forward(self, data):
         # data = self.resize_conv(data)
         data = F.interpolate(data, size=(self.interpolate, self.interpolate))
-        for layer in self.layers:
-            data = layer(data)
+        data = self.layer1(data)
+        data = self.layer2(data)
+        data = self.layer3(data)
+        data = self.layer4(data)
         data = self.reshaping_conv(data)
         data = self.output_layer(data)
         return data
@@ -197,7 +168,8 @@ class ResNet_Decoder_Original(nn.Module):
 
 def Resnet18_Encoder(in_channels, kernel_size, dimension):
     return ResNet_Encoder_Original(
-        in_channels,
+        block_type=ResBlockEncBasic,
+        in_channels=in_channels,
         num_blocks=[2, 2, 2, 2],
         kernel_size=kernel_size,
         dimension=dimension,
@@ -206,7 +178,8 @@ def Resnet18_Encoder(in_channels, kernel_size, dimension):
 
 def Resnet18_Decoder(out_channels, kernel_size, dimension):
     return ResNet_Decoder_Original(
-        out_channels,
+        block_type=ResBlockDecBasic,
+        out_channels=out_channels,
         num_blocks=[2, 2, 2, 2],
         kernel_size=kernel_size,
         dimension=dimension,
@@ -215,7 +188,8 @@ def Resnet18_Decoder(out_channels, kernel_size, dimension):
 
 def Resnet34_Encoder(in_channels, kernel_size, dimension):
     return ResNet_Encoder_Original(
-        in_channels,
+        block_type=ResBlockEncBasic,
+        in_channels=in_channels,
         num_blocks=[3, 4, 6, 3],
         kernel_size=kernel_size,
         dimension=dimension,
@@ -224,8 +198,69 @@ def Resnet34_Encoder(in_channels, kernel_size, dimension):
 
 def Resnet34_Decoder(out_channels, kernel_size, dimension):
     return ResNet_Decoder_Original(
-        out_channels,
+        block_type=ResBlockDecBasic,
+        out_channels=out_channels,
+        num_blocks=[3, 6, 4, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet50_Encoder(in_channels, kernel_size, dimension):
+    return ResNet_Encoder_Original(
+        block_type=ResBlockEncBottleneck,
+        in_channels=in_channels,
         num_blocks=[3, 4, 6, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet50_Decoder(out_channels, kernel_size, dimension):
+    return ResNet_Decoder_Original(
+        block_type=ResBlockDecBottleneck,
+        out_channels=out_channels,
+        num_blocks=[3, 6, 4, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet101_Encoder(in_channels, kernel_size, dimension):
+    return ResNet_Encoder_Original(
+        block_type=ResBlockEncBottleneck,
+        in_channels=in_channels,
+        num_blocks=[3, 4, 23, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet101_Decoder(out_channels, kernel_size, dimension):
+    return ResNet_Decoder_Original(
+        block_type=ResBlockDecBottleneck,
+        out_channels=out_channels,
+        num_blocks=[3, 23, 4, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet152_Encoder(in_channels, kernel_size, dimension):
+    return ResNet_Encoder_Original(
+        block_type=ResBlockEncBottleneck,
+        in_channels=in_channels,
+        num_blocks=[3, 8, 36, 3],
+        kernel_size=kernel_size,
+        dimension=dimension,
+    )
+
+
+def Resnet152_Decoder(out_channels, kernel_size, dimension):
+    return ResNet_Decoder_Original(
+        block_type=ResBlockDecBottleneck,
+        out_channels=out_channels,
+        num_blocks=[3, 36, 8, 3],
         kernel_size=kernel_size,
         dimension=dimension,
     )
