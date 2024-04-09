@@ -68,6 +68,36 @@ class VAE(pl.LightningModule):
                     "modified": vae_components.Resnet34_Decoder,
                 },
             },
+            "Resnet50": {
+                "encoder": {
+                    "original": resnets_original.Resnet50_Encoder,
+                    # "modified": vae_components.Resnet50_Encoder,
+                },
+                "decoder": {
+                    "original": resnets_original.Resnet50_Decoder,
+                    # "modified": vae_components.Resnet50_Decoder,
+                },
+            },
+            "Resnet101": {
+                "encoder": {
+                    "original": resnets_original.Resnet101_Encoder,
+                    # "modified": vae_components.Resnet101_Encoder,
+                },
+                "decoder": {
+                    "original": resnets_original.Resnet101_Decoder,
+                    # "modified": vae_components.Resnet101_Decoder,
+                },
+            },
+            "Resnet152": {
+                "encoder": {
+                    "original": resnets_original.Resnet152_Encoder,
+                    # "modified": vae_components.Resnet152_Encoder,
+                },
+                "decoder": {
+                    "original": resnets_original.Resnet152_Decoder,
+                    # "modified": vae_components.Resnet152_Decoder,
+                },
+            },
         }
 
         # Loss params
