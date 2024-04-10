@@ -219,14 +219,14 @@ class ResBlockDecBasic(nn.Module):
 
 
 class ResBlockEncBottleneck(nn.Module):
-    expansion = 8
+    expansion = 4
 
     def __init__(
         self,
         in_channels,
         out_channels,
         stride,
-        expansion=8,
+        expansion=4,
     ) -> None:
         super().__init__()
         self.expansion = expansion
@@ -288,10 +288,10 @@ class ResBlockEncBottleneck(nn.Module):
 
 
 class ResBlockDecBottleneck(nn.Module):
-    contraction = 8
+    contraction = 4
 
     def __init__(
-        self, in_channels, out_channels, stride, contraction=8, last_layer=False
+        self, in_channels, out_channels, stride, contraction=4, last_layer=False
     ) -> None:
         super().__init__()
 
