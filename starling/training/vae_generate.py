@@ -59,14 +59,24 @@ def vae_generate():
     all_distance_maps = []
 
     latent_dimension = model.hparams.get("latent_dim")
+
+    means = torch.Tensor(np.load("mean_latents.npy")).view(1, latent_dimension)
+    stds = torch.Tensor(np.load("std_latents.npy")).view(1, latent_dimension)
+
     with torch.no_grad():
         for i in range(num_batches):
             encodings = torch.randn(args.batch_size, latent_dimension).to(device)
+            # encodings = torch.normal(
+            #     means.repeat(args.batch_size, 1), stds.repeat(args.batch_size, 1)
+            # ).to(device)
             distance_maps = model.decode(encodings)
             all_distance_maps.append(distance_maps.cpu().detach().numpy())
 
         if remaining_samples > 0:
             encodings = torch.randn(remaining_samples, latent_dimension).to(device)
+            # encodings = torch.normal(
+            #     means.repeat(remaining_samples, 1), stds.repeat(remaining_samples, 1)
+            # ).to(device)
             distance_maps = model.decode(encodings)
             all_distance_maps.append(distance_maps.cpu().detach().numpy())
 
