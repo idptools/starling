@@ -4,3 +4,6 @@ starling/models/__pycache__/
 *cpython*
 lightning_logs/
 wandb/
+
+
+for_presentation/
