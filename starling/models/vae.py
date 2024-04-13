@@ -168,15 +168,23 @@ class VAE(pl.LightningModule):
         return mu + eps * std
 
     def get_weights(self, ground_truth, scale):
+        #! not sure linear is correct rn
         if scale == "linear":
             max_distance = ground_truth.max()
             min_distance = ground_truth.min()
             weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
             weights = weights / weights.sum()
             return weights
+        # Reciprocal of the distance between the two residues is taken as the weight
         elif scale == "reciprocal":
             weights = torch.reciprocal(ground_truth)
             weights[weights == float("inf")] = 0
+            weights = weights / weights.sum()
+            return weights
+        # We assign equal weight to each distance here
+        elif scale == "equal":
+            weights = torch.ones_like(ground_truth)
+            weights = weights.fill_diagonal_(0)
             weights = weights / weights.sum()
             return weights
         else:
@@ -367,14 +375,40 @@ class VAE(pl.LightningModule):
         # )
 
         # Here we are not doing weight decay on batch normalization parameters
+        # optimizer = torch.optim.SGD(
+        #     [
+        #         {
+        #             "params": [
+        #                 param
+        #                 for name, param in self.named_parameters()
+        #                 if not any(nd in name for nd in ["bn"])
+        #             ]
+        #         },
+        #         {
+        #             "params": [
+        #                 param
+        #                 for name, param in self.named_parameters()
+        #                 if any(nd in name for nd in ["bn"])
+        #             ],
+        #             "weight_decay": 0.0,
+        #         },
+        #     ],
+        #     lr=self.set_lr,  # 0.256 for batch of 256
+        #     momentum=0.875,
+        #     nesterov=True,
+        #     weight_decay=1 / 32768,
+        # )
+
         optimizer = torch.optim.SGD(
             [
                 {
                     "params": [
                         param
                         for name, param in self.named_parameters()
-                        if not any(nd in name for nd in ["bn"])
-                    ]
+                        if not any(nd in name for nd in ["bn"]) and name != "log_std"
+                    ],
+                    "weight_decay": 1
+                    / 32768,  # Include weight decay for other parameters
                 },
                 {
                     "params": [
@@ -382,18 +416,17 @@ class VAE(pl.LightningModule):
                         for name, param in self.named_parameters()
                         if any(nd in name for nd in ["bn"])
                     ],
-                    "weight_decay": 0.0,
+                    "weight_decay": 0.0,  # Exclude weight decay for parameters with 'bn' in name
+                },
+                {
+                    "params": [self.log_std],  # Separate parameter group for log_std
+                    "weight_decay": 0.0,  # Exclude weight decay for log_std
                 },
             ],
-            lr=self.set_lr,  # 0.256 for batch of 256
+            lr=self.set_lr,
             momentum=0.875,
             nesterov=True,
-            weight_decay=1 / 32768,
         )
-
-        # optimizer = torch.optim.SGD(
-        #     self.parameters(), lr=0.05, momentum=0.99, nesterov=True
-        # )
 
         if self.config_scheduler == "CosineAnnealingWarmRestarts":
             lr_scheduler = {
