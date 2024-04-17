@@ -37,7 +37,7 @@ class ResNet_Encoder(nn.Module):
         self.layer2 = self._make_layer(self.block_type, 128, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(self.block_type, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(self.block_type, 512, num_blocks[3], stride=2)
-        self.layer5 = self._make_layer(self.block_type, 512, num_blocks[3], stride=2)
+        self.layer5 = self._make_layer(self.block_type, 1024, num_blocks[3], stride=2)
 
         self.average_pool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -80,7 +80,7 @@ class ResNet_Decoder(nn.Module):
         else:
             self.in_channels = 4096
 
-        self.interpolate = int(dimension / (2 ** (len(num_blocks) + 1)))
+        self.interpolate = int(dimension / (2 ** (len(num_blocks) + 2)))
 
         # This part can be done in many ways, this is just one of them
         # It adds some number of parameters
@@ -94,7 +94,7 @@ class ResNet_Decoder(nn.Module):
 
         self.layers = nn.ModuleList()
 
-        self.layer0 = self._make_layer(self.block_type, 512, num_blocks[0], stride=1)
+        self.layer0 = self._make_layer(self.block_type, 1024, num_blocks[0], stride=2)
         self.layer1 = self._make_layer(self.block_type, 512, num_blocks[0], stride=2)
         self.layer2 = self._make_layer(self.block_type, 256, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(self.block_type, 128, num_blocks[2], stride=2)
