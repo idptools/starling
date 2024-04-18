@@ -198,7 +198,8 @@ class VAE(pl.LightningModule):
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
         Reparametarization trick that allows for the flow of gradients through the
-        non-random process
+        non-random process. Check out the paper for more details:
+        https://arxiv.org/abs/1312.6114
 
         Parameters
         ----------
