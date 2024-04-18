@@ -19,6 +19,7 @@ class ResNet_Encoder_Original(nn.Module):
         kernel_size=None,
         dimension=None,
         block_type=ResBlockEncBasic,
+        base=64,
     ) -> None:
         super().__init__()
 
@@ -75,6 +76,7 @@ class ResNet_Decoder_Original(nn.Module):
         kernel_size,
         dimension,
         block_type=ResBlockDecBasic,
+        base=64,
     ) -> None:
         super().__init__()
 
@@ -166,101 +168,111 @@ class ResNet_Decoder_Original(nn.Module):
 # Current implementations of ResNets
 
 
-def Resnet18_Encoder(in_channels, kernel_size, dimension):
+def Resnet18_Encoder(in_channels, kernel_size, dimension, base):
     return ResNet_Encoder_Original(
         block_type=ResBlockEncBasic,
         in_channels=in_channels,
         num_blocks=[2, 2, 2, 2],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet18_Decoder(out_channels, kernel_size, dimension):
+def Resnet18_Decoder(out_channels, kernel_size, dimension, base):
     return ResNet_Decoder_Original(
         block_type=ResBlockDecBasic,
         out_channels=out_channels,
         num_blocks=[2, 2, 2, 2],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet34_Encoder(in_channels, kernel_size, dimension):
+def Resnet34_Encoder(in_channels, kernel_size, dimension, base):
     return ResNet_Encoder_Original(
         block_type=ResBlockEncBasic,
         in_channels=in_channels,
         num_blocks=[3, 4, 6, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet34_Decoder(out_channels, kernel_size, dimension):
+def Resnet34_Decoder(out_channels, kernel_size, dimension, base):
     return ResNet_Decoder_Original(
         block_type=ResBlockDecBasic,
         out_channels=out_channels,
         num_blocks=[3, 6, 4, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet50_Encoder(in_channels, kernel_size, dimension):
+def Resnet50_Encoder(in_channels, kernel_size, dimension, base):
     return ResNet_Encoder_Original(
         block_type=ResBlockEncBottleneck,
         in_channels=in_channels,
         num_blocks=[3, 4, 6, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet50_Decoder(out_channels, kernel_size, dimension):
+def Resnet50_Decoder(out_channels, kernel_size, dimension, base):
     return ResNet_Decoder_Original(
         block_type=ResBlockDecBottleneck,
         out_channels=out_channels,
         num_blocks=[3, 6, 4, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet101_Encoder(in_channels, kernel_size, dimension):
+def Resnet101_Encoder(in_channels, kernel_size, dimension, base):
     return ResNet_Encoder_Original(
         block_type=ResBlockEncBottleneck,
         in_channels=in_channels,
         num_blocks=[3, 4, 23, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet101_Decoder(out_channels, kernel_size, dimension):
+def Resnet101_Decoder(out_channels, kernel_size, dimension, base):
     return ResNet_Decoder_Original(
         block_type=ResBlockDecBottleneck,
         out_channels=out_channels,
         num_blocks=[3, 23, 4, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet152_Encoder(in_channels, kernel_size, dimension):
+def Resnet152_Encoder(in_channels, kernel_size, dimension, base):
     return ResNet_Encoder_Original(
         block_type=ResBlockEncBottleneck,
         in_channels=in_channels,
         num_blocks=[3, 8, 36, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
 
 
-def Resnet152_Decoder(out_channels, kernel_size, dimension):
+def Resnet152_Decoder(out_channels, kernel_size, dimension, base):
     return ResNet_Decoder_Original(
         block_type=ResBlockDecBottleneck,
         out_channels=out_channels,
         num_blocks=[3, 36, 8, 3],
         kernel_size=kernel_size,
         dimension=dimension,
+        base=base,
     )
