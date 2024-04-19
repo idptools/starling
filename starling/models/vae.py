@@ -269,7 +269,8 @@ class VAE(pl.LightningModule):
     def symmetrize(self, data_reconstructed: torch.Tensor) -> torch.Tensor:
         """
         Symmetrizes the reconstructed data so that the weights can learn other patterns.
-        Loss calculated only on the upper triangle of the distance map
+        Loss calculated only on the reconstruction faithfulness of the upper triangle
+        of the distance map
 
         Parameters
         ----------
@@ -450,7 +451,22 @@ class VAE(pl.LightningModule):
         data_reconstructed = self.decode(latent_encoding)
         return data_reconstructed, mu, logvar
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
+        """
+        Training step of the VAE compatible with Pytorch Lightning
+
+        Parameters
+        ----------
+        batch : dict
+            A batch of data read in using the DataLoader
+        batch_idx : _type_
+            Batch number the model is on during training
+
+        Returns
+        -------
+        torch.Tensor
+            Total training loss of this batch
+        """
         data = batch["data"]
 
         data_reconstructed, mu, logvar = self.forward(data=data)
@@ -472,7 +488,12 @@ class VAE(pl.LightningModule):
 
         return loss["loss"]
 
-    def on_train_epoch_end(self):
+    def on_train_epoch_end(self) -> None:
+        """
+        At the end of the epoch, calculate the mean of the training losses.
+        Clear the lists that have been filled with losses during the epoch
+        for memory management.
+        """
         epoch_mean = torch.stack(self.total_train_step_losses).mean()
         self.log("epoch_train_loss", epoch_mean, prog_bar=True, sync_dist=True)
 
@@ -487,7 +508,23 @@ class VAE(pl.LightningModule):
         self.recon_step_losses.clear()
         self.KLD_step_losses.clear()
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
+        """
+        Validation step of the VAE compatible with Pytorch Lightning. This is
+        called after each epoch.
+
+        Parameters
+        ----------
+        batch : torch.Tensor
+            A batch of data read in using the DataLoader
+        batch_idx : _type_
+            Batch number the model is on during the validation of the model
+
+        Returns
+        -------
+        torch.Tensor
+            Total validation loss of this batch
+        """
         data = batch["data"]
 
         data_reconstructed, mu, logvar = self.forward(data)
@@ -504,8 +541,25 @@ class VAE(pl.LightningModule):
         return loss["loss"]
 
     def configure_optimizers(self):
-        # NVIDIA configs for ResNet50, they used it with CosineAnnealingLR
-        # https://catalog.ngc.nvidia.com/orgs/nvidia/resources/resnet_50_v1_5_for_pytorch
+        """
+        Configure the optimizer and the learning rate scheduler for the model.
+        Here I am using NVIDIA suggested settings for learning rate and weight
+        decay. For ResNet50 they have seen best performance with CosineAnnealingLR,
+        initial learning rate of 0.256 for batch size of 256 and linearly scaling
+        it down/up for other batch sizes. The weight decay is set to 1/32768 for all
+        parameters except the batch normalization layers. For further information check:
+        https://catalog.ngc.nvidia.com/orgs/nvidia/resources/resnet_50_v1_5_for_pytorch
+
+        Returns
+        -------
+        List
+            Returns the optimizer and the learning rate scheduler
+
+        Raises
+        ------
+        ValueError
+            If the scheduler is not implemented
+        """
 
         optimizer_params = [
             {
