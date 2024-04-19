@@ -1,6 +1,5 @@
 from typing import List, Tuple
 
-import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -150,7 +149,7 @@ class VAE(pl.LightningModule):
         )
 
         # Params to learn for reconstruction loss
-        if self.loss_type == "elbo":
+        if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros((dimension * (dimension + 1) // 2)))
 
     def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
@@ -330,6 +329,46 @@ class VAE(pl.LightningModule):
 
         return log_pxz
 
+    def BCE_contact_map_loss(
+        self,
+        ground_truth_dist_map: torch.Tensor,
+        reconstructed_dist_map: torch.Tensor,
+        weights: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        Calculates the binary cross entropy loss between the ground truth distance map
+        and the reconstructed distance map. This is used to calculate the loss of the
+        contact map. The contact map is defined as the distance between two residues
+        being between 1 and 25 angstroms.
+
+        Parameters
+        ----------
+        ground_truth_dist_map : torch.Tensor
+            Ground truth distance map that will be converted to a contact map
+        reconstructed_dist_map : torch.Tensor
+            Reconstructed distance map that will be converted to a contact map
+        weights : torch.Tensor
+            Weights to be applied to the loss, mostly here to exclude the diagonal
+
+        Returns
+        -------
+        torch.Tensor
+            Returns the binary cross entropy loss between the two contact maps
+        """
+
+        # Get the mask for ground truth and reconstructed contacts
+        true_contacts_mask = (1 < ground_truth_dist_map) & (ground_truth_dist_map < 25)
+        reconstructed_contacts_mask = (1 < reconstructed_dist_map) & (
+            reconstructed_dist_map < 25
+        )
+
+        # Calculate the binary cross entropy loss
+        BCE_loss = torch.dist(
+            reconstructed_contacts_mask.float(), true_contacts_mask.float()
+        )
+
+        return BCE_loss
+
     def vae_loss(
         self,
         data_reconstructed: torch.Tensor,
@@ -343,7 +382,8 @@ class VAE(pl.LightningModule):
         of the latent space to N(0, I) and either mean squared error
         between the reconstructed data and the ground truth or
         the negative log likelihood of the input data given the latent space
-        under a Gaussian assumption.
+        under a Gaussian assumption. Additional loss is added to ensure the
+        contacts are reconstructed correctly.
 
         Parameters
         ----------
@@ -376,10 +416,11 @@ class VAE(pl.LightningModule):
         # Find where the padding starts by counting the number of
         start_of_padding = torch.sum(data != 0, dim=(1, 2))[:, 0] + 1
 
+        # Initialize the losses
         recon = 0
+        # contact_map_loss = 0
 
-        # Since we are removing the padding, we need to calculate the loss
-        # per distance map, since they are padded differently (different input sizes)
+        # Input is padded, so the padding needs to be removed before calculating loss
         for num, padding_start in enumerate(start_of_padding):
             data_reconstructed_no_padding = data_reconstructed[num][0][
                 :padding_start, :padding_start
@@ -405,7 +446,8 @@ class VAE(pl.LightningModule):
 
                 recon += (mse_loss * weights).sum()
 
-            elif self.loss_type == "elbo":
+            # Negative log likelihood of the input data given the latent space
+            elif self.loss_type == "nll":
                 # Get the reconstruction loss
                 gaussian_likelihood = self.gaussian_likelihood(
                     data_hat=data_reconstructed_no_padding,
@@ -414,13 +456,22 @@ class VAE(pl.LightningModule):
                 )
                 recon += -(gaussian_likelihood * weights).sum()
             else:
-                raise ValueError(f"loss type of name '{self.loss_type}' does not exist")
+                raise ValueError(
+                    f"loss type of name '{self.loss_type}' does not exist. Current implementations include 'mse' and 'nll'"
+                )
 
-        # Taking the mean of the loss (could also be sum)
+            # # Additional loss to ensure the contacts are reconstructured correctly
+            # contact_map_loss += self.BCE_contact_map_loss(
+            #     ground_truth_dist_map=data_no_padding,
+            #     reconstructed_dist_map=data_reconstructed_no_padding,
+            #     weights=weights,
+            # )
+
+        # Taking the mean of the loss
         recon /= num + 1
+        # contact_map_loss /= num + 1
 
-        # See Appendix B from VAE paper:
-        # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
+        # For more information of KLD loss check out Appendix B:
         # https://arxiv.org/abs/1312.6114
         KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
@@ -482,9 +533,11 @@ class VAE(pl.LightningModule):
             self.total_train_step_losses.append(loss["loss"])
             self.recon_step_losses.append(loss["recon"])
             self.KLD_step_losses.append(loss["KLD"])
+            # self.contacts_step_losses.append(loss["contacts"])
 
         self.log("train_loss", loss["loss"], prog_bar=True)
         self.log("recon_loss", loss["recon"], prog_bar=True)
+        # self.log("contacts", loss["contacts"], prog_bar=True)
 
         return loss["loss"]
 
@@ -500,6 +553,9 @@ class VAE(pl.LightningModule):
         recon_mean = torch.stack(self.recon_step_losses).mean()
         self.log("epoch_recon_loss", recon_mean, prog_bar=True, sync_dist=True)
 
+        # contacts_mean = torch.stack(self.contacts_step_losses).mean()
+        # self.log("epoch_contacts_loss", contacts_mean, prog_bar=True, sync_dist=True)
+
         KLD_mean = torch.stack(self.KLD_step_losses).mean()
         self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
 
@@ -507,6 +563,7 @@ class VAE(pl.LightningModule):
         self.total_train_step_losses.clear()
         self.recon_step_losses.clear()
         self.KLD_step_losses.clear()
+        # self.contacts_step_losses.clear()
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
         """
@@ -581,7 +638,7 @@ class VAE(pl.LightningModule):
         ]
 
         # Conditionally add parameter group for log_std based on self.loss_type
-        if self.loss_type == "elbo":
+        if self.loss_type == "nll":
             optimizer_params.append(
                 {
                     "params": [self.log_std],  # Separate parameter group for log_std
