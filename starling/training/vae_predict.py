@@ -48,7 +48,7 @@ def vae_predict():
     dataset = MatrixDataModule(
         test_data=args.test_data,
         batch_size=args.batch_size,
-        target_shape=192,
+        target_shape=384,
     )
 
     device = torch.device(f"cuda:{args.gpu_id[0]}")
@@ -61,7 +61,7 @@ def vae_predict():
     # embed()
 
     for batch in predict_dataloader:
-        x = batch["input"].to(f"cuda:{args.gpu_id[0]}")
+        x = batch["data"].to(f"cuda:{args.gpu_id[0]}")
         x_reconstructed = model(x)[0]
         np.save("ground_truth_small_384_model.npy", x.cpu().detach().numpy())
         np.save(
