@@ -17,6 +17,7 @@ def get_params(config_file=None):
             "KLD_weight": 1,
             "lr_scheduler": "OneCycleLR",
             "dimension": 384,
+            "base": 64,
         },
         "training": {
             "project_name": "testing_elbo",
