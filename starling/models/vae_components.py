@@ -127,9 +127,10 @@ class ResNet_Decoder(nn.Module):
         self.resize_conv = ResizeConv2d(
             in_channels=self.in_channels,
             out_channels=self.in_channels,
-            kernel_size=1,
-            padding=0,
+            kernel_size=3,
+            padding=1,
             norm=normalization[norm],
+            activation="relu",
             size=(self.interpolate, self.interpolate),
         )
 
@@ -154,33 +155,25 @@ class ResNet_Decoder(nn.Module):
 
         in_channels_post_resnets = layer_in_channels[-4]
 
-        # # This part could be done through interpolation (analogous to MaxPool)
-        self.reshaping_conv = nn.Sequential(
-            nn.ConvTranspose2d(
-                in_channels=in_channels_post_resnets,
-                out_channels=in_channels_post_resnets,
-                kernel_size=kernel_size,
-                stride=2,
-                padding=1,
-                output_padding=1,
-            ),
-            nn.BatchNorm2d(in_channels_post_resnets),
-            # nn.LayerNorm([64, int(dimension / 2), int(dimension / 2)]),
-            nn.ReLU(inplace=True),
+        # This part could be done through interpolation (analogous to MaxPool)
+        self.reshaping_conv = ResizeConv2d(
+            in_channels=in_channels_post_resnets,
+            out_channels=in_channels_post_resnets,
+            kernel_size=3,
+            padding=1,
+            norm=normalization[norm],
+            activation="relu",
+            scale_factor=2,
         )
 
-        # Final output layer that looks similar to the first layer of
-        # the ResNet Encoder
-        self.output_layer = nn.Sequential(
-            nn.ConvTranspose2d(
-                in_channels=in_channels_post_resnets,
-                out_channels=out_channels,
-                kernel_size=7,
-                stride=2,
-                padding=3,
-                output_padding=1,
-            ),
-            nn.ReLU(inplace=True),
+        self.output_layer = ResizeConv2d(
+            in_channels=in_channels_post_resnets,
+            out_channels=out_channels,
+            kernel_size=7,
+            padding=3,
+            norm=None,
+            activation="relu",
+            scale_factor=2,
         )
 
     def _make_layer(self, block, out_channels, blocks, stride=1, last_layer=False):
