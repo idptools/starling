@@ -217,41 +217,43 @@ class ResNet_Decoder(nn.Module):
 # Current implementations of ResNets
 
 
-def Resnet18_Encoder(in_channels, kernel_size, dimension, base):
+def Resnet18_Encoder(in_channels, kernel_size, norm, base):
     return ResNet_Encoder(
         in_channels,
         num_blocks=[2, 2, 2, 2],
         kernel_size=kernel_size,
-        dimension=dimension,
         base=base,
+        norm=norm,
     )
 
 
-def Resnet18_Decoder(out_channels, kernel_size, dimension, base):
+def Resnet18_Decoder(out_channels, kernel_size, dimension, base, norm):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[2, 2, 2, 2],
         kernel_size=kernel_size,
         dimension=dimension,
         base=base,
+        norm=norm,
     )
 
 
-def Resnet34_Encoder(in_channels, kernel_size, dimension, base):
+def Resnet34_Encoder(in_channels, kernel_size, base, norm):
     return ResNet_Encoder(
         in_channels,
         num_blocks=[3, 4, 6, 3],
         kernel_size=kernel_size,
-        dimension=dimension,
         base=base,
+        norm=norm,
     )
 
 
-def Resnet34_Decoder(out_channels, kernel_size, dimension, base):
+def Resnet34_Decoder(out_channels, kernel_size, dimension, base, norm):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[3, 4, 6, 3],
         kernel_size=kernel_size,
         dimension=dimension,
         base=base,
+        norm=norm,
     )
