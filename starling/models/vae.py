@@ -133,12 +133,12 @@ class VAE(pl.LightningModule):
         expansion = self.encoder.block_type.expansion
         exponent = num_stages - 1 if expansion == 1 else num_stages + 1
         linear_layer_params = int(base * 2**exponent)
-        self.shape_from_final_encoding_layer = linear_layer_params, 1, 1
+        self.shape_from_final_encoding_layer = linear_layer_params, 6, 6
 
         # Latent space
-        self.fc_mu = nn.Linear(linear_layer_params * 1 * 1, latent_dim)
-        self.fc_var = nn.Linear(linear_layer_params * 1 * 1, latent_dim)
-        self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 1 * 1)
+        self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
+        self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
+        self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
 
         # Decoder
         self.decoder = resnets[model]["decoder"][decoder_block](
