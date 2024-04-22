@@ -217,28 +217,49 @@ class ResBlockDecBasic(nn.Module):
         # (b, c, h, w) -> (b, c, h, w) stride = 1, conv2d
         # (b, c, h, w) -> (b, c/2, h*2, w*2 ) stride = 2, convtranspose2d
         if stride > 1:
-            self.conv2 = nn.Sequential(
-                nn.ConvTranspose2d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    stride=stride,
-                    kernel_size=kernel_size,
-                    padding=padding,
-                    output_padding=1,
-                ),
-                normalization[norm](out_channels),
+            # self.conv2 = nn.Sequential(
+            #     nn.ConvTranspose2d(
+            #         in_channels=in_channels,
+            #         out_channels=out_channels,
+            #         stride=stride,
+            #         kernel_size=kernel_size,
+            #         padding=padding,
+            #         output_padding=1,
+            #     ),
+            #     normalization[norm](out_channels),
+            # )
+            # # Setup a shortcut connection
+            # self.shortcut = nn.Sequential(
+            #     nn.ConvTranspose2d(
+            #         in_channels=in_channels,
+            #         out_channels=out_channels,
+            #         kernel_size=1,
+            #         stride=2,
+            #         padding=0,
+            #         output_padding=1,
+            #     ),
+            #     normalization[norm](out_channels),
+            # )
+            self.conv2 = ResizeConv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                norm=normalization[norm],
+                activation=None,
+                padding=padding,
+                scale_factor=stride,
+                mode="nearest",
             )
-            # Setup a shortcut connection
-            self.shortcut = nn.Sequential(
-                nn.ConvTranspose2d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=1,
-                    stride=2,
-                    padding=0,
-                    output_padding=1,
-                ),
-                normalization[norm](out_channels),
+
+            self.shortcut = ResizeConv2d(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=1,
+                norm=normalization[norm],
+                activation=None,
+                padding=0,
+                scale_factor=stride,
+                mode="nearest",
             )
         else:
             self.conv2 = nn.Sequential(
