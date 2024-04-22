@@ -96,17 +96,29 @@ class ResBlockEncBasic(nn.Module):
     expansion = 1
 
     def __init__(
-        self, in_channels, out_channels, stride, kernel_size=None, dimension=None
+        self,
+        in_channels,
+        out_channels,
+        stride,
+        norm,
+        kernel_size=None,
     ) -> None:
         super().__init__()
 
         kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
 
+        normalization = {
+            "batch": nn.BatchNorm2d,
+            "instance": nn.InstanceNorm2d,
+            "layer": LayerNorm,
+        }
+
         # First convolution of the ResNet with or without downsampling
         # depending on the downsample flag (stride=1 or 2)
         # (b, c, h, w) -> (b, c, h, w) stride = 1
         # (b, c, h, w) -> (b, c*2, h /2, w /2 ) stride = 2
+
         self.conv1 = nn.Sequential(
             nn.Conv2d(
                 in_channels=in_channels,
@@ -115,8 +127,7 @@ class ResBlockEncBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            nn.BatchNorm2d(out_channels),
-            # layer_norm(out_channels, dimension),
+            normalization[norm](out_channels),
             nn.ReLU(inplace=True),
         )
 
@@ -131,8 +142,7 @@ class ResBlockEncBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            nn.BatchNorm2d(out_channels),
-            # layer_norm(out_channels, dimension),
+            normalization[norm](out_channels),
         )
 
         # Set up the shortcut if downsampling is done
@@ -146,8 +156,7 @@ class ResBlockEncBasic(nn.Module):
                     stride=2,
                     padding=0,
                 ),
-                nn.BatchNorm2d(out_channels),
-                # layer_norm(out_channels, dimension),
+                normalization[norm](out_channels),
             )
         else:
             self.shortcut = nn.Sequential()
