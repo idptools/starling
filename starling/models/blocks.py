@@ -580,4 +580,3 @@ class UpsampleBlock(nn.Module):
 
     def forward(self, data):
         return self.conv_transpose(data)
-        return self.conv_transpose(data)
