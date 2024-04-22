@@ -2,7 +2,12 @@ import torch.nn.functional as F
 from IPython import embed
 from torch import nn
 
-from starling.models.blocks import ResBlockDecBasic, ResBlockEncBasic, ResizeConv2d
+from starling.models.blocks import (
+    LayerNorm,
+    ResBlockDecBasic,
+    ResBlockEncBasic,
+    ResizeConv2d,
+)
 
 
 class ResNet_Encoder(nn.Module):
@@ -10,14 +15,20 @@ class ResNet_Encoder(nn.Module):
         self,
         in_channels,
         num_blocks,
+        norm,
         kernel_size=None,
-        dimension=None,
         base=64,
         block_type=ResBlockEncBasic,
     ) -> None:
         super().__init__()
 
         self.block_type = block_type
+        self.norm = norm
+        normalization = {
+            "batch": nn.BatchNorm2d,
+            "instance": nn.InstanceNorm2d,
+            "layer": LayerNorm,
+        }
 
         # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
         # with kernel=7 and stride=2 AvgPool2d reduces spatial dimensions by / 2
@@ -29,7 +40,7 @@ class ResNet_Encoder(nn.Module):
                 stride=2,
                 padding=3,
             ),
-            nn.BatchNorm2d(base),
+            normalization[norm](base),
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
@@ -51,25 +62,33 @@ class ResNet_Encoder(nn.Module):
             self.block_type, layer_in_channels[3], num_blocks[3], stride=2
         )
 
-        self.max_features = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        # self.max_features = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.downsample_cnn = nn.Conv2d(
+            in_channels=layer_in_channels[3],
+            out_channels=layer_in_channels[3],
+            kernel_size=3,
+            stride=2,
+            padding=1,
+        )
+        self.activation = nn.ReLU(inplace=True)
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
         layers = []
-        layers.append(block(self.in_channels, out_channels, stride))
+        layers.append(block(self.in_channels, out_channels, stride, norm=self.norm))
         self.in_channels = out_channels * block.expansion
         for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels, stride=1))
+            layers.append(
+                block(self.in_channels, out_channels, stride=1, norm=self.norm)
+            )
         return nn.Sequential(*layers)
 
     def forward(self, data):
         data = self.first_conv(data)
-        # The final adaptive average can also be done through convolution
         data = self.layer1(data)
         data = self.layer2(data)
         data = self.layer3(data)
         data = self.layer4(data)
-        data = self.max_features(data)
-        # data = self.avg_features(data)
+        data = self.activation(self.downsample_cnn(data))
         return data
 
 
