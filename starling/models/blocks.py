@@ -182,6 +182,7 @@ class ResBlockDecBasic(nn.Module):
         in_channels,
         out_channels,
         stride,
+        norm,
         kernel_size=None,
         dimension=None,
         last_layer=None,
@@ -190,6 +191,12 @@ class ResBlockDecBasic(nn.Module):
 
         kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
+
+        normalization = {
+            "batch": nn.BatchNorm2d,
+            "instance": nn.InstanceNorm2d,
+            "layer": LayerNorm,
+        }
 
         # First convolution which doesn't change the shape of the tensor
         # (b, c, h, w) -> (b, c, h, w) stride = 1
@@ -201,8 +208,7 @@ class ResBlockDecBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            nn.BatchNorm2d(in_channels),
-            # layer_norm(in_channels, dimension),
+            normalization[norm](in_channels),
             nn.ReLU(inplace=True),
         )
 
@@ -220,8 +226,7 @@ class ResBlockDecBasic(nn.Module):
                     padding=padding,
                     output_padding=1,
                 ),
-                nn.BatchNorm2d(out_channels),
-                # layer_norm(out_channels, dimension),
+                normalization[norm](out_channels),
             )
             # Setup a shortcut connection
             self.shortcut = nn.Sequential(
@@ -233,8 +238,7 @@ class ResBlockDecBasic(nn.Module):
                     padding=0,
                     output_padding=1,
                 ),
-                nn.BatchNorm2d(out_channels),
-                # layer_norm(out_channels, dimension),
+                normalization[norm](out_channels),
             )
         else:
             self.conv2 = nn.Sequential(
@@ -245,8 +249,7 @@ class ResBlockDecBasic(nn.Module):
                     padding=padding,
                     kernel_size=kernel_size,
                 ),
-                nn.BatchNorm2d(out_channels),
-                # layer_norm(out_channels, dimension),
+                normalization[norm](out_channels),
             )
             self.shortcut = nn.Sequential()
 
