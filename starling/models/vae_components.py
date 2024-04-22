@@ -99,10 +99,18 @@ class ResNet_Decoder(nn.Module):
         num_blocks,
         kernel_size,
         dimension,
+        norm,
         block_type=ResBlockDecBasic,
         base=64,
     ) -> None:
         super().__init__()
+
+        self.norm = norm
+        normalization = {
+            "batch": nn.BatchNorm2d,
+            "instance": nn.InstanceNorm2d,
+            "layer": LayerNorm,
+        }
 
         # Calculate the input channels from the encoder, assuming
         # symmetric encoder and decoder setup
@@ -170,17 +178,24 @@ class ResNet_Decoder(nn.Module):
         layers = []
         self.in_channels = out_channels * block.contraction
         for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels, stride=1))
+            layers.append(
+                block(self.in_channels, out_channels, stride=1, norm=self.norm)
+            )
         if stride > 1 and block == ResBlockDecBasic:
             out_channels = int(out_channels / 2)
         layers.append(
-            block(self.in_channels, out_channels, stride, last_layer=last_layer)
+            block(
+                self.in_channels,
+                out_channels,
+                stride,
+                last_layer=last_layer,
+                norm=self.norm,
+            )
         )
         return nn.Sequential(*layers)
 
     def forward(self, data):
-        # data = self.resize_conv(data)
-        data = F.interpolate(data, size=(self.interpolate, self.interpolate))
+        data = self.resize_conv(data)
         data = self.layer1(data)
         data = self.layer2(data)
         data = self.layer3(data)
