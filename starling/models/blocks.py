@@ -65,6 +65,9 @@ class ResizeConv2d(nn.Module):
         in_channels,
         out_channels,
         kernel_size,
+        norm,
+        activation,
+        padding,
         size=None,
         scale_factor=None,
         mode="nearest",
@@ -74,10 +77,11 @@ class ResizeConv2d(nn.Module):
         self.scale_factor = scale_factor
         self.mode = mode
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=1),
-            nn.BatchNorm2d(out_channels),
-            # nn.LayerNorm([out_channels, self.size[0], self.size[1]]),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                in_channels, out_channels, kernel_size, stride=1, padding=padding
+            ),
+            nn.Identity() if norm is None else norm(out_channels),
+            nn.Identity() if activation is None else nn.ReLU(inplace=True),
         )
 
     def forward(self, x):
