@@ -40,6 +40,7 @@ class VAE(pl.LightningModule):
         KLD_weight,
         lr_scheduler,
         set_lr,
+        norm="instance",
         encoder_block="original",
         decoder_block="original",
         base=64,
@@ -122,10 +123,7 @@ class VAE(pl.LightningModule):
 
         # Encoder
         self.encoder = resnets[model]["encoder"][encoder_block](
-            in_channels=in_channels,
-            kernel_size=kernel_size,
-            dimension=dimension,
-            base=base,
+            in_channels=in_channels, kernel_size=kernel_size, base=base, norm=norm
         )
 
         # This is usually 4 in ResNets
@@ -146,6 +144,7 @@ class VAE(pl.LightningModule):
             kernel_size=kernel_size,
             dimension=dimension,
             base=base,
+            norm=norm,
         )
 
         # Params to learn for reconstruction loss
@@ -500,6 +499,12 @@ class VAE(pl.LightningModule):
         latent_encoding = self.reparameterize(mu, logvar)
 
         data_reconstructed = self.decode(latent_encoding)
+
+        if data.shape != data_reconstructed.shape:
+            raise ValueError(
+                f"Input data shape {data.shape} does not match reconstructed data shape {data_reconstructed.shape}"
+            )
+
         return data_reconstructed, mu, logvar
 
     def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
