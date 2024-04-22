@@ -124,6 +124,15 @@ class ResNet_Decoder(nn.Module):
 
         self.interpolate = int(dimension / (2 ** (len(num_blocks) + 1)))
 
+        self.resize_conv = ResizeConv2d(
+            in_channels=self.in_channels,
+            out_channels=self.in_channels,
+            kernel_size=1,
+            padding=0,
+            norm=normalization[norm],
+            size=(self.interpolate, self.interpolate),
+        )
+
         # Setting up the layers for the decoder
 
         self.layer1 = self._make_layer(
