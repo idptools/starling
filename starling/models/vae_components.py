@@ -51,7 +51,7 @@ class ResNet_Encoder(nn.Module):
             self.block_type, layer_in_channels[3], num_blocks[3], stride=2
         )
 
-        self.average_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.max_features = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
         layers = []
@@ -68,7 +68,8 @@ class ResNet_Encoder(nn.Module):
         data = self.layer2(data)
         data = self.layer3(data)
         data = self.layer4(data)
-        data = self.average_pool(data)
+        data = self.max_features(data)
+        # data = self.avg_features(data)
         return data
 
 
