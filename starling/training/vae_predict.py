@@ -6,6 +6,8 @@ import torch
 from IPython import embed
 
 from starling.data.argument_parser import get_params
+from starling.models.ae import AE
+from starling.models.cvae import cVAE
 from starling.models.vae import VAE
 from starling.training.myloader import MatrixDataModule
 
@@ -38,27 +40,40 @@ def vae_predict():
         "--gpu_id",
         type=int,
         nargs="+",
-        default=[0],
+        default=None,
         help="GPU device ID for training",
+    )
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default="VAE",
+        help="Type of a VAE used, currently [cVAE, VAE, AE] are supported",
     )
 
     args = parser.parse_args()
+
+    model_type = {"cVAE": cVAE, "VAE": VAE, "AE": AE}
+
+    device = torch.device(
+        f"cuda:{args.gpu_id[0]}" if args.gpu_id is not None else "cpu"
+    )
+    model = model_type[args.model_type].load_from_checkpoint(
+        args.model_path, map_location=device
+    )
+
+    input_dimension = model.hparams.get("latent_dim")
+
+    model.eval()
 
     # Set up data loaders
     dataset = MatrixDataModule(
         test_data=args.test_data,
         batch_size=args.batch_size,
-        target_shape=384,
+        target_shape=input_dimension,
     )
-
-    device = torch.device(f"cuda:{args.gpu_id[0]}")
-    model = VAE.load_from_checkpoint(args.model_path, map_location=device)
-    model.eval()
 
     dataset.setup(stage="test")
     predict_dataloader = dataset.test_dataloader()
-
-    # embed()
 
     for batch in predict_dataloader:
         x = batch["data"].to(f"cuda:{args.gpu_id[0]}")
@@ -69,19 +84,6 @@ def vae_predict():
             x_reconstructed.cpu().detach().numpy(),
         )
         break
-
-    # trainer = pl.Trainer(
-    #     devices=args.gpu_id,
-    # )
-    # embed()
-    # predictions = trainer.predict(model, dataloaders=dataset)
-
-    # for batch in dataset:
-    #     x = batch["input"].to(f"cuda:{args.gpu_id}")
-    #     x_reconstructed = model(x)[0]
-    #     np.save("ground_truth.npy", x.cpu().detach().numpy())
-    #     np.save("reconstructed_array.npy", x_reconstructed.cpu().detach().numpy())
-    #     break
 
 
 if __name__ == "__main__":

@@ -3,14 +3,11 @@ import argparse
 import pytorch_lightning as pl
 import wandb
 from IPython import embed
-from pytorch_lightning.callbacks import (
-    EarlyStopping,
-    LearningRateMonitor,
-    ModelCheckpoint,
-)
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from starling.data.argument_parser import get_params
+from starling.models.cvae import cVAE
 from starling.models.vae import VAE
 from starling.training.myloader import MatrixDataModule
 
@@ -25,7 +22,16 @@ def train_vae():
         help="Path to the configuration file to use",
     )
 
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default=None,
+        help="Type of a VAE used, currently [cVAE, VAE] are supported",
+    )
+
     args = parser.parse_args()
+
+    model_type = {"cVAE": cVAE, "VAE": VAE}
 
     config = get_params(config_file=args.config_file)
 
@@ -46,7 +52,7 @@ def train_vae():
 
     dataset.setup(stage="fit")
 
-    vae = VAE(**config["model"])
+    vae = model_type[args.model_type](**config["model"])
 
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
         f.write(str(vae))

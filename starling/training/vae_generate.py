@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from IPython import embed
 
+from starling.models.cvae import cVAE
 from starling.models.vae import VAE
 
 
@@ -38,6 +39,14 @@ def vae_generate():
         nargs="+",
         help="GPU device ID for training",
     )
+
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default="VAE",
+        help="Type of a VAE used, currently [cVAE, VAE] are supported",
+    )
+
     parser.add_argument(
         "--outfile_name",
         type=str,
@@ -47,22 +56,25 @@ def vae_generate():
 
     args = parser.parse_args()
 
+    model_type = {"cVAE": cVAE, "VAE": VAE}
+
     num_batches = args.num_samples // args.batch_size
     remaining_samples = args.num_samples % args.batch_size
 
     device = torch.device(f"cuda:{args.gpu_id[0]}" if args.gpu_id else "cpu")
-    model = VAE.load_from_checkpoint(args.model_path, map_location=device)
+    model = model_type[args.model_type].load_from_checkpoint(
+        args.model_path, map_location=device
+    )
     model.eval()
-
-    start = time.time()
 
     all_distance_maps = []
 
     latent_dimension = model.hparams.get("latent_dim")
 
-    means = torch.Tensor(np.load("mean_latents.npy")).view(1, latent_dimension)
-    stds = torch.Tensor(np.load("std_latents.npy")).view(1, latent_dimension)
+    # means = torch.Tensor(np.load("mean_latents.npy")).view(1, latent_dimension)
+    # stds = torch.Tensor(np.load("std_latents.npy")).view(1, latent_dimension)
 
+    start = time.time()
     with torch.no_grad():
         for i in range(num_batches):
             encodings = torch.randn(args.batch_size, latent_dimension).to(device)
