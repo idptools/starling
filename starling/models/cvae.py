@@ -40,6 +40,7 @@ class cVAE(pl.LightningModule):
         KLD_weight,
         lr_scheduler,
         set_lr,
+        norm="instance",
         encoder_block="original",
         decoder_block="original",
         base=64,
@@ -122,10 +123,7 @@ class cVAE(pl.LightningModule):
 
         # Encoder
         self.encoder = resnets[model]["encoder"][encoder_block](
-            in_channels=in_channels + 1,
-            kernel_size=kernel_size,
-            dimension=dimension,
-            base=base,
+            in_channels=in_channels + 1, kernel_size=kernel_size, base=base, norm=norm
         )
 
         # This is usually 4 in ResNets
@@ -133,12 +131,12 @@ class cVAE(pl.LightningModule):
         expansion = self.encoder.block_type.expansion
         exponent = num_stages - 1 if expansion == 1 else num_stages + 1
         linear_layer_params = int(base * 2**exponent)
-        self.shape_from_final_encoding_layer = linear_layer_params, 1, 1
+        self.shape_from_final_encoding_layer = linear_layer_params, 6, 6
 
         # Latent space
-        self.fc_mu = nn.Linear(linear_layer_params * 1 * 1, latent_dim)
-        self.fc_var = nn.Linear(linear_layer_params * 1 * 1, latent_dim)
-        self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 1 * 1)
+        self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
+        self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
+        self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
 
         # Decoder
         self.decoder = resnets[model]["decoder"][decoder_block](
@@ -146,6 +144,7 @@ class cVAE(pl.LightningModule):
             kernel_size=kernel_size,
             dimension=dimension,
             base=base,
+            norm=norm,
         )
 
         # Params to learn for reconstruction loss
