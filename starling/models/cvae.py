@@ -136,7 +136,9 @@ class cVAE(pl.LightningModule):
         # Latent space
         self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
-        self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
+        self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
+
+        self.sequence2latent = nn.Linear(20 * dimension, latent_dim)
 
         # Decoder
         self.decoder = resnets[model]["decoder"][decoder_block](
@@ -152,7 +154,7 @@ class cVAE(pl.LightningModule):
             self.log_std = nn.Parameter(torch.zeros((dimension * (dimension + 1) // 2)))
 
     def encode(
-        self, data: torch.Tensor, labels: torch.Tensor = None
+        self, data: torch.Tensor, labels: torch.Tensor
     ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
         Takes the data and encodes it into the latent space,
@@ -162,15 +164,14 @@ class cVAE(pl.LightningModule):
         ----------
         data : torch.Tensor
             Data in the shape of (batch, channel, height, width)
+        labels : torch.Tensor
+            Labels to be concatenated with the data
 
         Returns
         -------
         List[Tuple[torch.Tensor, torch.Tensor]]
             Return the mean and log variance of the latent space
         """
-        if labels is None:
-            labels = torch.zeros_like(data)
-
         data = torch.cat((data, labels), dim=1)
 
         data = self.encoder(data)
@@ -180,9 +181,7 @@ class cVAE(pl.LightningModule):
 
         return [mu, log_var]
 
-    def decode(
-        self, latents: torch.Tensor, labels: torch.Tensor = None
-    ) -> torch.Tensor:
+    def decode(self, latents: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """
         Decodes the latent space back into the original data
 
@@ -190,19 +189,27 @@ class cVAE(pl.LightningModule):
         ----------
         latents : torch.Tensor
             latents in the shape of (batch, channel, height, width)
+        labels : torch.Tensor
+            Labels to be concatenated with the data
 
         Returns
         -------
         torch.Tensor
             Returns the reconstructed data
         """
-        # if labels is None:
-        #     labels = torch.zeros_like(latents)
+        # Flattening it for the linear layer
+        labels = labels.view(-1, 20 * labels.shape[-1])
+        # Convert the one-hot encoded labels to the latent space shape
+        labels = self.sequence2latent(labels)
 
-        # data = torch.cat((latents, labels), dim=1)
+        # Concatenate the latents and the labels
+        data = torch.cat((latents, labels), dim=1)
+
         # Linear layer first to get the shape of the final encoding layer
-        data = self.first_decode_layer(latents)
+        data = self.latents2features(data)
         data = data.view(-1, *self.shape_from_final_encoding_layer)
+
+        # Decode the data
         data = self.decoder(data)
         return data
 
@@ -493,7 +500,10 @@ class cVAE(pl.LightningModule):
         return {"loss": loss, "recon": recon, "KLD": KLD}
 
     def forward(
-        self, data: torch.Tensor, labels: torch.Tensor = None
+        self,
+        data: torch.Tensor,
+        encoder_labels: torch.Tensor = None,
+        decoder_labels: torch.Tensor = None,
     ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         Forward pass of the VAE
@@ -502,16 +512,42 @@ class cVAE(pl.LightningModule):
         ----------
         data : torch.Tensor
             Data in the shape of (batch, channel, height, width) to pass through the VAE
+        encoder_labels : torch.Tensor, optional
+            Labels to be concatenated with the data in the encoder, if not given
+            0s will be concatenated, by default None
+        decoder_labels : torch.Tensor, optional
+            Labels to be concatenated with the data in the decoder, if not given
+            0s will be concatenated, by default None
 
         Returns
         -------
         List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
             Returns the reconstructed data, the mean of the latent space, and the log variance
         """
-        mu, logvar = self.encode(data)
+        if encoder_labels is None or len(encoder_labels) == 0:
+            encoder_labels = torch.zeros_like(data)
+
+        if encoder_labels.shape != data.shape:
+            raise ValueError(
+                f"Encoder labels shape {encoder_labels.shape} does not match data shape {data.shape}"
+            )
+
+        mu, logvar = self.encode(data, labels=encoder_labels)
         latent_encoding = self.reparameterize(mu, logvar)
 
-        data_reconstructed = self.decode(latent_encoding)
+        if decoder_labels is None or len(decoder_labels) == 0:
+            decoder_labels = torch.zeros(
+                (data.shape[0], 20, data.shape[-1]),
+                dtype=torch.float32,
+                device=data.device,
+            )
+
+        if decoder_labels.shape != (data.shape[0], 20, data.shape[-1]):
+            raise ValueError(
+                f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
+            )
+        data_reconstructed = self.decode(latent_encoding, labels=decoder_labels)
+
         return data_reconstructed, mu, logvar
 
     def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
@@ -531,8 +567,12 @@ class cVAE(pl.LightningModule):
             Total training loss of this batch
         """
         data = batch["data"]
+        encoder_labels = batch["encoder_condition"]
+        decoder_labels = batch["decoder_condition"]
 
-        data_reconstructed, mu, logvar = self.forward(data=data)
+        data_reconstructed, mu, logvar = self.forward(
+            data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
+        )
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
@@ -595,8 +635,12 @@ class cVAE(pl.LightningModule):
             Total validation loss of this batch
         """
         data = batch["data"]
+        encoder_labels = batch["encoder_condition"]
+        decoder_labels = batch["decoder_condition"]
 
-        data_reconstructed, mu, logvar = self.forward(data)
+        data_reconstructed, mu, logvar = self.forward(
+            data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
+        )
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
@@ -699,3 +743,36 @@ class cVAE(pl.LightningModule):
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
         return [optimizer], [lr_scheduler]
+
+    def sample(self, num_samples: int, sequence: torch.Tensor = None) -> torch.Tensor:
+        """
+        Sample from the latent space of the VAE and optionally
+        condition on a sequence
+
+        Parameters
+        ----------
+        num_samples : int
+            Number of samples to generate
+        sequence : torch.Tensor
+            Sequence to generate distance maps for (sequence needs to be < 385)
+
+        Returns
+        -------
+        torch.Tensor
+            Returns the generated distance maps
+        """
+        # If no sequence is given, generate zeroes (no conditioning)
+        if sequence is None:
+            labels = torch.zeros(
+                (num_samples, 20, self.hparams.dimension), dtype=torch.float32
+            ).to(self.device)
+
+        # Sample the latent encoding from N(0, I)
+        latent_samples = torch.randn(num_samples, self.hparams.latent_dim).to(
+            self.device
+        )
+
+        # Decode the samples conditioned on sequence/labels
+        generated_samples = self.decode(latent_samples, labels)
+
+        return generated_samples
