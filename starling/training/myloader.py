@@ -1,14 +1,18 @@
 import os
 from typing import List
 
+import h5py
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from finches.frontend.mpipi_frontend import Mpipi_frontend
 from IPython import embed
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, txt_file: str, target_shape: int) -> None:
+    def __init__(
+        self, txt_file: str, target_shape: int, pretraining: bool = True
+    ) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
 
@@ -22,21 +26,50 @@ class MatrixDataset(torch.utils.data.Dataset):
         """
         self.data_path = self.read_paths(txt_file)
         self.target_shape = (target_shape, target_shape)
+        self.pretraining = pretraining
 
     def __len__(self):
         return len(self.data_path)
 
     def __getitem__(self, index):
         # Get a single data sample
-        sample = np.loadtxt(self.data_path[index], dtype=np.float32)
+        try:
+            sample = np.loadtxt(self.data_path[index], dtype=np.float32)
+        except Exception as e:
+            data_path, frame = self.data_path[index].split()
+            data = self.load_hdf5_compressed(
+                data_path, keys_to_load=["dm", "seq"], frame=int(frame)
+            )
+            sample = self.symmetrize(data["dm"])
+            sequence = data["seq"][()].decode()
+
+        if not self.pretraining:
+            encoder_condition = self.get_interaction_matrix(sequence)
+            decoder_condition = self.one_hot_encode(sequence)
+            encoder_condition = self.MaxPad(
+                encoder_condition, shape=(self.target_shape)
+            )
+            decoder_condition = self.MaxPad(
+                decoder_condition, shape=(self.target_shape[0], 20)
+            )
+
+            encoder_condition = torch.from_numpy(encoder_condition).unsqueeze(0)
+            decoder_condition = torch.from_numpy(decoder_condition)
+        else:
+            encoder_condition = {}
+            decoder_condition = {}
 
         # Resize the input distance map with padding
-        sample = self.MaxPad(sample)
+        sample = self.MaxPad(sample, shape=(self.target_shape))
 
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
 
-        return {"data": sample}
+        return {
+            "data": sample,
+            "encoder_condition": encoder_condition,
+            "decoder_condition": decoder_condition,
+        }
 
     def read_paths(self, txt_file: str) -> List:
         """
@@ -59,7 +92,7 @@ class MatrixDataset(torch.utils.data.Dataset):
                 paths.append(path)
         return paths
 
-    def MaxPad(self, original_array: np.array) -> np.array:
+    def MaxPad(self, original_array: np.array, shape: tuple) -> np.array:
         """
         A function that takes in a distance map and pads it to a desired shape
 
@@ -74,8 +107,8 @@ class MatrixDataset(torch.utils.data.Dataset):
             A distance map padded to a desired shape
         """
         # Pad the distance map to a desired shape
-        pad_height = max(0, self.target_shape[0] - original_array.shape[0])
-        pad_width = max(0, self.target_shape[1] - original_array.shape[1])
+        pad_height = max(0, shape[0] - original_array.shape[0])
+        pad_width = max(0, shape[1] - original_array.shape[1])
         return np.pad(
             original_array,
             ((0, pad_height), (0, pad_width)),
@@ -83,39 +116,78 @@ class MatrixDataset(torch.utils.data.Dataset):
             constant_values=0,
         )
 
-    def normalize_by_normalization_matrix(self, original_array):
-        # Divide by some normalization matrix
-        shape = np.shape(original_array)
-        normalized_matrix = (
-            original_array / self.normalization_matrix[: shape[0], : shape[1]]
+    def get_interaction_matrix(self, sequence):
+        mf = Mpipi_frontend()
+        interaction_matrix = mf.intermolecular_idr_matrix(
+            sequence, sequence, window_size=1
         )
-        return normalized_matrix
+        return interaction_matrix
 
-    def generate_normalization_matrix(self, shape, bond_length=3.81):
-        # This normalization matrix is setup so that the constant distances
-        # (i.e., bond lengths) stay constant by each element within the matrix
-        # being an accumulated count of residues times the bond_length
-        norm_matrix = np.zeros(shape, dtype=int)
-        for i in range(shape[0]):
-            norm_matrix[i, i : shape[1]] = np.arange(shape[1] - i)
+    def one_hot_encode(self, sequence):
+        """
+        One-hot encodes a sequence.
+        """
+        # Define the mapping of each amino acid to a unique integer
+        aa_to_int = {
+            "A": 0,
+            "C": 1,
+            "D": 2,
+            "E": 3,
+            "F": 4,
+            "G": 5,
+            "H": 6,
+            "I": 7,
+            "K": 8,
+            "L": 9,
+            "M": 10,
+            "N": 11,
+            "P": 12,
+            "Q": 13,
+            "R": 14,
+            "S": 15,
+            "T": 16,
+            "V": 17,
+            "W": 18,
+            "Y": 19,
+        }
 
-        norm_matrix = norm_matrix * bond_length
-        norm_matrix = norm_matrix + norm_matrix.T
-        norm_matrix[norm_matrix == 0] = 1
+        # One-hot encode the sequence
+        one_hot_sequence = np.zeros((len(sequence), len(aa_to_int)), dtype=np.float32)
+        for i, aa in enumerate(sequence):
+            if aa in aa_to_int:
+                one_hot_sequence[i, aa_to_int[aa]] = 1
+            else:
+                one_hot_sequence[i, aa_to_int["X"]] = 1
+        return one_hot_sequence
 
-        return norm_matrix
+    def load_hdf5_compressed(self, file_path, frame, keys_to_load=None):
+        """
+        Loads data from an HDF5 file.
 
-    def generate_afrc_distance_map(self, target_shape):
-        # Normalize by the average distance map for an ideal homopolymer
-        from afrc import AnalyticalFRC
+        Parameters:
+            - file_path (str): Path to the HDF5 file.
+            - keys_to_load (list): List of keys to load. If None, loads all keys.
+        Returns:
+            - dict: Dictionary containing loaded data.
+        """
+        data_dict = {}
+        with h5py.File(file_path, "r") as f:
+            keys = keys_to_load if keys_to_load else f.keys()
+            for key in keys:
+                if key == "dm":
+                    data_dict[key] = f[key][frame]
+                else:
+                    data_dict[key] = f[key][...]
+        return data_dict
 
-        seq = "G" * target_shape[0]
-        protein = AnalyticalFRC(seq)
-        distance_map = protein.get_distance_map()
-        distance_map = distance_map + distance_map.T
-        distance_map[distance_map == 0] = 1
-
-        return distance_map
+    def symmetrize(self, matrix):
+        """
+        Symmetrizes a matrix.
+        """
+        if np.array_equal(matrix, matrix.T):
+            return matrix
+        else:
+            return matrix + matrix.T - np.diag(np.diag(matrix))
 
 
 # Step 2: Create a data module
