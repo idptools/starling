@@ -134,6 +134,7 @@ class VAE(pl.LightningModule):
         self.shape_from_final_encoding_layer = linear_layer_params, 6, 6
 
         # Latent space
+        self.latent_dim = latent_dim
         self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
@@ -180,7 +181,7 @@ class VAE(pl.LightningModule):
         Parameters
         ----------
         latents : torch.Tensor
-            latents in the shape of (batch, channel, height, width)
+            latents in the shape of (batch, features)
 
         Returns
         -------
@@ -692,3 +693,33 @@ class VAE(pl.LightningModule):
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
         return [optimizer], [lr_scheduler]
+
+    def sample(
+        self, batch: int, mean: torch.Tensor = None, std: torch.Tensor = None
+    ) -> torch.Tensor:
+        """
+        Sample from the latent space of the VAE
+
+        Parameters
+        ----------
+        batch : torch.Tensor
+            A number of latent encodings to sample
+        mean : torch.Tensor, optional
+            Means of the latent space, by default None
+        std : torch.Tensor, optional
+            Standard deviations of the latent space, by default None
+
+        Returns
+        -------
+        torch.Tensor
+            Returns the sampled data from the latent space
+        """
+        if mean and std is None:
+            latent_encoding = torch.rand(batch, self.latent_dim)
+        else:
+            raise ValueError("Not operational yet")
+
+        with torch.no_grad():
+            sampled_data = self.decode(latent_encoding)
+
+        return sampled_data
