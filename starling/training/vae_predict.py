@@ -61,7 +61,7 @@ def vae_predict():
         args.model_path, map_location=device
     )
 
-    input_dimension = model.hparams.get("latent_dim")
+    input_dimension = model.hparams.get("dimension")
 
     model.eval()
 
