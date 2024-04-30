@@ -773,6 +773,7 @@ class cVAE(pl.LightningModule):
         )
 
         # Decode the samples conditioned on sequence/labels
-        generated_samples = self.decode(latent_samples, labels)
+        with torch.no_grad():
+            generated_samples = self.decode(latent_samples, labels)
 
         return generated_samples
