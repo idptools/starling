@@ -75,15 +75,23 @@ def vae_predict():
     dataset.setup(stage="test")
     predict_dataloader = dataset.test_dataloader()
 
+    data = []
+    data_reconstructed = []
+
     for batch in predict_dataloader:
         x = batch["data"].to(f"cuda:{args.gpu_id[0]}")
         x_reconstructed = model(x)[0]
-        np.save("ground_truth_small_384_model.npy", x.cpu().detach().numpy())
-        np.save(
+
+        data.append(x.cpu().detach().numpy())
+        data_reconstructed.append(x_reconstructed.cpu().detach().numpy())
+
+
+    embed()
+    np.save("ground_truth_small_384_model.npy", x.cpu().detach().numpy())
+    np.save(
             "reconstructed_array_small_384_model.npy",
             x_reconstructed.cpu().detach().numpy(),
         )
-        break
 
 
 if __name__ == "__main__":
