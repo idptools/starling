@@ -1,8 +1,6 @@
 [build-system]
 requires = ["setuptools>=61.0",
-            "versioningit~=2.0",
-            "torch", 
-            "pytorch_lightning",]
+            "versioningit~=2.0",]
 
 build-backend = "setuptools.build_meta"
 
@@ -24,9 +22,9 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 # Declare any run-time dependencies that should be installed with the package.
-dependencies = [
-"numpy", "h5py", "wandb"
-]
+#dependencies = [
+#"numpy", "h5py", "wandb"
+#]
 
 # Update the urls once the hosting is set up.
 #[project.urls]
