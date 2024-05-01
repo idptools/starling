@@ -11,7 +11,7 @@ from IPython import embed
 
 class MatrixDataset(torch.utils.data.Dataset):
     def __init__(
-        self, txt_file: str, target_shape: int, pretraining: bool = True
+        self, txt_file: str, target_shape: int, pretraining: bool = False
     ) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
@@ -40,11 +40,12 @@ class MatrixDataset(torch.utils.data.Dataset):
             data = self.load_hdf5_compressed(
                 data_path, keys_to_load=["dm", "seq"], frame=int(frame)
             )
-            sample = self.symmetrize(data["dm"])
+            sample = self.symmetrize(data["dm"]).astype(np.float32)
             sequence = data["seq"][()].decode()
 
         if not self.pretraining:
             encoder_condition = self.get_interaction_matrix(sequence)
+            encoder_condition = self.symmetrize(encoder_condition)
             decoder_condition = self.one_hot_encode(sequence)
             encoder_condition = self.MaxPad(
                 encoder_condition, shape=(self.target_shape)
@@ -53,8 +54,10 @@ class MatrixDataset(torch.utils.data.Dataset):
                 decoder_condition, shape=(self.target_shape[0], 20)
             )
 
-            encoder_condition = torch.from_numpy(encoder_condition).unsqueeze(0)
-            decoder_condition = torch.from_numpy(decoder_condition)
+            encoder_condition = torch.from_numpy(
+                encoder_condition.astype(np.float32)
+            ).unsqueeze(0)
+            decoder_condition = torch.from_numpy(decoder_condition.astype(np.float32))
         else:
             encoder_condition = {}
             decoder_condition = {}
@@ -121,7 +124,7 @@ class MatrixDataset(torch.utils.data.Dataset):
         interaction_matrix = mf.intermolecular_idr_matrix(
             sequence, sequence, window_size=1
         )
-        return interaction_matrix
+        return interaction_matrix[0][0]
 
     def one_hot_encode(self, sequence):
         """
