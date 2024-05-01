@@ -198,7 +198,7 @@ class cVAE(pl.LightningModule):
             Returns the reconstructed data
         """
         # Flattening it for the linear layer
-        labels = labels.view(-1, 20 * labels.shape[-1])
+        labels = labels.view(-1, labels.shape[-2] * 20)
         # Convert the one-hot encoded labels to the latent space shape
         labels = self.sequence2latent(labels)
 
@@ -537,12 +537,12 @@ class cVAE(pl.LightningModule):
 
         if decoder_labels is None or len(decoder_labels) == 0:
             decoder_labels = torch.zeros(
-                (data.shape[0], 20, data.shape[-1]),
+                (data.shape[0], data.shape[-2], 20),
                 dtype=torch.float32,
                 device=data.device,
             )
 
-        if decoder_labels.shape != (data.shape[0], 20, data.shape[-1]):
+        if decoder_labels.shape != (data.shape[0], data.shape[-1], 20):
             raise ValueError(
                 f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
             )
