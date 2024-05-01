@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import pytorch_lightning as pl
 import wandb
@@ -65,6 +66,8 @@ def train_vae():
         vae = model_type[args.model_type].load_from_checkpoint(
             args.pretrained_model, map_location=f'cuda:{config["device"]["cuda"][0]}'
         )
+
+    os.makedirs(config["training"]["output_path"], exist_ok=True)
 
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
         f.write(str(vae))
