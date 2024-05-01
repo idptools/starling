@@ -32,8 +32,8 @@ requires-python = ">=3.8"
 #"Documentation" = "https://starling.readthedocs.io/"
 
 [project.scripts]
-vae-train = "starling.training.vae_train:train_vae"
-vae-generate = "starling.training.vae_generate:vae_generate"
+starling-train = "starling.training.vae_train:train_vae"
+starling-sample = "starling.training.vae_generate:vae_generate"
 ae-train = "starling.training.ae_train:train_ae"
 
 
