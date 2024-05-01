@@ -1,0 +1,26 @@
+data:
+  batch_size: 128
+  test_data: null
+  train_data: null
+  val_data: null
+device:
+  cuda:
+    - 0
+model:
+  model: Resnet18
+  encoder_block: modified
+  decoder_block: modified
+  base: 64
+  KLD_weight: 1
+  dimension: 384
+  in_channels: 1
+  kernel_size: 3
+  latent_dim: 256
+  loss_type: nll
+  lr_scheduler: CosineAnnealingLR
+  set_lr: 0.128
+  weights_type: equal
+training:
+  num_epochs: 250
+  output_path: VAE_ResNet_cont_training
+  project_name: VAE_ResNet_cont_training
