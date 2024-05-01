@@ -23,6 +23,13 @@ def train_vae():
     )
 
     parser.add_argument(
+        "--pretrained_model",
+        type=str,
+        default=None,
+        help="Path to the pretrained model to start training from",
+    )
+
+    parser.add_argument(
         "--model_type",
         type=str,
         default=None,
@@ -52,7 +59,12 @@ def train_vae():
 
     dataset.setup(stage="fit")
 
-    vae = model_type[args.model_type](**config["model"])
+    if args.pretrained_model is None:
+        vae = model_type[args.model_type](**config["model"])
+    else:
+        vae = model_type[args.model_type].load_from_checkpoint(
+            args.pretrained_model, map_location=f'cuda:{config["device"]["cuda"][0]}'
+        )
 
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
         f.write(str(vae))
