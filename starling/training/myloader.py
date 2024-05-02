@@ -3,6 +3,7 @@ from typing import List
 
 import h5py
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 from finches.frontend.mpipi_frontend import Mpipi_frontend
@@ -24,7 +25,10 @@ class MatrixDataset(torch.utils.data.Dataset):
             The desired shape of the distance maps. The distance map will be
             padded
         """
-        self.data_path = self.read_paths(txt_file)
+        # self.data_path = self.read_paths(txt_file)
+        dataframe = pd.read_csv(txt_file)
+        self.data_path = dataframe["File"].values
+        self.frame = dataframe["Frame Number"].values
         self.target_shape = (target_shape, target_shape)
         self.pretraining = pretraining
 
@@ -36,7 +40,8 @@ class MatrixDataset(torch.utils.data.Dataset):
         try:
             sample = np.loadtxt(self.data_path[index], dtype=np.float32)
         except Exception as e:
-            data_path, frame = self.data_path[index].split()
+            data_path = self.data_path[index]
+            frame = self.frame[index]
             data = self.load_hdf5_compressed(
                 data_path, keys_to_load=["dm", "seq"], frame=int(frame)
             )
