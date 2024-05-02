@@ -19,7 +19,4 @@ def get_params(config_file=None):
     else:
         config = {**default_config}
 
-    with open(f"{config['training']['output_path']}/config.yaml", "w") as f:
-        yaml.dump(config, f)
-
     return config

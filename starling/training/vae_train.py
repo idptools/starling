@@ -3,6 +3,7 @@ import os
 
 import pytorch_lightning as pl
 import wandb
+import yaml
 from IPython import embed
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -67,10 +68,15 @@ def train_vae():
             args.pretrained_model, map_location=f'cuda:{config["device"]["cuda"][0]}'
         )
 
+    # Make the directories to save the model and logs
     os.makedirs(config["training"]["output_path"], exist_ok=True)
+
+    with open(f"{config['training']['output_path']}/config.yaml", "w") as f:
+        yaml.dump(config, f)
 
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
         f.write(str(vae))
+    ##############################
 
     wandb_logger = WandbLogger(project=config["training"]["project_name"])
     wandb_logger.watch(vae)
