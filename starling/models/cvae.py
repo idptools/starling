@@ -135,7 +135,7 @@ class cVAE(pl.LightningModule):
         linear_layer_params = int(base * 2**exponent)
         self.shape_from_final_encoding_layer = linear_layer_params, 6, 6
 
-        # Latent space
+        # Latent space (some parts are hard coded in - need to change this)
         self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
@@ -757,7 +757,7 @@ class cVAE(pl.LightningModule):
         num_samples : int
             Number of samples to generate
         sequence : torch.Tensor
-            Sequence to generate distance maps for (sequence needs to be < 385)
+            Sequence to generate distance maps for (sequence needs to be < 385), by default None
 
         Returns
         -------
