@@ -3,6 +3,7 @@ data:
   test_data: null
   train_data: null
   val_data: null
+  pretraining: false
 device:
   cuda:
     - 0

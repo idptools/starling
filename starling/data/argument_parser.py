@@ -5,7 +5,21 @@ import yaml
 from IPython import embed
 
 
-def get_params(config_file=None):
+def get_params(config_file: str = None) -> dict:
+    """
+    A function that reads the default configuration file
+    and merges it with the user configuration file.
+
+    Parameters
+    ----------
+    config_file : str, optional
+        A path to the user configuration file, by default None
+
+    Returns
+    -------
+    dict
+        A dictionary containing the configuration parameters
+    """
     dirname = os.path.dirname(__file__)
     with open(f"{dirname}/default_config.yaml", "r") as stream:
         default_config = yaml.safe_load(stream)
