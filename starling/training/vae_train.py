@@ -40,10 +40,15 @@ def train_vae():
 
     args = parser.parse_args()
 
+    # Types of VAE models that can be trained using this script
+    # VAE is a regular unconditional VAE
+    # cVAE is a conditional VAE that can be pretrained with no labels
     model_type = {"cVAE": cVAE, "VAE": VAE}
 
+    # Reads in default and user defined configuration arguments
     config = get_params(config_file=args.config_file)
 
+    # Set up model checkpoint saving
     checkpoint_callback = ModelCheckpoint(
         monitor="epoch_val_loss",  # Monitor validation loss for saving the best model
         dirpath=f"{config['training']['output_path']}/",  # Directory to save checkpoints
@@ -61,12 +66,16 @@ def train_vae():
 
     dataset.setup(stage="fit")
 
+    # Whether to load a pretrained model or train from scratch
     if args.pretrained_model is None:
         vae = model_type[args.model_type](**config["model"])
     else:
         vae = model_type[args.model_type].load_from_checkpoint(
             args.pretrained_model, map_location=f'cuda:{config["device"]["cuda"][0]}'
         )
+        # Change the params to whatever they
+        for param in config["model"]:
+            vae.hparams[param] = config["model"][param]
 
     # Make the directories to save the model and logs
     os.makedirs(config["training"]["output_path"], exist_ok=True)
@@ -78,9 +87,11 @@ def train_vae():
         f.write(str(vae))
     ##############################
 
+    # Set up logging on weights and biases
     wandb_logger = WandbLogger(project=config["training"]["project_name"])
     wandb_logger.watch(vae)
 
+    # Set up PyTorch Lightning Trainer
     trainer = pl.Trainer(
         devices=config["device"]["cuda"],
         max_epochs=config["training"]["num_epochs"],
@@ -89,8 +100,11 @@ def train_vae():
         precision="16-mixed",
         logger=wandb_logger,
     )
+
+    # Start training
     trainer.fit(vae, dataset)
 
+    # Detach the logging on wandb
     wandb_logger.experiment.unwatch(vae)
     wandb.finish()
 
