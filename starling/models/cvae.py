@@ -1,5 +1,6 @@
 from typing import List, Tuple
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -11,6 +12,7 @@ from torch.optim.lr_scheduler import (
     OneCycleLR,
 )
 
+from starling.data.data_wrangler import MaxPad, one_hot_encode
 from starling.models import resnets_original, vae_components
 
 
@@ -546,6 +548,7 @@ class cVAE(pl.LightningModule):
             raise ValueError(
                 f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
             )
+
         data_reconstructed = self.decode(latent_encoding, labels=decoder_labels)
 
         return data_reconstructed, mu, logvar
@@ -764,8 +767,13 @@ class cVAE(pl.LightningModule):
         # If no sequence is given, generate zeroes (no conditioning)
         if sequence is None:
             labels = torch.zeros(
-                (num_samples, 20, self.hparams.dimension), dtype=torch.float32
+                (num_samples, self.hparams.dimension, 20), dtype=torch.float32
             ).to(self.device)
+        else:
+            labels = one_hot_encode(sequence)
+            labels = MaxPad(labels, shape=(self.hparams.dimension, 20))
+            labels = torch.from_numpy(labels.astype(np.float32)).to(self.device)
+            labels = labels.repeat(num_samples, 1, 1)
 
         # Sample the latent encoding from N(0, I)
         latent_samples = torch.randn(num_samples, self.hparams.latent_dim).to(
@@ -775,5 +783,11 @@ class cVAE(pl.LightningModule):
         # Decode the samples conditioned on sequence/labels
         with torch.no_grad():
             generated_samples = self.decode(latent_samples, labels)
+            # generated_samples = self.symmetrize(generated_samples)
+
+        if sequence is not None:
+            generated_samples = generated_samples[
+                :, :, : len(sequence), : len(sequence)
+            ]
 
         return generated_samples
