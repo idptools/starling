@@ -68,7 +68,7 @@ class MatrixDataset(torch.utils.data.Dataset):
             decoder_condition = {}
 
         # Resize the input distance map with padding
-        sample = self.MaxPad(sample, shape=(self.target_shape))
+        sample = MaxPad(sample, shape=(self.target_shape))
 
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
