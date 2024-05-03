@@ -20,6 +20,13 @@ def vae_generate():
     )
 
     parser.add_argument(
+        "--sequence",
+        type=str,
+        default=None,
+        help="Sequence to run the prediction for",
+    )
+
+    parser.add_argument(
         "--num_samples",
         type=int,
         default=None,
@@ -73,20 +80,20 @@ def vae_generate():
     # stds = torch.Tensor(np.load("std_latents.npy")).view(1, latent_dimension)
 
     start = time.time()
-    for i in range(num_batches):
-            #encodings = torch.randn(args.batch_size, latent_dimension).to(device)
-            # encodings = torch.normal(
-            #     means.repeat(args.batch_size, 1), stds.repeat(args.batch_size, 1)
-            # ).to(device)
-        distance_maps = model.sample(args.batch_size)
+    for batch in range(num_batches):
+        # encodings = torch.randn(args.batch_size, latent_dimension).to(device)
+        # encodings = torch.normal(
+        #     means.repeat(args.batch_size, 1), stds.repeat(args.batch_size, 1)
+        # ).to(device)
+        distance_maps = model.sample(args.batch_size, sequence=args.sequence)
         all_distance_maps.append(distance_maps.cpu().detach().numpy())
 
     if remaining_samples > 0:
-            #encodings = torch.randn(remaining_samples, latent_dimension).to(device)
-            # encodings = torch.normal(
-            #     means.repeat(remaining_samples, 1), stds.repeat(remaining_samples, 1)
-            # ).to(device)
-        distance_maps = model.sample(remaining_samples)
+        # encodings = torch.randn(remaining_samples, latent_dimension).to(device)
+        # encodings = torch.normal(
+        #     means.repeat(remaining_samples, 1), stds.repeat(remaining_samples, 1)
+        # ).to(device)
+        distance_maps = model.sample(remaining_samples, sequence=args.sequence)
         all_distance_maps.append(distance_maps.cpu().detach().numpy())
 
     end = time.time()
