@@ -10,30 +10,30 @@ def one_hot_encode(sequence):
     """
     # Define the mapping of each amino acid to a unique integer
     aa_to_int = {
-        "A": 0,
-        "C": 1,
-        "D": 2,
-        "E": 3,
-        "F": 4,
-        "G": 5,
-        "H": 6,
-        "I": 7,
-        "K": 8,
-        "L": 9,
-        "M": 10,
-        "N": 11,
-        "P": 12,
-        "Q": 13,
-        "R": 14,
-        "S": 15,
-        "T": 16,
-        "V": 17,
-        "W": 18,
-        "Y": 19,
+        "A": 1,
+        "C": 2,
+        "D": 3,
+        "E": 4,
+        "F": 5,
+        "G": 6,
+        "H": 7,
+        "I": 8,
+        "K": 9,
+        "L": 10,
+        "M": 11,
+        "N": 12,
+        "P": 13,
+        "Q": 14,
+        "R": 15,
+        "S": 16,
+        "T": 17,
+        "V": 18,
+        "W": 19,
+        "Y": 20,
     }
 
     # One-hot encode the sequence
-    one_hot_sequence = np.zeros((len(sequence), len(aa_to_int)), dtype=np.float32)
+    one_hot_sequence = np.zeros((len(sequence), len(aa_to_int) + 1), dtype=np.float32)
     for i, aa in enumerate(sequence):
         if aa in aa_to_int:
             one_hot_sequence[i, aa_to_int[aa]] = 1
@@ -119,4 +119,10 @@ def symmetrize(matrix):
     if np.array_equal(matrix, matrix.T):
         return matrix
     else:
-        return matrix + matrix.T - np.diag(np.diag(matrix))
+        # Extract upper triangle excluding diagonal
+        upper_triangle = np.triu(matrix, k=1)
+        # Symmetrize upper triangle by mirroring
+        sym_matrix = upper_triangle + upper_triangle.T
+        # Add diagonal elements (to handle odd-sized matrices)
+        sym_matrix += np.diag(np.diag(matrix))
+        return sym_matrix
