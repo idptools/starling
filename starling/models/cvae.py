@@ -136,11 +136,17 @@ class cVAE(pl.LightningModule):
         self.shape_from_final_encoding_layer = linear_layer_params, 6, 6
 
         # Latent space (some parts are hard coded in - need to change this)
+        self.conditioning_size = latent_dim
         self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
-        self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
+        self.latents2features = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
 
-        self.sequence2latent = nn.Linear(20 * dimension, latent_dim)
+        # Embedding for the protein sequences with vocabulary of 20 amino acids + 1 padding
+        self.vocab_size = 21
+        self.seq2embedding = nn.Embedding(self.vocab_size, self.vocab_size)
+        self.embedding2latent = nn.Linear(
+            self.vocab_size * dimension, self.conditioning_size
+        )
 
         # Decoder
         self.decoder = resnets[model]["decoder"][decoder_block](
@@ -199,13 +205,18 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Returns the reconstructed data
         """
-        # Flattening it for the linear layer
-        labels = labels.view(-1, labels.shape[-2] * 20)
-        # Convert the one-hot encoded labels to the latent space shape
-        labels = self.sequence2latent(labels)
 
+        # Flattening it for the linear layer
+        labels = labels.view(-1, labels.shape[-2] * self.vocab_size)
+
+        # Convert the embedded labels to the latent space shape
+        labels = self.embedding2latent(labels)
+
+        # Which one is better is unclear, whether concatination or sum; need to figure that out
         # Concatenate the latents and the labels
-        data = torch.cat((latents, labels), dim=1)
+        # data = torch.cat((latents, labels), dim=1)
+        # Summing the labels to latents
+        data = latents + labels
 
         # Linear layer first to get the shape of the final encoding layer
         data = self.latents2features(data)
@@ -539,15 +550,18 @@ class cVAE(pl.LightningModule):
 
         if decoder_labels is None or len(decoder_labels) == 0:
             decoder_labels = torch.zeros(
-                (data.shape[0], data.shape[-2], 20),
+                (data.shape[0], data.shape[-2], self.vocab_size),
                 dtype=torch.float32,
                 device=data.device,
             )
 
-        if decoder_labels.shape != (data.shape[0], data.shape[-1], 20):
+        if decoder_labels.shape != (data.shape[0], data.shape[-1], 21):
             raise ValueError(
                 f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
             )
+
+        # Embed the labels in some embedding space
+        decoder_labels = self.seq2embedding(torch.argmax(decoder_labels, dim=-1))
 
         data_reconstructed = self.decode(latent_encoding, labels=decoder_labels)
 
@@ -767,11 +781,12 @@ class cVAE(pl.LightningModule):
         # If no sequence is given, generate zeroes (no conditioning)
         if sequence is None:
             labels = torch.zeros(
-                (num_samples, self.hparams.dimension, 20), dtype=torch.float32
+                (num_samples, self.hparams.dimension, self.vocab_size),
+                dtype=torch.float32,
             ).to(self.device)
         else:
             labels = one_hot_encode(sequence)
-            labels = MaxPad(labels, shape=(self.hparams.dimension, 20))
+            labels = MaxPad(labels, shape=(self.hparams.dimension, self.vocab_size))
             labels = torch.from_numpy(labels.astype(np.float32)).to(self.device)
             labels = labels.repeat(num_samples, 1, 1)
 
