@@ -139,11 +139,13 @@ class cVAE(pl.LightningModule):
         self.conditioning_size = latent_dim
         self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
-        self.latents2features = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
+        self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
 
         # Embedding for the protein sequences with vocabulary of 20 amino acids + 1 padding
         self.vocab_size = 21
         self.seq2embedding = nn.Embedding(self.vocab_size, self.vocab_size)
+
+        # I think I will replace this with convolutional layers
         self.embedding2latent = nn.Linear(
             self.vocab_size * dimension, self.conditioning_size
         )
@@ -155,6 +157,7 @@ class cVAE(pl.LightningModule):
             dimension=dimension,
             base=base,
             norm=norm,
+            conditional=True,
         )
 
         # Params to learn for reconstruction loss
@@ -206,24 +209,25 @@ class cVAE(pl.LightningModule):
             Returns the reconstructed data
         """
 
+        # Embed the labels in some embedding space
+        labels = self.seq2embedding(torch.argmax(labels, dim=-1))
+
         # Flattening it for the linear layer
-        labels = labels.view(-1, labels.shape[-2] * self.vocab_size)
+        labels_flattened = labels.view(-1, labels.shape[-2] * self.vocab_size)
 
         # Convert the embedded labels to the latent space shape
-        labels = self.embedding2latent(labels)
+        labels_flattened = self.embedding2latent(labels_flattened)
 
         # Which one is better is unclear, whether concatination or sum; need to figure that out
         # Concatenate the latents and the labels
-        # data = torch.cat((latents, labels), dim=1)
+        data = torch.cat((latents, labels), dim=1)
         # Summing the labels to latents
-        data = latents + labels
-
         # Linear layer first to get the shape of the final encoding layer
         data = self.latents2features(data)
         data = data.view(-1, *self.shape_from_final_encoding_layer)
 
         # Decode the data
-        data = self.decoder(data)
+        data = self.decoder(data, labels)
         return data
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
@@ -559,9 +563,6 @@ class cVAE(pl.LightningModule):
             raise ValueError(
                 f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
             )
-
-        # Embed the labels in some embedding space
-        decoder_labels = self.seq2embedding(torch.argmax(decoder_labels, dim=-1))
 
         data_reconstructed = self.decode(latent_encoding, labels=decoder_labels)
 
