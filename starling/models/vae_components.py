@@ -102,6 +102,7 @@ class ResNet_Decoder(nn.Module):
         norm,
         block_type=ResBlockDecBasic,
         base=64,
+        conditional=False,
     ) -> None:
         super().__init__()
 
@@ -137,18 +138,19 @@ class ResNet_Decoder(nn.Module):
         # Setting up the layers for the decoder
 
         self.layer1 = self._make_layer(
-            self.block_type, layer_in_channels[-1], num_blocks[0], stride=2
+            self.block_type, layer_in_channels[-1], num_blocks[0], conditional, stride=2
         )
         self.layer2 = self._make_layer(
-            self.block_type, layer_in_channels[-2], num_blocks[1], stride=2
+            self.block_type, layer_in_channels[-2], num_blocks[1], conditional, stride=2
         )
         self.layer3 = self._make_layer(
-            self.block_type, layer_in_channels[-3], num_blocks[2], stride=2
+            self.block_type, layer_in_channels[-3], num_blocks[2], conditional, stride=2
         )
         self.layer4 = self._make_layer(
             self.block_type,
             layer_in_channels[-4],
             num_blocks[3],
+            conditional,
             stride=1,
             last_layer=True,
         )
@@ -176,12 +178,20 @@ class ResNet_Decoder(nn.Module):
             scale_factor=2,
         )
 
-    def _make_layer(self, block, out_channels, blocks, stride=1, last_layer=False):
+    def _make_layer(
+        self, block, out_channels, blocks, conditional, stride=1, last_layer=False
+    ):
         layers = []
         self.in_channels = out_channels * block.contraction
         for _ in range(1, blocks):
             layers.append(
-                block(self.in_channels, out_channels, stride=1, norm=self.norm)
+                block(
+                    self.in_channels,
+                    out_channels,
+                    stride=1,
+                    norm=self.norm,
+                    conditional=conditional,
+                )
             )
         if stride > 1 and block == ResBlockDecBasic:
             out_channels = int(out_channels / 2)
@@ -192,19 +202,27 @@ class ResNet_Decoder(nn.Module):
                 stride,
                 last_layer=last_layer,
                 norm=self.norm,
+                conditional=conditional,
             )
         )
-        return nn.Sequential(*layers)
+        return ConditionalSequential(*layers)
 
-    def forward(self, data):
+    def forward(self, data, labels=None):
         data = self.resize_conv(data)
-        data = self.layer1(data)
-        data = self.layer2(data)
-        data = self.layer3(data)
-        data = self.layer4(data)
+        data = self.layer1(data, labels)
+        data = self.layer2(data, labels)
+        data = self.layer3(data, labels)
+        data = self.layer4(data, labels)
         data = self.reshaping_conv(data)
         data = self.output_layer(data)
         return data
+
+
+class ConditionalSequential(nn.Sequential):
+    def forward(self, x, condition):
+        for module in self._modules.values():
+            x = module(x, condition)
+        return x
 
 
 # Current implementations of ResNets
@@ -220,7 +238,7 @@ def Resnet18_Encoder(in_channels, kernel_size, norm, base):
     )
 
 
-def Resnet18_Decoder(out_channels, kernel_size, dimension, base, norm):
+def Resnet18_Decoder(out_channels, kernel_size, dimension, base, norm, conditional):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[2, 2, 2, 2],
@@ -228,6 +246,7 @@ def Resnet18_Decoder(out_channels, kernel_size, dimension, base, norm):
         dimension=dimension,
         base=base,
         norm=norm,
+        conditional=conditional,
     )
 
 
