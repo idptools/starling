@@ -166,12 +166,12 @@ class ResBlockEncBasic(nn.Module):
         # Set up the shortcut connection if necessary
         identity = self.shortcut(data)
         # First convolution
-        out = self.conv1(data)
+        data = self.conv1(data)
         # Second convolution
-        out = self.conv2(out)
+        data = self.conv2(data)
         # Add the input and run it through activation function
-        out += identity
-        return self.activation(out)
+        data += identity
+        return self.activation(data)
 
 
 class ResBlockDecBasic(nn.Module):
@@ -217,29 +217,6 @@ class ResBlockDecBasic(nn.Module):
         # (b, c, h, w) -> (b, c, h, w) stride = 1, conv2d
         # (b, c, h, w) -> (b, c/2, h*2, w*2 ) stride = 2, convtranspose2d
         if stride > 1:
-            # self.conv2 = nn.Sequential(
-            #     nn.ConvTranspose2d(
-            #         in_channels=in_channels,
-            #         out_channels=out_channels,
-            #         stride=stride,
-            #         kernel_size=kernel_size,
-            #         padding=padding,
-            #         output_padding=1,
-            #     ),
-            #     normalization[norm](out_channels),
-            # )
-            # # Setup a shortcut connection
-            # self.shortcut = nn.Sequential(
-            #     nn.ConvTranspose2d(
-            #         in_channels=in_channels,
-            #         out_channels=out_channels,
-            #         kernel_size=1,
-            #         stride=2,
-            #         padding=0,
-            #         output_padding=1,
-            #     ),
-            #     normalization[norm](out_channels),
-            # )
             self.conv2 = ResizeConv2d(
                 in_channels=in_channels,
                 out_channels=out_channels,
@@ -280,14 +257,14 @@ class ResBlockDecBasic(nn.Module):
         # Setup the shortcut connection if necessary
         identity = self.shortcut(data)
         # First convolution of the data
-        out = self.conv1(data)
+        data = self.conv1(data)
         # Second convolution of the data
-        out = self.conv2(out)
+        data = self.conv2(data)
         # Connect the input data to the
         # output of convolutions
         out += identity
         # Run it through the activation function
-        return self.activation(out)
+        return self.activation(data)
 
 
 class ResBlockEncBottleneck(nn.Module):
