@@ -186,11 +186,13 @@ class ResBlockDecBasic(nn.Module):
         kernel_size=None,
         dimension=None,
         last_layer=None,
+        conditional=False,
     ) -> None:
         super().__init__()
 
         kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
+        self.conditional = conditional
 
         normalization = {
             "batch": nn.BatchNorm2d,
@@ -253,16 +255,25 @@ class ResBlockDecBasic(nn.Module):
 
         self.activation = nn.ReLU(inplace=True)
 
-    def forward(self, data):
+        if self.conditional:
+            # The following is hard coded in, need to change this
+            self.sequence_embedding = nn.Linear(384 * 21, out_channels)
+
+    def forward(self, data, labels=None):
         # Setup the shortcut connection if necessary
         identity = self.shortcut(data)
         # First convolution of the data
         data = self.conv1(data)
         # Second convolution of the data
         data = self.conv2(data)
-        # Connect the input data to the
-        # output of convolutions
-        out += identity
+        # Connect the input data to the output of convolutions
+        data += identity
+        if labels is not None:
+            data += (
+                self.sequence_embedding(labels.view(labels.shape[0], -1))
+                .unsqueeze(-1)
+                .unsqueeze(-1)
+            )
         # Run it through the activation function
         return self.activation(data)
 
