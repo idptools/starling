@@ -11,8 +11,8 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 
 from starling.data.argument_parser import get_params
+from starling.data.myloader import MatrixDataModule
 from starling.models.ae import AE
-from starling.training.myloader import MatrixDataModule
 
 
 def train_ae():
