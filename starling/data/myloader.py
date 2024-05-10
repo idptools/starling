@@ -9,7 +9,6 @@ from IPython import embed
 from starling.data.data_wrangler import (
     MaxPad,
     load_hdf5_compressed,
-    one_hot_encode,
     read_tsv_file,
     symmetrize,
 )
@@ -53,19 +52,14 @@ class MatrixDataset(torch.utils.data.Dataset):
         if not self.pretraining:
             encoder_condition = self.get_interaction_matrix(sequence)
             encoder_condition = symmetrize(encoder_condition)
-            decoder_condition = one_hot_encode(sequence)
             encoder_condition = MaxPad(encoder_condition, shape=(self.target_shape))
-            decoder_condition = MaxPad(
-                decoder_condition, shape=(self.target_shape[0], 20)
-            )
 
             encoder_condition = torch.from_numpy(
                 encoder_condition.astype(np.float32)
             ).unsqueeze(0)
-            decoder_condition = torch.from_numpy(decoder_condition.astype(np.float32))
         else:
             encoder_condition = {}
-            decoder_condition = {}
+            sequence = {}
 
         # Resize the input distance map with padding
         sample = MaxPad(sample, shape=(self.target_shape))
@@ -76,7 +70,7 @@ class MatrixDataset(torch.utils.data.Dataset):
         return {
             "data": sample,
             "encoder_condition": encoder_condition,
-            "decoder_condition": decoder_condition,
+            "decoder_condition": sequence,
         }
 
     def get_interaction_matrix(self, sequence):
@@ -152,11 +146,6 @@ class MatrixDataModule(pl.LightningDataModule):
         )
 
     def test_dataloader(self):
-        return torch.utils.data.DataLoader(
-            self.test_dataset,
-            batch_size=self.batch_size,
-            num_workers=self.num_workers,
-        )
         return torch.utils.data.DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,

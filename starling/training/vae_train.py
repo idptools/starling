@@ -9,9 +9,9 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from starling.data.argument_parser import get_params
+from starling.data.myloader import MatrixDataModule
 from starling.models.cvae import cVAE
 from starling.models.vae import VAE
-from starling.training.myloader import MatrixDataModule
 
 
 def train_vae():

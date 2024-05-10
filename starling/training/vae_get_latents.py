@@ -6,9 +6,9 @@ import torch
 from IPython import embed
 
 from starling.data.argument_parser import get_params
+from starling.data.myloader import MatrixDataModule
 from starling.models.ae import AE
 from starling.models.vae import VAE
-from starling.training.myloader import MatrixDataModule
 
 
 def vae_generate_latents():

@@ -1,5 +1,6 @@
 from typing import List, Tuple
 
+import esm
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -13,6 +14,7 @@ from torch.optim.lr_scheduler import (
 )
 
 from starling.data.data_wrangler import MaxPad, one_hot_encode
+from starling.data.esm_embeddings import esm_embeddings
 from starling.models import resnets_original, vae_components
 
 
@@ -42,9 +44,11 @@ class cVAE(pl.LightningModule):
         KLD_weight,
         lr_scheduler,
         set_lr,
+        labels="esm2_t6_8M_UR50D",
+        decoder_conditioning=False,
         norm="instance",
-        encoder_block="original",
-        decoder_block="original",
+        encoder_block="modified",
+        decoder_block="modified",
         base=64,
     ):
         super().__init__()
@@ -105,6 +109,9 @@ class cVAE(pl.LightningModule):
             },
         }
 
+        # Input dimensions
+        self.dimension = dimension
+
         # Loss params
         self.loss_type = loss_type
         self.weights_type = weights_type
@@ -120,6 +127,10 @@ class cVAE(pl.LightningModule):
         self.total_train_step_losses = []
         self.recon_step_losses = []
         self.KLD_step_losses = []
+
+        # Labels to condition the model on
+        self.labels = labels
+        self.decoder_conditioning = decoder_conditioning
 
         self.monitor = "epoch_val_loss"
 
@@ -139,16 +150,64 @@ class cVAE(pl.LightningModule):
         self.conditioning_size = latent_dim
         self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
         self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
+
+        # ESM models that are supported right now
+        self.esm = {
+            "esm2_t6_8M_UR50D": {
+                "model_name": esm.pretrained.esm2_t6_8M_UR50D(),
+                "layers": 6,
+                "latent_dim": 320,
+            },
+            "esm2_t12_35M_UR50D": {
+                "model_name": esm.pretrained.esm2_t12_35M_UR50D(),
+                "layers": 12,
+                "latent_dim": 480,
+            },
+            "esm2_t30_150M_UR50D": {
+                "model_name": esm.pretrained.esm2_t30_150M_UR50D(),
+                "layers": 30,
+                "latent_dim": 640,
+            },
+        }
+
+        # Making labels for the decoder
+
+        # ESM2 model to generate labels
+        if self.labels in self.esm.keys():
+            self.esm_model, self.esm_alphabet = self.esm[self.labels]["model_name"]
+            self.esm_layers = self.esm[self.labels]["layers"]
+            # Freeze the parameters, we don't want to keep training ESM
+            for param in self.esm_model.parameters():
+                param.requires_grad = False
+            # Don't do any dropout within ESM model
+            self.esm_model.eval()
+            # Get the embeddings to the right shape for the decoder
+            self.embeddings = nn.Linear(self.esm[self.labels]["latent_dim"], latent_dim)
+
+        # One-hot-encoded labels
+        elif self.labels == "one-hot-encoding":
+            self.embeddings = nn.Linear(dimension * 21, latent_dim)
+
+        # Learned encodings; alternative to one-hot-encoding
+        elif self.labels == "learned-embeddings":
+            self.seq2embedding = nn.Embedding(21, 21)
+            self.embeddings = nn.Linear(dimension * 21, latent_dim)
+
+        # If no labels are provided
+        elif self.labels is None:
+            pass
+        else:
+            raise ValueError(f"Labels of name '{self.labels}' does not exist")
+
+        # Make sure the labels are given if decoder conditioning is set to True
+        if self.labels is None and decoder_conditioning:
+            raise ValueError(
+                "Decoder conditioning is set to True but no labels are given"
+            )
+
+        # Once the latent space is constructed use the linear layer to get the shape for
+        # the ResNet decoder
         self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
-
-        # Embedding for the protein sequences with vocabulary of 20 amino acids + 1 padding
-        self.vocab_size = 21
-        self.seq2embedding = nn.Embedding(self.vocab_size, self.vocab_size)
-
-        # I think I will replace this with convolutional layers
-        self.embedding2latent = nn.Linear(
-            self.vocab_size * dimension, self.conditioning_size
-        )
 
         # Decoder
         self.decoder = resnets[model]["decoder"][decoder_block](
@@ -157,7 +216,7 @@ class cVAE(pl.LightningModule):
             dimension=dimension,
             base=base,
             norm=norm,
-            conditional=True,
+            conditional=decoder_conditioning,
         )
 
         # Params to learn for reconstruction loss
@@ -192,7 +251,7 @@ class cVAE(pl.LightningModule):
 
         return [mu, log_var]
 
-    def decode(self, latents: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def decode(self, latents: torch.Tensor, sequences: torch.Tensor) -> torch.Tensor:
         """
         Decodes the latent space back into the original data
 
@@ -208,27 +267,72 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Returns the reconstructed data
         """
+        labels = self.sequence2labels(sequences)
 
-        # Embed the labels in some embedding space
-        labels = self.seq2embedding(torch.argmax(labels, dim=-1))
+        # Concatenation vs summing not clear which one is better
 
-        # Flattening it for the linear layer
-        labels_flattened = labels.view(-1, labels.shape[-2] * self.vocab_size)
-
-        # Convert the embedded labels to the latent space shape
-        labels_flattened = self.embedding2latent(labels_flattened)
-
-        # Which one is better is unclear, whether concatination or sum; need to figure that out
         # Concatenate the latents and the labels
-        data = torch.cat((latents, labels), dim=1)
+        data = torch.cat(
+            (latents, self.embeddings(torch.flatten(labels, start_dim=1))), dim=1
+        )
         # Summing the labels to latents
+        # data = latents + labels_embedded
+
         # Linear layer first to get the shape of the final encoding layer
         data = self.latents2features(data)
+
         data = data.view(-1, *self.shape_from_final_encoding_layer)
 
         # Decode the data
+        if not self.decoder_conditioning:
+            labels = None
+
         data = self.decoder(data, labels)
         return data
+
+    def sequence2labels(self, sequences: List) -> torch.Tensor:
+        """
+        Converts sequences to labels based on user defined models,
+        It can either use some ESM model to generate labels, one-hot-encode,
+        or learn the embeddings.
+
+        Parameters
+        ----------
+        sequences : List
+            A list of sequences to convert to labels
+
+        Returns
+        -------
+        torch.Tensor
+            Returns the labels for the decoder
+
+        Raises
+        ------
+        ValueError
+            If the labels are not one of the three options
+        """
+        # Generate labels using one of the ESM models
+        if self.labels in self.esm.keys():
+            encoded = esm_embeddings(
+                self.esm_model,
+                self.esm_alphabet,
+                sequences,
+                self.device,
+                self.esm_layers,
+            )
+        # One-hot-encode or learn the embedding space
+        elif self.labels in ["one-hot-encoding", "learned-embeddings"]:
+            sequences = [seq.ljust(self.dimension, "0") for seq in sequences]
+            encoded = one_hot_encode(sequences)
+            encoded = torch.from_numpy(encoded).to(self.device)
+            if self.labels == "learned-embeddings":
+                encoded = self.seq2embedding(encoded)
+        elif sequences is None:
+            return None
+        else:
+            raise ValueError(f"Labels of name '{self.labels}' does not exist")
+
+        return encoded
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
@@ -559,12 +663,12 @@ class cVAE(pl.LightningModule):
                 device=data.device,
             )
 
-        if decoder_labels.shape != (data.shape[0], data.shape[-1], 21):
-            raise ValueError(
-                f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
-            )
+        # if decoder_labels.shape != (data.shape[0], data.shape[-1], 21):
+        #     raise ValueError(
+        #         f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
+        #     )
 
-        data_reconstructed = self.decode(latent_encoding, labels=decoder_labels)
+        data_reconstructed = self.decode(latent_encoding, sequences=decoder_labels)
 
         return data_reconstructed, mu, logvar
 

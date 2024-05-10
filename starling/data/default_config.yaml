@@ -21,7 +21,10 @@ model:
   lr_scheduler: CosineAnnealingLR
   set_lr: 0.128
   weights_type: equal
+  label: esm2_t6_8M_UR50D
+  decoder_conditioning: false 
+  norm: instance
 training:
   num_epochs: 250
-  output_path: VAE_ResNet_cont_training
-  project_name: VAE_ResNet_cont_training
+  output_path: training_run
+  project_name: starling

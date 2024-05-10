@@ -184,9 +184,9 @@ class ResBlockDecBasic(nn.Module):
         stride,
         norm,
         kernel_size=None,
-        dimension=None,
         last_layer=None,
         conditional=False,
+        conditional_dim=320,
     ) -> None:
         super().__init__()
 
@@ -257,7 +257,7 @@ class ResBlockDecBasic(nn.Module):
 
         if self.conditional:
             # The following is hard coded in, need to change this
-            self.sequence_embedding = nn.Linear(384 * 21, out_channels)
+            self.sequence_embedding = nn.Linear(conditional_dim, out_channels)
 
     def forward(self, data, labels=None):
         # Setup the shortcut connection if necessary

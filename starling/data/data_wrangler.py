@@ -2,14 +2,16 @@ from typing import List
 
 import h5py
 import numpy as np
+from IPython import embed
 
 
-def one_hot_encode(sequence):
+def one_hot_encode(sequences):
     """
     One-hot encodes a sequence.
     """
     # Define the mapping of each amino acid to a unique integer
     aa_to_int = {
+        "0": 0,
         "A": 1,
         "C": 2,
         "D": 3,
@@ -33,13 +35,17 @@ def one_hot_encode(sequence):
     }
 
     # One-hot encode the sequence
-    one_hot_sequence = np.zeros((len(sequence), len(aa_to_int) + 1), dtype=np.float32)
-    for i, aa in enumerate(sequence):
-        if aa in aa_to_int:
-            one_hot_sequence[i, aa_to_int[aa]] = 1
-        else:
-            one_hot_sequence[i, aa_to_int["X"]] = 1
-    return one_hot_sequence
+    one_hot_encoded_seq = []
+    for sequence in sequences:
+        one_hot_sequence = np.zeros((len(sequence), len(aa_to_int)), dtype=np.float32)
+        for i, aa in enumerate(sequence):
+            if aa in aa_to_int:
+                one_hot_sequence[i, aa_to_int[aa]] = 1
+            else:
+                one_hot_sequence[i, aa_to_int["X"]] = 1
+        one_hot_encoded_seq.append(one_hot_sequence)
+    one_hot_encoded_seq = np.array(one_hot_encoded_seq)
+    return one_hot_encoded_seq
 
 
 def MaxPad(original_array: np.array, shape: tuple) -> np.array:

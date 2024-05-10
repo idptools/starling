@@ -6,10 +6,10 @@ import torch
 from IPython import embed
 
 from starling.data.argument_parser import get_params
+from starling.data.myloader import MatrixDataModule
 from starling.models.ae import AE
 from starling.models.cvae import cVAE
 from starling.models.vae import VAE
-from starling.training.myloader import MatrixDataModule
 
 
 def vae_predict():
@@ -85,13 +85,12 @@ def vae_predict():
         data.append(x.cpu().detach().numpy())
         data_reconstructed.append(x_reconstructed.cpu().detach().numpy())
 
-
     embed()
     np.save("ground_truth_small_384_model.npy", x.cpu().detach().numpy())
     np.save(
-            "reconstructed_array_small_384_model.npy",
-            x_reconstructed.cpu().detach().numpy(),
-        )
+        "reconstructed_array_small_384_model.npy",
+        x_reconstructed.cpu().detach().numpy(),
+    )
 
 
 if __name__ == "__main__":
