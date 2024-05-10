@@ -8,9 +8,9 @@ device:
   cuda:
     - 0
 model:
-  model: Resnet18
-  encoder_block: modified
-  decoder_block: modified
+  model_type: modified
+  encoder_model: Resnet18
+  decoder_model: Resnet34
   base: 64
   KLD_weight: 1
   dimension: 384
@@ -21,7 +21,7 @@ model:
   lr_scheduler: CosineAnnealingLR
   set_lr: 0.128
   weights_type: equal
-  label: esm2_t6_8M_UR50D
+  labels: esm2_t6_8M_UR50D
   decoder_conditioning: false 
   norm: instance
 training:

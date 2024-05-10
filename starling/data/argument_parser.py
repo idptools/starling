@@ -27,10 +27,8 @@ def get_params(config_file: str = None) -> dict:
     if config_file is not None:
         with open(config_file, "r") as stream:
             user_config = yaml.safe_load(stream)
-
         # Merge user_config with default_config
-        config = {**default_config, **user_config}
-    else:
-        config = {**default_config}
+    for key in user_config:
+        default_config[key].update(user_config[key])
 
-    return config
+    return default_config
