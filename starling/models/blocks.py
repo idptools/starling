@@ -200,13 +200,14 @@ class ResBlockDecBasic(nn.Module):
             "layer": LayerNorm,
         }
 
-        self.mlp = nn.Sequential(
-            nn.Linear(conditional_dim, in_channels),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_channels, in_channels),
-            nn.ReLU(inplace=True),
-            nn.Linear(in_channels, in_channels),
-        )
+        if conditional:
+            self.mlp = nn.Sequential(
+                nn.Linear(conditional_dim, in_channels),
+                nn.ReLU(inplace=True),
+                nn.Linear(in_channels, in_channels),
+                nn.ReLU(inplace=True),
+                nn.Linear(in_channels, in_channels),
+            )
 
         # First convolution which doesn't change the shape of the tensor
         # (b, c, h, w) -> (b, c, h, w) stride = 1
