@@ -181,13 +181,16 @@ class cVAE(pl.LightningModule):
             # Don't do any dropout within ESM model
             self.esm_model.eval()
             # Get the embeddings to the right shape for the decoder
-            if self.esm[self.labels]["latent_dim"] != 320:
-                compress = 320
-                self.embeddings = nn.Linear(
-                    self.esm[self.labels]["latent_dim"], compress
-                )
-            else:
-                self.embeddings = nn.Identity()
+            self.embeddings = nn.Sequential(
+                nn.Linear(
+                    self.esm[self.labels]["latent_dim"],
+                    self.esm[self.labels]["latent_dim"],
+                ),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.esm[self.labels]["latent_dim"], latent_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(latent_dim, latent_dim),
+            )
 
         # One-hot-encoded labels
         elif self.labels == "one-hot-encoding":
@@ -212,7 +215,7 @@ class cVAE(pl.LightningModule):
 
         # Once the latent space is constructed use the linear layer to get the shape for
         # the ResNet decoder
-        self.latents2features = nn.Linear(320 + latent_dim, linear_layer_params * 6 * 6)
+        self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
 
         # Decoder
         self.decoder = resnets[decoder_model]["decoder"][model_type](
