@@ -214,10 +214,6 @@ class ResBlockDecBasic(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        # Here we figure out whether the spatial dimensions
-        # of the tensor need to be upsampled
-        # (b, c, h, w) -> (b, c, h, w) stride = 1, conv2d
-        # (b, c, h, w) -> (b, c/2, h*2, w*2 ) stride = 2, convtranspose2d
         if stride > 1:
             self.conv2 = ResizeConv2d(
                 in_channels=in_channels,
@@ -256,7 +252,6 @@ class ResBlockDecBasic(nn.Module):
         self.activation = nn.ReLU(inplace=True)
 
         if self.conditional:
-            # The following is hard coded in, need to change this
             self.sequence_embedding = nn.Linear(conditional_dim, out_channels)
 
     def forward(self, data, labels=None):

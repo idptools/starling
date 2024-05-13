@@ -45,6 +45,6 @@ def esm_embeddings(
     # Calculate mean along the token dimension
     token_representations = token_representations.mean(dim=1)
 
-    token_representations = token_representations.to("cuda")
+    token_representations = token_representations.to(device)
 
     return token_representations
