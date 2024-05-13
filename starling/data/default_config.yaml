@@ -10,12 +10,11 @@ device:
 model:
   model_type: modified
   encoder_model: Resnet18
-  decoder_model: Resnet34
+  decoder_model: Resnet18
   base: 64
   KLD_weight: 1
   dimension: 384
   in_channels: 1
-  kernel_size: 3
   latent_dim: 256
   loss_type: nll
   lr_scheduler: CosineAnnealingLR
