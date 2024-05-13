@@ -200,6 +200,14 @@ class ResBlockDecBasic(nn.Module):
             "layer": LayerNorm,
         }
 
+        self.mlp = nn.Sequential(
+            nn.Linear(conditional_dim, in_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_channels, in_channels),
+            nn.ReLU(inplace=True),
+            nn.Linear(in_channels, in_channels),
+        )
+
         # First convolution which doesn't change the shape of the tensor
         # (b, c, h, w) -> (b, c, h, w) stride = 1
         self.conv1 = nn.Sequential(
@@ -251,24 +259,21 @@ class ResBlockDecBasic(nn.Module):
 
         self.activation = nn.ReLU(inplace=True)
 
-        if self.conditional:
-            self.sequence_embedding = nn.Linear(conditional_dim, out_channels)
-
     def forward(self, data, labels=None):
         # Setup the shortcut connection if necessary
         identity = self.shortcut(data)
         # First convolution of the data
+        if labels is not None:
+            labels = (
+                self.mlp(labels.view(labels.shape[0], -1)).unsqueeze(-1).unsqueeze(-1)
+            )
+        # Add the conditional information to the data
+        data = data + labels
         data = self.conv1(data)
         # Second convolution of the data
         data = self.conv2(data)
         # Connect the input data to the output of convolutions
         data += identity
-        if labels is not None:
-            data += (
-                self.sequence_embedding(labels.view(labels.shape[0], -1))
-                .unsqueeze(-1)
-                .unsqueeze(-1)
-            )
         # Run it through the activation function
         return self.activation(data)
 
