@@ -1,3 +1,5 @@
+from typing import List
+
 import torch.nn.functional as F
 from IPython import embed
 from torch import nn
@@ -16,7 +18,6 @@ class ResNet_Encoder(nn.Module):
         in_channels,
         num_blocks,
         norm,
-        kernel_size=None,
         base=64,
         block_type=ResBlockEncBasic,
     ) -> None:
@@ -95,11 +96,10 @@ class ResNet_Encoder(nn.Module):
 class ResNet_Decoder(nn.Module):
     def __init__(
         self,
-        out_channels,
-        num_blocks,
-        kernel_size,
-        dimension,
-        norm,
+        out_channels: int,
+        num_blocks: List,
+        dimension: int,
+        norm: str,
         block_type=ResBlockDecBasic,
         base=64,
         conditional=False,
@@ -228,21 +228,19 @@ class ConditionalSequential(nn.Sequential):
 # Current implementations of ResNets
 
 
-def Resnet18_Encoder(in_channels, kernel_size, norm, base):
+def Resnet18_Encoder(in_channels, norm, base):
     return ResNet_Encoder(
         in_channels,
         num_blocks=[2, 2, 2, 2],
-        kernel_size=kernel_size,
         base=base,
         norm=norm,
     )
 
 
-def Resnet18_Decoder(out_channels, kernel_size, dimension, base, norm, conditional):
+def Resnet18_Decoder(out_channels, dimension, base, norm, conditional):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[2, 2, 2, 2],
-        kernel_size=kernel_size,
         dimension=dimension,
         base=base,
         norm=norm,
@@ -250,22 +248,21 @@ def Resnet18_Decoder(out_channels, kernel_size, dimension, base, norm, condition
     )
 
 
-def Resnet34_Encoder(in_channels, kernel_size, base, norm):
+def Resnet34_Encoder(in_channels, base, norm):
     return ResNet_Encoder(
         in_channels,
         num_blocks=[3, 4, 6, 3],
-        kernel_size=kernel_size,
         base=base,
         norm=norm,
     )
 
 
-def Resnet34_Decoder(out_channels, kernel_size, dimension, base, norm):
+def Resnet34_Decoder(out_channels, dimension, base, norm, conditional):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[3, 4, 6, 3],
-        kernel_size=kernel_size,
         dimension=dimension,
         base=base,
         norm=norm,
+        conditional=conditional,
     )

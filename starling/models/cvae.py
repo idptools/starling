@@ -34,10 +34,9 @@ torch.set_float32_matmul_precision("high")
 class cVAE(pl.LightningModule):
     def __init__(
         self,
-        model,
+        model_type,
         in_channels,
         latent_dim,
-        kernel_size,
         dimension,
         loss_type,
         weights_type,
@@ -47,8 +46,8 @@ class cVAE(pl.LightningModule):
         labels="esm2_t6_8M_UR50D",
         decoder_conditioning=False,
         norm="instance",
-        encoder_block="modified",
-        decoder_block="modified",
+        encoder_model="modified",
+        decoder_model="modified",
         base=64,
     ):
         super().__init__()
@@ -135,8 +134,8 @@ class cVAE(pl.LightningModule):
         self.monitor = "epoch_val_loss"
 
         # Encoder
-        self.encoder = resnets[model]["encoder"][encoder_block](
-            in_channels=in_channels + 1, kernel_size=kernel_size, base=base, norm=norm
+        self.encoder = resnets[encoder_model]["encoder"][model_type](
+            in_channels=in_channels + 1, base=base, norm=norm
         )
 
         # This is usually 4 in ResNets
@@ -182,7 +181,13 @@ class cVAE(pl.LightningModule):
             # Don't do any dropout within ESM model
             self.esm_model.eval()
             # Get the embeddings to the right shape for the decoder
-            self.embeddings = nn.Linear(self.esm[self.labels]["latent_dim"], latent_dim)
+            if self.esm[self.labels]["latent_dim"] != 320:
+                compress = 320
+                self.embeddings = nn.Linear(
+                    self.esm[self.labels]["latent_dim"], compress
+                )
+            else:
+                self.embeddings = nn.Identity()
 
         # One-hot-encoded labels
         elif self.labels == "one-hot-encoding":
@@ -207,12 +212,11 @@ class cVAE(pl.LightningModule):
 
         # Once the latent space is constructed use the linear layer to get the shape for
         # the ResNet decoder
-        self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
+        self.latents2features = nn.Linear(320 + latent_dim, linear_layer_params * 6 * 6)
 
         # Decoder
-        self.decoder = resnets[model]["decoder"][decoder_block](
+        self.decoder = resnets[decoder_model]["decoder"][model_type](
             out_channels=in_channels,
-            kernel_size=kernel_size,
             dimension=dimension,
             base=base,
             norm=norm,
@@ -322,6 +326,7 @@ class cVAE(pl.LightningModule):
             )
         # One-hot-encode or learn the embedding space
         elif self.labels in ["one-hot-encoding", "learned-embeddings"]:
+            # Pad the sequence with 0s these get one-hot-encoded to [1, 0, ..., 0]
             sequences = [seq.ljust(self.dimension, "0") for seq in sequences]
             encoded = one_hot_encode(sequences)
             encoded = torch.from_numpy(encoded).to(self.device)
@@ -703,7 +708,7 @@ class cVAE(pl.LightningModule):
             logvar=logvar,
         )
 
-        if batch_idx % 100 == 0:
+        if batch_idx % 500 == 0:
             self.total_train_step_losses.append(loss["loss"])
             self.recon_step_losses.append(loss["recon"])
             self.KLD_step_losses.append(loss["KLD"])
@@ -885,16 +890,12 @@ class cVAE(pl.LightningModule):
         """
         # If no sequence is given, generate zeroes (no conditioning)
         if sequence is None:
-            labels = torch.zeros(
+            sequence = torch.zeros(
                 (num_samples, self.hparams.dimension, self.vocab_size),
                 dtype=torch.float32,
             ).to(self.device)
         else:
-            labels = one_hot_encode(sequence)
-            labels = MaxPad(labels, shape=(self.hparams.dimension, self.vocab_size))
-            labels = torch.from_numpy(labels.astype(np.float32)).to(self.device)
-            labels = labels.repeat(num_samples, 1, 1)
-
+            sequence = [sequence] * num_samples
         # Sample the latent encoding from N(0, I)
         latent_samples = torch.randn(num_samples, self.hparams.latent_dim).to(
             self.device
@@ -902,12 +903,11 @@ class cVAE(pl.LightningModule):
 
         # Decode the samples conditioned on sequence/labels
         with torch.no_grad():
-            generated_samples = self.decode(latent_samples, labels)
-            # generated_samples = self.symmetrize(generated_samples)
+            generated_samples = self.decode(latent_samples, sequence)
 
         if sequence is not None:
+            sequence_length = len(sequence[0])
             generated_samples = generated_samples[
-                :, :, : len(sequence), : len(sequence)
+                :, :, :sequence_length, :sequence_length
             ]
-
         return generated_samples
