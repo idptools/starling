@@ -101,6 +101,8 @@ class ResBlockEncBasic(nn.Module):
         out_channels,
         stride,
         norm,
+        conditional=False,
+        conditional_dim=320,
         kernel_size=None,
     ) -> None:
         super().__init__()
@@ -113,6 +115,15 @@ class ResBlockEncBasic(nn.Module):
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
         }
+
+        if conditional:
+            self.mlp = nn.Sequential(
+                nn.Linear(conditional_dim, in_channels),
+                nn.ReLU(inplace=True),
+                nn.Linear(in_channels, in_channels),
+                nn.ReLU(inplace=True),
+                nn.Linear(in_channels, in_channels),
+            )
 
         # First convolution of the ResNet with or without downsampling
         # depending on the downsample flag (stride=1 or 2)
@@ -162,9 +173,14 @@ class ResBlockEncBasic(nn.Module):
             self.shortcut = nn.Sequential()
         self.activation = nn.ReLU(inplace=True)
 
-    def forward(self, data):
+    def forward(self, data, labels=None):
         # Set up the shortcut connection if necessary
         identity = self.shortcut(data)
+        if labels is not None:
+            labels = (
+                self.mlp(labels.view(labels.shape[0], -1)).unsqueeze(-1).unsqueeze(-1)
+            )
+            data = data + labels
         # First convolution
         data = self.conv1(data)
         # Second convolution
@@ -183,10 +199,10 @@ class ResBlockDecBasic(nn.Module):
         out_channels,
         stride,
         norm,
-        kernel_size=None,
-        last_layer=None,
         conditional=False,
         conditional_dim=320,
+        last_layer=None,
+        kernel_size=None,
     ) -> None:
         super().__init__()
 
@@ -268,8 +284,8 @@ class ResBlockDecBasic(nn.Module):
             labels = (
                 self.mlp(labels.view(labels.shape[0], -1)).unsqueeze(-1).unsqueeze(-1)
             )
-        # Add the conditional information to the data
-        data = data + labels
+            # Add the conditional information to the data
+            data = data + labels
         data = self.conv1(data)
         # Second convolution of the data
         data = self.conv2(data)
