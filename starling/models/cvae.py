@@ -123,9 +123,10 @@ class cVAE(pl.LightningModule):
         self.KLD_weight = KLD_weight
 
         # these are used to monitor the training losses for the *EPOCH*
-        self.total_train_step_losses = []
-        self.recon_step_losses = []
-        self.KLD_step_losses = []
+        self.total_train_step_losses = 0
+        self.recon_step_losses = 0
+        self.KLD_step_losses = 0
+        self.num_batches = 0
 
         # Labels to condition the model on
         self.labels = labels
@@ -711,15 +712,13 @@ class cVAE(pl.LightningModule):
             logvar=logvar,
         )
 
-        if batch_idx % 500 == 0:
-            self.total_train_step_losses.append(loss["loss"])
-            self.recon_step_losses.append(loss["recon"])
-            self.KLD_step_losses.append(loss["KLD"])
-            # self.contacts_step_losses.append(loss["contacts"])
+        self.total_train_step_losses += loss["loss"].item()
+        self.recon_step_losses += loss["recon"].item()
+        self.KLD_step_losses += loss["KLD"].item()
+        self.num_batches += 1
 
         self.log("train_loss", loss["loss"], prog_bar=True)
         self.log("recon_loss", loss["recon"], prog_bar=True)
-        # self.log("contacts", loss["contacts"], prog_bar=True)
 
         return loss["loss"]
 
@@ -729,23 +728,20 @@ class cVAE(pl.LightningModule):
         Clear the lists that have been filled with losses during the epoch
         for memory management.
         """
-        epoch_mean = torch.stack(self.total_train_step_losses).mean()
+        epoch_mean = self.total_train_step_losses / self.num_batches
         self.log("epoch_train_loss", epoch_mean, prog_bar=True, sync_dist=True)
 
-        recon_mean = torch.stack(self.recon_step_losses).mean()
+        recon_mean = self.recon_step_losses / self.num_batches
         self.log("epoch_recon_loss", recon_mean, prog_bar=True, sync_dist=True)
 
-        # contacts_mean = torch.stack(self.contacts_step_losses).mean()
-        # self.log("epoch_contacts_loss", contacts_mean, prog_bar=True, sync_dist=True)
-
-        KLD_mean = torch.stack(self.KLD_step_losses).mean()
+        KLD_mean = self.KLD_step_losses / self.num_batches
         self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
 
-        # free up the memory
-        self.total_train_step_losses.clear()
-        self.recon_step_losses.clear()
-        self.KLD_step_losses.clear()
-        # self.contacts_step_losses.clear()
+        # Reset the total losses
+        self.total_train_step_losses = 0
+        self.recon_step_losses = 0
+        self.KLD_step_losses = 0
+        self.num_batches = 0
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
         """
