@@ -125,11 +125,6 @@ class ResBlockEncBasic(nn.Module):
                 nn.Linear(in_channels, in_channels),
             )
 
-        # First convolution of the ResNet with or without downsampling
-        # depending on the downsample flag (stride=1 or 2)
-        # (b, c, h, w) -> (b, c, h, w) stride = 1
-        # (b, c, h, w) -> (b, c*2, h /2, w /2 ) stride = 2
-
         self.conv1 = nn.Sequential(
             nn.Conv2d(
                 in_channels=in_channels,
@@ -142,9 +137,6 @@ class ResBlockEncBasic(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        # Second convolution which doesn't do any downsampling, but needs
-        # to setup in_channels and out_channels according to self.conv1
-        # (b, c, h, w) -> (b, c, h, w) stride = 1
         self.conv2 = nn.Sequential(
             nn.Conv2d(
                 in_channels=out_channels,
@@ -156,8 +148,6 @@ class ResBlockEncBasic(nn.Module):
             normalization[norm](out_channels),
         )
 
-        # Set up the shortcut if downsampling is done
-        # (b, c, h, w) -> (b, c*2, h /2, w /2 ) stride = 2
         if stride > 1:
             self.shortcut = nn.Sequential(
                 nn.Conv2d(
