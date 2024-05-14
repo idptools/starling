@@ -717,8 +717,8 @@ class cVAE(pl.LightningModule):
         self.KLD_step_losses += loss["KLD"].item()
         self.num_batches += 1
 
-        self.log("train_loss", loss["loss"], prog_bar=True)
-        self.log("recon_loss", loss["recon"], prog_bar=True)
+        self.log("train_loss", loss["loss"], prog_bar=True, batch_size=data.size(0))
+        self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=data.size(0))
 
         return loss["loss"]
 
@@ -775,7 +775,13 @@ class cVAE(pl.LightningModule):
             logvar=logvar,
         )
 
-        self.log("epoch_val_loss", loss["loss"], prog_bar=True, sync_dist=True)
+        self.log(
+            "epoch_val_loss",
+            loss["loss"],
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=data.size(0),
+        )
 
         return loss["loss"]
 
