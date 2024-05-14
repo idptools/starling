@@ -219,9 +219,13 @@ class ResNet_Decoder(nn.Module):
 
 
 class ConditionalSequential(nn.Sequential):
-    def forward(self, x, condition):
-        for module in self._modules.values():
-            x = module(x, condition)
+    def forward(self, x, condition=None):
+        if condition is None:
+            for module in self._modules.values():
+                x = module(x)
+        else:
+            for module in self._modules.values():
+                x = module(x, condition)
         return x
 
 
