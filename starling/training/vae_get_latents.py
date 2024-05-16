@@ -8,6 +8,7 @@ from IPython import embed
 from starling.data.argument_parser import get_params
 from starling.data.myloader import MatrixDataModule
 from starling.models.ae import AE
+from starling.models.cvae import cVAE
 from starling.models.vae import VAE
 
 
@@ -45,31 +46,38 @@ def vae_generate_latents():
 
     args = parser.parse_args()
 
+    device = torch.device(f"cuda:{args.gpu_id[0]}")
+    model = cVAE.load_from_checkpoint(args.model_path, map_location=device)
+    model.eval()
+
     # Set up data loaders
     dataset = MatrixDataModule(
         test_data=args.test_data,
         batch_size=args.batch_size,
-        target_shape=192,
+        target_shape=384,
     )
-
-    device = torch.device(f"cuda:{args.gpu_id[0]}")
-    # model = VAE.load_from_checkpoint(args.model_path, map_location=device)
-    model = AE.load_from_checkpoint(args.model_path, map_location=device)
-    model.eval()
-
     dataset.setup(stage="test")
     predict_dataloader = dataset.test_dataloader()
 
-    latents = []
+    latents = {}
 
     for batch in predict_dataloader:
-        x = batch["input"].to(f"cuda:{args.gpu_id[0]}")
-        # mu, logvar = model.encode(x)
-        # latent_encoding = model.reparameterize(mu, logvar)
-        latent_encoding = model.encode(x)
-        latents.append(latent_encoding.cpu().detach().numpy())
+        data = batch["data"].to(f"cuda:{args.gpu_id[0]}")
+        encoder_labels = batch["encoder_condition"].to(f"cuda:{args.gpu_id[0]}")
+        sequences = batch["decoder_condition"]
 
-    embed()
+        with torch.no_grad():
+            mu, logvar = model.encode(data, labels=encoder_labels)
+            latent_encoding = model.reparameterize(mu, logvar)
+
+        latent_encoding = latent_encoding.cpu().detach().numpy()
+        for num, seq in enumerate(sequences):
+            if seq in latents.keys():
+                latents[seq].append(latent_encoding[num])
+            else:
+                latents[seq] = [latent_encoding[num]]
+
+        embed()
 
 
 if __name__ == "__main__":
