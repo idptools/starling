@@ -216,7 +216,7 @@ class cVAE(pl.LightningModule):
 
         # Once the latent space is constructed use the linear layer to get the shape for
         # the ResNet decoder
-        self.latents2features = nn.Linear(2 * latent_dim, linear_layer_params * 6 * 6)
+        self.latents2features = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
 
         # Decoder
         self.decoder = resnets[decoder_model]["decoder"][model_type](
@@ -280,11 +280,11 @@ class cVAE(pl.LightningModule):
         # Concatenation vs summing not clear which one is better
 
         # Concatenate the latents and the labels
-        data = torch.cat(
-            (latents, self.embeddings(torch.flatten(labels, start_dim=1))), dim=1
-        )
+        # data = torch.cat(
+        # (latents, self.embeddings(torch.flatten(labels, start_dim=1))), dim=1
+        # )
         # Summing the labels to latents
-        # data = latents + labels_embedded
+        data = latents + self.embeddings(labels)
 
         # Linear layer first to get the shape of the final encoding layer
         data = self.latents2features(data)
