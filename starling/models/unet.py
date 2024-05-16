@@ -56,7 +56,7 @@ class UNet(nn.Module):
         # Encoder part of UNet
 
         self.init_conv = nn.Sequential(
-            nn.Conv2d(in_channels, base, kernel_size=7, stride=2, padding=3),
+            nn.Conv2d(in_channels, base, kernel_size=7, stride=1, padding=3),
             nn.InstanceNorm2d(base),
             nn.ReLU(inplace=True),
         )
@@ -65,7 +65,7 @@ class UNet(nn.Module):
         layer_in_channels = [base * (2**i) for i in range(len(blocks))]
 
         self.encoder_layer1 = self._make_encoder_layer(
-            ResBlockEncBasic, layer_in_channels[0], blocks[0], True, stride=1
+            ResBlockEncBasic, layer_in_channels[0], blocks[0], True, stride=2
         )
         self.encoder_layer2 = self._make_encoder_layer(
             ResBlockEncBasic, layer_in_channels[1], blocks[1], True, stride=2
@@ -128,14 +128,14 @@ class UNet(nn.Module):
         self.final_conv = ResizeConv2d(
             in_channels=base,
             out_channels=out_channels,
-            kernel_size=7,
-            padding=3,
+            kernel_size=3,
+            padding=1,
             scale_factor=2,
-            norm=nn.InstanceNorm2d,
+            norm=None,
             activation="relu",
         )
 
-        self.final2_conv = nn.Conv2d(out_channels, out_channels, kernel_size=1)
+        # self.final2_conv = nn.Conv2d(out_channels, out_channels, kernel_size=1)
 
     def _make_encoder_layer(self, block, out_channels, blocks, conditional, stride=1):
         layers = []
@@ -180,9 +180,9 @@ class UNet(nn.Module):
         if labels is not None:
             time += labels
 
+        # embed()
         # Start the UNet pass
         x = self.init_conv(x)
-        # x_init = x.clone()
 
         # Encoder forward passes
         x = self.encoder_layer1(x, time)
@@ -220,7 +220,7 @@ class UNet(nn.Module):
         x = self.decoder_layer4(x, time)
 
         # Residual connection from the encoder
+        x = x + x_layer1
         x = self.final_conv(x)
 
-        x = self.final2_conv(x)
         return x

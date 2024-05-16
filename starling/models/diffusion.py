@@ -1,6 +1,6 @@
-import math
-from typing import Union
+from typing import List, Union
 
+import esm
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -13,11 +13,13 @@ from torch.optim.lr_scheduler import (
 )
 from tqdm import tqdm
 
+from starling.data.esm_embeddings import esm_embeddings
 from starling.data.schedulers import (
     cosine_beta_schedule,
     linear_beta_schedule,
     sigmoid_beta_schedule,
 )
+from starling.models.cvae import cVAE
 
 # Adapted from https://github.com/Camaltra/this-is-not-real-aerial-imagery/blob/main/src/ai/diffusion_process.py
 
@@ -43,17 +45,27 @@ class DiffusionModel(pl.LightningModule):
     def __init__(
         self,
         model: nn.Module,
+        encoder_model: nn.Module,
         image_size: int,
         *,
-        beta_scheduler: str = "linear",
+        beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         schedule_fn_kwargs: Union[dict, None] = None,
+        labels="esm2_t6_8M_UR50D",
+        set_lr=0.064,
+        config_scheduler="CosineAnnealingLR",
     ) -> None:
         super().__init__()
         self.model = model
+        self.encoder_model = encoder_model
+        self.encoder_model.eval()
 
         self.channels = self.model.in_channels
         self.image_size = image_size
+
+        # Learning rate params
+        self.set_lr = set_lr
+        self.config_scheduler = config_scheduler
 
         self.beta_scheduler_fn = self.SCHEDULER_MAPPING.get(beta_scheduler)
         if self.beta_scheduler_fn is None:
@@ -89,6 +101,64 @@ class DiffusionModel(pl.LightningModule):
         self.sampling_timesteps = timesteps
 
         self.monitor = "epoch_val_loss"
+
+        # ESM models currently supported
+        self.esm = {
+            "esm2_t6_8M_UR50D": {
+                "model_name": esm.pretrained.esm2_t6_8M_UR50D(),
+                "layers": 6,
+                "latent_dim": 320,
+            },
+            "esm2_t12_35M_UR50D": {
+                "model_name": esm.pretrained.esm2_t12_35M_UR50D(),
+                "layers": 12,
+                "latent_dim": 480,
+            },
+            "esm2_t30_150M_UR50D": {
+                "model_name": esm.pretrained.esm2_t30_150M_UR50D(),
+                "layers": 30,
+                "latent_dim": 640,
+            },
+        }
+
+        # Making labels for the decoder
+
+        # ESM2 model to generate labels
+        self.labels = labels
+        if self.labels in self.esm.keys():
+            self.esm_model, self.esm_alphabet = self.esm[self.labels]["model_name"]
+            self.esm_layers = self.esm[self.labels]["layers"]
+            # Freeze the parameters, we don't want to keep training ESM
+            for param in self.esm_model.parameters():
+                param.requires_grad = False
+            # Don't do any dropout within ESM model
+            self.esm_model.eval()
+            # Get the embeddings to the right shape for the decoder
+            # self.mlp = nn.Sequential(
+            #     nn.Linear(
+            #         self.esm[self.labels]["latent_dim"],
+            #         self.esm[self.labels]["latent_dim"],
+            #     ),
+            #     nn.ReLU(inplace=True),
+            #     nn.Linear(self.esm[self.labels]["latent_dim"], image_size**2),
+            #     nn.ReLU(inplace=True),
+            #     nn.Linear(image_size**2, image_size**2),
+            # )
+            self.mlp = nn.Sequential(
+                nn.Linear(
+                    self.esm[self.labels]["latent_dim"],
+                    self.esm[self.labels]["latent_dim"],
+                ),
+                nn.ReLU(inplace=False),
+                nn.Linear(self.esm[self.labels]["latent_dim"], 512),
+            )
+
+            self.final_mlp_stage = nn.Sequential(
+                nn.ReLU(inplace=False), nn.Linear(512, 256)
+            )
+            self.final_mlp_stage_unet_condition = nn.Sequential(
+                nn.ReLU(inplace=False), nn.Linear(512, 512)
+            )
 
     @torch.inference_mode()
     def p_sample(self, x: torch.Tensor, timestamp: int) -> torch.Tensor:
@@ -159,98 +229,38 @@ class DiffusionModel(pl.LightningModule):
 
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-    def symmetrize(self, data_reconstructed: torch.Tensor) -> torch.Tensor:
+    def sequence2labels(self, sequences: List) -> torch.Tensor:
         """
-        Symmetrizes the reconstructed data so that the weights can learn other patterns.
-        Loss calculated only on the reconstruction faithfulness of the upper triangle
-        of the distance map
+        Converts sequences to labels based on user defined models,
+        It can either use some ESM model to generate labels, one-hot-encode,
+        or learn the embeddings.
 
         Parameters
         ----------
-        data_reconstructed : torch.Tensor
-            Reconstructed data; output of the decoder
+        sequences : List
+            A list of sequences to convert to labels
 
         Returns
         -------
         torch.Tensor
-            Symmetric version of the reconstructed data
-        """
-        upper_triangle = data_reconstructed.triu()
-        symmetrized_array = upper_triangle + upper_triangle.t()
-        return symmetrized_array.fill_diagonal_(0)
-
-    def calculate_loss(
-        self,
-        data: torch.Tensor,
-        noise: torch.Tensor,
-        noise_predicted: torch.Tensor,
-    ) -> dict:
-        """
-        Calculates the loss of the VAE, using the sum between the KLD loss
-        of the latent space to N(0, I) and either mean squared error
-        between the reconstructed data and the ground truth or
-        the negative log likelihood of the input data given the latent space
-        under a Gaussian assumption. Additional loss is added to ensure the
-        contacts are reconstructed correctly.
-
-        Parameters
-        ----------
-        data_reconstructed : torch.Tensor
-            Reconstructed data; output of the VAE
-        data : torch.Tensor
-            Ground truth data, input to the VAE
-        mu : torch.Tensor
-            Means of the normal distributions of the latent space
-        logvar : torch.Tensor
-            Log variances of the normal distributions of the latent space
-        KLD_weight : int, optional
-            How much to weight the importance of the regularization term of the
-            latent space. Setting this to lower than 1 will lead to less regular
-            and interpretable latent space, by default None
-
-        Returns
-        -------
-        dict
-            Returns a dictionary containing the total loss, reconstruction loss, and KLD loss
+            Returns the labels for the decoder
 
         Raises
         ------
         ValueError
-            If the loss type is not mse or elbo
+            If the labels are not one of the three options
         """
-
-        # Find where the padding starts by counting the number of
-        start_of_padding = torch.sum(data != 0, dim=(1, 2))[:, 0] + 1
-
-        # Initialize the losses
-        recon = 0
-
-        # Input is padded, so the padding needs to be removed before calculating loss
-        for num, padding_start in enumerate(start_of_padding):
-            noise_predicted_no_padding = noise_predicted[num][0][
-                :padding_start, :padding_start
-            ]
-
-            # Make the reconstructed map symmetric so that weights are freed to learn other
-            # patterns
-            noise_predicted_no_padding = self.symmetrize(noise_predicted_no_padding)
-
-            # Get unpadded ground truth
-            noise_no_padding = noise[num][0][:padding_start, :padding_start]
-            noise_no_padding = self.symmetrize(noise_no_padding)
-
-            # Get the weights for the loss
-            # weights = self.get_weights(data_no_padding, scale=self.weights_type)
-
-            # Mean squared error weighted by ground truth distance
-            mse_loss = F.mse_loss(
-                noise_no_padding, noise_predicted_no_padding, reduction="none"
+        # Generate labels using one of the ESM models
+        if self.labels in self.esm.keys():
+            encoded = esm_embeddings(
+                self.esm_model,
+                self.esm_alphabet,
+                sequences,
+                self.device,
+                self.esm_layers,
             )
-            recon += mse_loss.sum()
 
-        recon /= num + 1
-
-        return recon
+        return encoded
 
     def p_loss(
         self,
@@ -264,15 +274,25 @@ class DiffusionModel(pl.LightningModule):
             noise = torch.randn_like(x_start)
         x_noised = self.q_sample(x_start, t, noise=noise)
         if labels is not None:
-            x_noised = torch.cat([x_noised, labels], dim=1)
+            labels = self.sequence2labels(labels)
+            labels_linear = self.mlp(labels)
+            second_channel_labels = self.final_mlp_stage(labels_linear)
 
-        predicted_noise = self.model(x_noised, t)
-
-        if loss_type == "l2":
-            # loss = F.mse_loss(noise, predicted_noise, reduction="sum")
-            loss = self.calculate_loss(
-                data=x_start, noise=noise, noise_predicted=predicted_noise
+            x_noised = torch.cat(
+                [
+                    x_noised,
+                    second_channel_labels.view(-1, 1, self.image_size, self.image_size),
+                ],
+                dim=1,
             )
+
+            unet_conditional_input = self.final_mlp_stage_unet_condition(labels_linear)
+
+            predicted_noise = self.model(x_noised, t, unet_conditional_input)[0]
+        else:
+            predicted_noise = self.model(x_noised, t)[0]
+        if loss_type == "l2":
+            loss = F.mse_loss(noise, predicted_noise)
         elif loss_type == "l1":
             loss = F.l1_loss(noise, predicted_noise)
         else:
@@ -289,9 +309,18 @@ class DiffusionModel(pl.LightningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         data = batch["data"]
-        labels = batch["encoder_condition"]
+        encoder_labels = batch["encoder_condition"]
+        unet_labels = batch["decoder_condition"]
 
-        loss = self.forward(data, labels)
+        with torch.no_grad():
+            mu, logvar = self.encoder_model.encode(data, labels=encoder_labels)
+            latent_encoding = self.encoder_model.reparameterize(mu, logvar)
+            latent_encoding = latent_encoding.view(
+                -1, 1, self.image_size, self.image_size
+            )
+
+        loss = self.forward(latent_encoding, unet_labels)
+        # loss = self.forward(batch[0], labels=None)
 
         self.log("train_loss", loss, prog_bar=True)
 
@@ -299,9 +328,19 @@ class DiffusionModel(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         data = batch["data"]
-        labels = batch["encoder_condition"]
+        encoder_labels = batch["encoder_condition"]
+        unet_labels = batch["decoder_condition"]
 
-        loss = self.forward(data, labels)
+        with torch.no_grad():
+            mu, logvar = self.encoder_model.encode(data, labels=encoder_labels)
+            latent_encoding = self.encoder_model.reparameterize(mu, logvar)
+            latent_encoding = latent_encoding.view(
+                -1, 1, self.image_size, self.image_size
+            )
+
+        loss = self.forward(latent_encoding, unet_labels)
+
+        # loss = self.forward(batch[0], labels=None)
 
         self.log("epoch_val_loss", loss, prog_bar=True, sync_dist=True)
 
@@ -346,9 +385,6 @@ class DiffusionModel(pl.LightningModule):
                 "weight_decay": 0.0,  # Exclude weight decay for parameters with 'bn' in name
             },
         ]
-
-        self.set_lr = 0.01
-        self.config_scheduler = "CosineAnnealingLR"
 
         optimizer = torch.optim.SGD(
             optimizer_params,

@@ -2,6 +2,7 @@ import argparse
 import os
 
 import pytorch_lightning as pl
+import torch
 import wandb
 import yaml
 from IPython import embed
@@ -10,6 +11,7 @@ from pytorch_lightning.loggers import WandbLogger
 
 from starling.data.argument_parser import get_params
 from starling.data.myloader import MatrixDataModule
+from starling.models.cvae import cVAE
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNet
 
@@ -39,30 +41,66 @@ def train_vae():
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
-    # Set up data loaders
-    dataset = MatrixDataModule(
-        **config["data"], target_shape=config["model"]["dimension"]
-    )
+    # # Set up data loaders
+    dataset = MatrixDataModule(**config["data"], target_shape=384)
 
     dataset.setup(stage="fit")
+    # from torch.utils.data import DataLoader, random_split
+    # from torchvision import transforms
+    # from torchvision.datasets import MNIST
 
-    # Whether to load a pretrained model or train from scratch
+    # transform_with_padding = transforms.Compose(
+    #     [
+    #         transforms.Pad(2, 2),  # Add padding to the images
+    #         transforms.ToTensor(),
+    #         # transforms.Normalize((0.5,), (0.5,)),
+    #     ]
+    # )
 
-    UNet_model = UNet(
+    # train_ds = MNIST(
+    #     "MNIST/raw/train-images-idx3-ubyte",
+    #     train=True,
+    #     download=True,
+    #     transform=transform_with_padding,
+    # )
+    # dataset = DataLoader(train_ds, batch_size=256)
+
+    # Loading in a model from diffusers, will replace with my own UNet model
+    # Assuming I can make it work
+
+    import diffusers
+
+    UNet_model = diffusers.UNet2DModel(
+        sample_size=16,
         in_channels=2,
         out_channels=1,
-        base=64,
-        dimension=384,
-        norm="instance",
-        blocks=[2, 2, 2, 2],
-        sinusoidal_pos_emb_theta=10000,
-        time_dim=320,
+        layers_per_block=2,
+        class_embed_type="identity",
+        block_out_channels=(128, 128, 256, 512),
+        down_block_types=(
+            "DownBlock2D",
+            "DownBlock2D",
+            "AttnDownBlock2D",
+            "DownBlock2D",
+        ),
+        up_block_types=(
+            "UpBlock2D",
+            "AttnUpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+        ),
+    )
+    device = torch.device(f"cuda:{config['device']['cuda'][0]}")
+    encoder_model = cVAE.load_from_checkpoint(
+        "/home/bnovak/projects/autoencoder_training/VAE_training/testing_cond_vae/nll_ESM_8M_conditioning_decoder_conditioning_mlp/model-kernel-epoch=00-epoch_val_loss=5.84.ckpt",
+        map_location=device,
     )
 
     diffusion_model = DiffusionModel(
         model=UNet_model,
-        image_size=384,
-        beta_scheduler="linear",
+        encoder_model=encoder_model,
+        image_size=16,
+        beta_scheduler="cosine",
         timesteps=1000,
         schedule_fn_kwargs=None,
     )
