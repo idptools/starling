@@ -14,6 +14,7 @@ from torch.optim.lr_scheduler import (
 )
 
 from starling.data.data_wrangler import MaxPad, one_hot_encode
+from starling.data.distributions import DiagonalGaussianDistribution
 from starling.data.esm_embeddings import esm_embeddings
 from starling.models import resnets_original, vae_components
 
@@ -45,6 +46,7 @@ class cVAE(pl.LightningModule):
         set_lr,
         labels="esm2_t6_8M_UR50D",
         decoder_conditioning=False,
+        encoder_conditioning=True,
         norm="instance",
         encoder_model="modified",
         decoder_model="modified",
@@ -128,28 +130,41 @@ class cVAE(pl.LightningModule):
         self.KLD_step_losses = 0
         self.num_batches = 0
 
-        # Labels to condition the model on
+        # Pick how the encoder and decoder are conditioned
         self.labels = labels
         self.decoder_conditioning = decoder_conditioning
+        self.encoder_conditioning = encoder_conditioning
 
         self.monitor = "epoch_val_loss"
 
         # Encoder
+        if self.encoder_conditioning:
+            in_channels += 1
         self.encoder = resnets[encoder_model]["encoder"][model_type](
-            in_channels=in_channels + 1, base=base, norm=norm
+            in_channels=in_channels, base=base, norm=norm
         )
 
         # This is usually 4 in ResNets
         num_stages = 4
         expansion = self.encoder.block_type.expansion
         exponent = num_stages - 1 if expansion == 1 else num_stages + 1
-        linear_layer_params = int(base * 2**exponent)
-        self.shape_from_final_encoding_layer = linear_layer_params, 6, 6
+
+        # Spatial size of the distance map after the final encoding layer
+        self.compressed_size = dimension / (2**5)
+        final_channels = int(base * 2**exponent)
+        self.shape_from_final_encoding_layer = (
+            final_channels,
+            self.compressed_size,
+            self.compressed_size,
+        )
 
         # Latent space (some parts are hard coded in - need to change this)
-        self.conditioning_size = latent_dim
-        self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
-        self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
+        self.encoder_to_latent = nn.Sequential(
+            nn.Conv2d(
+                final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
+            ),
+            nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
+        )
 
         # ESM models that are supported right now
         self.esm = {
@@ -168,9 +183,12 @@ class cVAE(pl.LightningModule):
                 "layers": 30,
                 "latent_dim": 640,
             },
+            "esm2_t33_650M_UR50D": {
+                "model_name": esm.pretrained.esm2_t33_650M_UR50D(),
+                "layers": 33,
+                "latent_dim": 1280,
+            },
         }
-
-        # Making labels for the decoder
 
         # ESM2 model to generate labels
         if self.labels in self.esm.keys():
@@ -188,9 +206,11 @@ class cVAE(pl.LightningModule):
                     self.esm[self.labels]["latent_dim"],
                 ),
                 nn.ReLU(inplace=True),
-                nn.Linear(self.esm[self.labels]["latent_dim"], latent_dim),
+                nn.Linear(
+                    self.esm[self.labels]["latent_dim"], int(self.compressed_size**2)
+                ),
                 nn.ReLU(inplace=True),
-                nn.Linear(latent_dim, latent_dim),
+                nn.Linear(int(self.compressed_size**2), int(self.compressed_size**2)),
             )
 
         # One-hot-encoded labels
@@ -214,9 +234,14 @@ class cVAE(pl.LightningModule):
                 "Decoder conditioning is set to True but no labels are given"
             )
 
-        # Once the latent space is constructed use the linear layer to get the shape for
-        # the ResNet decoder
-        self.latents2features = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
+        # Latent space to decoder space
+        if self.labels is not None:
+            latent_dim = latent_dim + 1
+
+        self.latent_to_decoder = nn.Sequential(
+            nn.Conv2d(latent_dim, latent_dim, kernel_size=1, stride=1),
+            nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
+        )
 
         # Decoder
         self.decoder = resnets[decoder_model]["decoder"][model_type](
@@ -250,16 +275,20 @@ class cVAE(pl.LightningModule):
         List[Tuple[torch.Tensor, torch.Tensor]]
             Return the mean and log variance of the latent space
         """
+
         data = torch.cat((data, labels), dim=1)
 
         data = self.encoder(data)
-        data = torch.flatten(data, start_dim=1)
-        mu = self.fc_mu(data)
-        log_var = self.fc_var(data)
 
-        return [mu, log_var]
+        data = self.encoder_to_latent(data)
 
-    def decode(self, latents: torch.Tensor, sequences: torch.Tensor) -> torch.Tensor:
+        moments = DiagonalGaussianDistribution(data)
+
+        return moments
+
+    def decode(
+        self, latents: torch.Tensor, sequences: torch.Tensor = None
+    ) -> torch.Tensor:
         """
         Decodes the latent space back into the original data
 
@@ -275,28 +304,29 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Returns the reconstructed data
         """
-        labels = self.sequence2labels(sequences)
+        if sequences is not None:
+            labels = self.sequence2labels(sequences)
 
-        # Concatenation vs summing not clear which one is better
-
-        # Concatenate the latents and the labels
-        # data = torch.cat(
-        # (latents, self.embeddings(torch.flatten(labels, start_dim=1))), dim=1
-        # )
-        # Summing the labels to latents
-        data = latents + self.embeddings(labels)
+            # Concatenate the latents and the labels
+            latents = torch.cat(
+                (
+                    latents,
+                    self.embeddings(labels).view(
+                        -1, 1, int(self.compressed_size), int(self.compressed_size)
+                    ),
+                ),
+                dim=1,
+            )
 
         # Linear layer first to get the shape of the final encoding layer
-        data = self.latents2features(data)
-
-        data = data.view(-1, *self.shape_from_final_encoding_layer)
+        latents = self.latent_to_decoder(latents)
 
         # Decode the data
         if not self.decoder_conditioning:
             labels = None
 
-        data = self.decoder(data, labels)
-        return data
+        latents = self.decoder(latents, labels)
+        return latents
 
     def sequence2labels(self, sequences: List) -> torch.Tensor:
         """
@@ -478,46 +508,6 @@ class cVAE(pl.LightningModule):
 
         return log_pxz
 
-    def BCE_contact_map_loss(
-        self,
-        ground_truth_dist_map: torch.Tensor,
-        reconstructed_dist_map: torch.Tensor,
-        weights: torch.Tensor = None,
-    ) -> torch.Tensor:
-        """
-        Calculates the binary cross entropy loss between the ground truth distance map
-        and the reconstructed distance map. This is used to calculate the loss of the
-        contact map. The contact map is defined as the distance between two residues
-        being between 1 and 25 angstroms.
-
-        Parameters
-        ----------
-        ground_truth_dist_map : torch.Tensor
-            Ground truth distance map that will be converted to a contact map
-        reconstructed_dist_map : torch.Tensor
-            Reconstructed distance map that will be converted to a contact map
-        weights : torch.Tensor
-            Weights to be applied to the loss, mostly here to exclude the diagonal
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the binary cross entropy loss between the two contact maps
-        """
-
-        # Get the mask for ground truth and reconstructed contacts
-        true_contacts_mask = (1 < ground_truth_dist_map) & (ground_truth_dist_map < 25)
-        reconstructed_contacts_mask = (1 < reconstructed_dist_map) & (
-            reconstructed_dist_map < 25
-        )
-
-        # Calculate the binary cross entropy loss
-        BCE_loss = torch.dist(
-            reconstructed_contacts_mask.float(), true_contacts_mask.float()
-        )
-
-        return BCE_loss
-
     def vae_loss(
         self,
         data_reconstructed: torch.Tensor,
@@ -567,7 +557,6 @@ class cVAE(pl.LightningModule):
 
         # Initialize the losses
         recon = 0
-        # contact_map_loss = 0
 
         # Input is padded, so the padding needs to be removed before calculating loss
         for num, padding_start in enumerate(start_of_padding):
@@ -662,24 +651,13 @@ class cVAE(pl.LightningModule):
                 f"Encoder labels shape {encoder_labels.shape} does not match data shape {data.shape}"
             )
 
-        mu, logvar = self.encode(data, labels=encoder_labels)
-        latent_encoding = self.reparameterize(mu, logvar)
+        moments = self.encode(data, labels=encoder_labels)
 
-        if decoder_labels is None or len(decoder_labels) == 0:
-            decoder_labels = torch.zeros(
-                (data.shape[0], data.shape[-2], self.vocab_size),
-                dtype=torch.float32,
-                device=data.device,
-            )
-
-        # if decoder_labels.shape != (data.shape[0], data.shape[-1], 21):
-        #     raise ValueError(
-        #         f"Decoder labels shape {decoder_labels.shape} does not match one-hot-encoded shape {latent_encoding.shape}"
-        #     )
+        latent_encoding = moments.sample()
 
         data_reconstructed = self.decode(latent_encoding, sequences=decoder_labels)
 
-        return data_reconstructed, mu, logvar
+        return data_reconstructed, moments
 
     def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
         """
@@ -699,17 +677,20 @@ class cVAE(pl.LightningModule):
         """
         data = batch["data"]
         encoder_labels = batch["encoder_condition"]
-        decoder_labels = batch["decoder_condition"]
+        if self.labels is not None:
+            decoder_labels = batch["decoder_condition"]
+        else:
+            decoder_labels = None
 
-        data_reconstructed, mu, logvar = self.forward(
+        data_reconstructed, moments = self.forward(
             data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
         )
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=mu,
-            logvar=logvar,
+            mu=moments.mean,
+            logvar=moments.logvar,
         )
 
         self.total_train_step_losses += loss["loss"].item()
@@ -762,17 +743,21 @@ class cVAE(pl.LightningModule):
         """
         data = batch["data"]
         encoder_labels = batch["encoder_condition"]
-        decoder_labels = batch["decoder_condition"]
 
-        data_reconstructed, mu, logvar = self.forward(
+        if self.labels is not None:
+            decoder_labels = batch["decoder_condition"]
+        else:
+            decoder_labels = None
+
+        data_reconstructed, moments = self.forward(
             data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
         )
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=mu,
-            logvar=logvar,
+            mu=moments.mean,
+            logvar=moments.logvar,
         )
 
         self.log(
@@ -902,9 +887,9 @@ class cVAE(pl.LightningModule):
         else:
             sequence = [sequence] * num_samples
         # Sample the latent encoding from N(0, I)
-        latent_samples = torch.randn(num_samples, self.hparams.latent_dim).to(
-            self.device
-        )
+        latent_samples = torch.randn(
+            num_samples, 1, int(self.compressed_size), int(self.compressed_size)
+        ).to(self.device)
 
         # Decode the samples conditioned on sequence/labels
         with torch.no_grad():
