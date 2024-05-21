@@ -29,7 +29,10 @@ def esm_embeddings(
     torch.Tensor
         Extracted embeddings for each sequences in the provided list.
     """
-    sequences = [(f"protein_{num}", seq) for num, seq in enumerate(sequences)]
+    # sequences = [(f"protein_{num}", seq) for num, seq in enumerate(sequences)]
+    sequences = list(
+        map(lambda num_seq: (f"protein_{num_seq[0]}", num_seq[1]), enumerate(sequences))
+    )
 
     batch_converter = alphabet.get_batch_converter()
     batch_labels, batch_strs, batch_tokens = batch_converter(sequences)
