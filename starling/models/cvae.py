@@ -138,10 +138,11 @@ class cVAE(pl.LightningModule):
         self.monitor = "epoch_val_loss"
 
         # Encoder
+        encoder_chanel = in_channels
         if self.encoder_conditioning:
-            in_channels += 1
+            encoder_chanel += 1
         self.encoder = resnets[encoder_model]["encoder"][model_type](
-            in_channels=in_channels, base=base, norm=norm
+            in_channels=encoder_chanel, base=base, norm=norm
         )
 
         # This is usually 4 in ResNets
@@ -150,7 +151,7 @@ class cVAE(pl.LightningModule):
         exponent = num_stages - 1 if expansion == 1 else num_stages + 1
 
         # Spatial size of the distance map after the final encoding layer
-        self.compressed_size = dimension / (2**5)
+        self.compressed_size = dimension / (2**num_stages)
         final_channels = int(base * 2**exponent)
         self.shape_from_final_encoding_layer = (
             final_channels,
@@ -254,7 +255,7 @@ class cVAE(pl.LightningModule):
 
         # Params to learn for reconstruction loss
         if self.loss_type == "nll":
-            self.log_std = nn.Parameter(torch.zeros((dimension * (dimension + 1) // 2)))
+            self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
 
     def encode(
         self, data: torch.Tensor, labels: torch.Tensor
@@ -276,7 +277,8 @@ class cVAE(pl.LightningModule):
             Return the mean and log variance of the latent space
         """
 
-        data = torch.cat((data, labels), dim=1)
+        if labels is not None:
+            data = torch.cat((data, labels), dim=1)
 
         data = self.encoder(data)
 
@@ -444,28 +446,11 @@ class cVAE(pl.LightningModule):
         else:
             raise ValueError(f"Variable name '{scale}' for get_weights does not exist")
 
-    def symmetrize(self, data_reconstructed: torch.Tensor) -> torch.Tensor:
-        """
-        Symmetrizes the reconstructed data so that the weights can learn other patterns.
-        Loss calculated only on the reconstruction faithfulness of the upper triangle
-        of the distance map
-
-        Parameters
-        ----------
-        data_reconstructed : torch.Tensor
-            Reconstructed data; output of the decoder
-
-        Returns
-        -------
-        torch.Tensor
-            Symmetric version of the reconstructed data
-        """
-        upper_triangle = data_reconstructed.triu()
-        symmetrized_array = upper_triangle + upper_triangle.t()
-        return symmetrized_array.fill_diagonal_(0)
-
     def gaussian_likelihood(
-        self, data_hat: torch.Tensor, log_std: torch.Tensor, data: torch.Tensor
+        self,
+        data_reconstructed: torch.Tensor,
+        log_std: torch.Tensor,
+        data: torch.Tensor,
     ) -> torch.Tensor:
         """
         Calculates the likelihood of input data given latent space (p(x|z))
@@ -475,7 +460,7 @@ class cVAE(pl.LightningModule):
 
         Parameters
         ----------
-        data_hat : torch.Tensor
+        data_reconstructed : torch.Tensor
             A tensor containing the reconstructed data that will be treated as the mean to
             parameterize the Gaussian distribution
         log_std : torch.Tensor
@@ -488,20 +473,9 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Returns the likelihood of the input data given the latent space
         """
-        std = torch.exp(log_std)
-        mean = data_hat
-        input_size = mean.shape[0]
-
-        # Construct the covariance matrix
-        matrix_std = torch.zeros_like(mean).to(torch.float32)
-        triu_indices = torch.triu_indices(input_size, input_size, offset=0)
-        matrix_std[triu_indices[0], triu_indices[1]] = std[
-            : input_size * (input_size + 1) // 2
-        ]
-        matrix_std = matrix_std + matrix_std.t() - torch.diag(matrix_std.diag())
 
         # Create the normal distributions
-        dist = torch.distributions.Normal(mean, matrix_std)
+        dist = torch.distributions.Normal(data_reconstructed, torch.exp(log_std))
 
         # Calculate log probability of seeing image under p(x|z)
         log_pxz = dist.log_prob(data)
@@ -550,68 +524,37 @@ class cVAE(pl.LightningModule):
             If the loss type is not mse or elbo
         """
         if KLD_weight is None:
-            KLD_weight = self.KLD_weight
+            KLD_weight = float(self.KLD_weight)
 
-        # Find where the padding starts by counting the number of
-        start_of_padding = torch.sum(data != 0, dim=(1, 2))[:, 0] + 1
+        # Find out where 0s are in the data
+        mask = (data != 0).float()
+        # Remove the lower triangle of the mask so that loss is only calculated on the upper triangle of the distance map
+        mask = mask - mask.tril()
 
-        # Initialize the losses
-        recon = 0
+        # Mean squared error weighted by ground truth distance
+        if self.loss_type == "mse":
+            recon = F.mse_loss(data_reconstructed, data, reduction="none")
 
-        # Input is padded, so the padding needs to be removed before calculating loss
-        for num, padding_start in enumerate(start_of_padding):
-            data_reconstructed_no_padding = data_reconstructed[num][0][
-                :padding_start, :padding_start
-            ]
-
-            # Make the reconstructed map symmetric so that weights are freed to learn other
-            # patterns
-            data_reconstructed_no_padding = self.symmetrize(
-                data_reconstructed_no_padding
+        # Negative log likelihood of the input data given the latent space
+        elif self.loss_type == "nll":
+            # Get the reconstruction loss and convert it to positive values
+            recon = -1 * self.gaussian_likelihood(
+                data_reconstructed=data_reconstructed,
+                log_std=self.log_std,
+                data=data,
+            )
+        else:
+            raise ValueError(
+                f"loss type of name '{self.loss_type}' does not exist. Current implementations include 'mse' and 'nll'"
             )
 
-            # Get unpadded ground truth
-            data_no_padding = data[num][0][:padding_start, :padding_start]
-
-            # Get the weights for the loss
-            weights = self.get_weights(data_no_padding, scale=self.weights_type)
-
-            # Mean squared error weighted by ground truth distance
-            if self.loss_type == "mse":
-                mse_loss = F.mse_loss(
-                    data_reconstructed_no_padding, data_no_padding, reduction="none"
-                )
-
-                recon += (mse_loss * weights).sum()
-
-            # Negative log likelihood of the input data given the latent space
-            elif self.loss_type == "nll":
-                # Get the reconstruction loss
-                gaussian_likelihood = self.gaussian_likelihood(
-                    data_hat=data_reconstructed_no_padding,
-                    log_std=self.log_std,
-                    data=data_no_padding,
-                )
-                recon += -(gaussian_likelihood * weights).sum()
-            else:
-                raise ValueError(
-                    f"loss type of name '{self.loss_type}' does not exist. Current implementations include 'mse' and 'nll'"
-                )
-
-            # # Additional loss to ensure the contacts are reconstructured correctly
-            # contact_map_loss += self.BCE_contact_map_loss(
-            #     ground_truth_dist_map=data_no_padding,
-            #     reconstructed_dist_map=data_reconstructed_no_padding,
-            #     weights=weights,
-            # )
-
-        # Taking the mean of the loss
-        recon /= num + 1
-        # contact_map_loss /= num + 1
+        # Calculate the loss of only part of the distance map and take the mean
+        recon = recon * mask
+        recon = torch.sum(recon) / torch.sum(mask)
 
         # For more information of KLD loss check out Appendix B:
         # https://arxiv.org/abs/1312.6114
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
         KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
         loss = recon + KLD_weight * KLD
@@ -643,13 +586,6 @@ class cVAE(pl.LightningModule):
         List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
             Returns the reconstructed data, the mean of the latent space, and the log variance
         """
-        if encoder_labels is None or len(encoder_labels) == 0:
-            encoder_labels = torch.zeros_like(data)
-
-        if encoder_labels.shape != data.shape:
-            raise ValueError(
-                f"Encoder labels shape {encoder_labels.shape} does not match data shape {data.shape}"
-            )
 
         moments = self.encode(data, labels=encoder_labels)
 
@@ -676,7 +612,12 @@ class cVAE(pl.LightningModule):
             Total training loss of this batch
         """
         data = batch["data"]
-        encoder_labels = batch["encoder_condition"]
+
+        if self.encoder_conditioning:
+            encoder_labels = batch["encoder_condition"]
+        else:
+            encoder_labels = None
+
         if self.labels is not None:
             decoder_labels = batch["decoder_condition"]
         else:
@@ -742,7 +683,11 @@ class cVAE(pl.LightningModule):
             Total validation loss of this batch
         """
         data = batch["data"]
-        encoder_labels = batch["encoder_condition"]
+
+        if self.encoder_conditioning:
+            encoder_labels = batch["encoder_condition"]
+        else:
+            encoder_labels = None
 
         if self.labels is not None:
             decoder_labels = batch["decoder_condition"]
@@ -860,6 +805,34 @@ class cVAE(pl.LightningModule):
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
         return [optimizer], [lr_scheduler]
+
+    def symmetrize(self, data_reconstructed: torch.Tensor) -> torch.Tensor:
+        """
+        Symmetrizes the reconstructed data so that the weights can learn other patterns.
+        Loss calculated only on the reconstruction faithfulness of the upper triangle
+        of the distance map
+
+        Parameters
+        ----------
+        data_reconstructed : torch.Tensor
+            Reconstructed data; output of the decoder
+
+        Returns
+        -------
+        torch.Tensor
+            Symmetric version of the reconstructed data
+        """
+        # Get the upper triangular part of each tensor in the batch
+        upper_triangles = torch.triu(data_reconstructed)
+
+        # Symmetrize each tensor in the batch individually
+        symmetrized_arrays = upper_triangles + torch.transpose(upper_triangles, -1, -2)
+
+        # Fill diagonal elements with zeros for each tensor individually
+        diag_values = torch.diagonal(symmetrized_arrays, dim1=-2, dim2=-1)
+        symmetrized_arrays = symmetrized_arrays - torch.diag_embed(diag_values)
+
+        return symmetrized_arrays
 
     def sample(self, num_samples: int, sequence: torch.Tensor = None) -> torch.Tensor:
         """
