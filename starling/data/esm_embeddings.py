@@ -5,6 +5,7 @@ import torch
 from IPython import embed
 
 
+@torch.inference_mode()
 def esm_embeddings(
     model, alphabet, sequences: List, device: str, layer: int
 ) -> torch.Tensor:
