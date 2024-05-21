@@ -42,7 +42,7 @@ class ResNet_Encoder(nn.Module):
                 padding=3,
             ),
             normalization[norm](base),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+            # nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
         self.in_channels = base
@@ -63,16 +63,6 @@ class ResNet_Encoder(nn.Module):
             self.block_type, layer_in_channels[3], num_blocks[3], stride=2
         )
 
-        # self.max_features = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.downsample_cnn = nn.Conv2d(
-            in_channels=layer_in_channels[3],
-            out_channels=layer_in_channels[3],
-            kernel_size=3,
-            stride=2,
-            padding=1,
-        )
-        self.activation = nn.ReLU(inplace=True)
-
     def _make_layer(self, block, out_channels, blocks, stride=1):
         layers = []
         layers.append(block(self.in_channels, out_channels, stride, norm=self.norm))
@@ -89,7 +79,6 @@ class ResNet_Encoder(nn.Module):
         data = self.layer2(data)
         data = self.layer3(data)
         data = self.layer4(data)
-        data = self.activation(self.downsample_cnn(data))
         return data
 
 
@@ -123,17 +112,17 @@ class ResNet_Decoder(nn.Module):
             layer_in_channels = [base * (4**i) for i in range(len(num_blocks))]
             self.in_channels = layer_in_channels[-1]
 
-        self.interpolate = int(dimension / (2 ** (len(num_blocks) + 1)))
+        # self.interpolate = int(dimension / (2 ** (len(num_blocks) + 1)))
 
-        self.resize_conv = ResizeConv2d(
-            in_channels=self.in_channels,
-            out_channels=self.in_channels,
-            kernel_size=3,
-            padding=1,
-            norm=normalization[norm],
-            activation="relu",
-            size=(self.interpolate, self.interpolate),
-        )
+        # self.resize_conv = ResizeConv2d(
+        #     in_channels=self.in_channels,
+        #     out_channels=self.in_channels,
+        #     kernel_size=3,
+        #     padding=1,
+        #     norm=normalization[norm],
+        #     activation="relu",
+        #     size=(self.interpolate, self.interpolate),
+        # )
 
         # Setting up the layers for the decoder
 
@@ -158,15 +147,15 @@ class ResNet_Decoder(nn.Module):
         in_channels_post_resnets = layer_in_channels[-4]
 
         # This part could be done through interpolation (analogous to MaxPool)
-        self.reshaping_conv = ResizeConv2d(
-            in_channels=in_channels_post_resnets,
-            out_channels=in_channels_post_resnets,
-            kernel_size=3,
-            padding=1,
-            norm=normalization[norm],
-            activation="relu",
-            scale_factor=2,
-        )
+        # self.reshaping_conv = ResizeConv2d(
+        #     in_channels=in_channels_post_resnets,
+        #     out_channels=in_channels_post_resnets,
+        #     kernel_size=3,
+        #     padding=1,
+        #     norm=normalization[norm],
+        #     activation="relu",
+        #     scale_factor=2,
+        # )
 
         self.output_layer = ResizeConv2d(
             in_channels=in_channels_post_resnets,
@@ -208,12 +197,12 @@ class ResNet_Decoder(nn.Module):
         return ConditionalSequential(*layers)
 
     def forward(self, data, labels=None):
-        data = self.resize_conv(data)
+        # data = self.resize_conv(data)
         data = self.layer1(data, labels)
         data = self.layer2(data, labels)
         data = self.layer3(data, labels)
         data = self.layer4(data, labels)
-        data = self.reshaping_conv(data)
+        # data = self.reshaping_conv(data)
         data = self.output_layer(data)
         return data
 
