@@ -71,8 +71,8 @@ def train_vae():
     import diffusers
 
     UNet_model = diffusers.UNet2DModel(
-        sample_size=16,
-        in_channels=2,
+        sample_size=24,
+        in_channels=1,
         out_channels=1,
         layers_per_block=2,
         class_embed_type="identity",
@@ -90,16 +90,18 @@ def train_vae():
             "UpBlock2D",
         ),
     )
+
     device = torch.device(f"cuda:{config['device']['cuda'][0]}")
+    # device = torch.device("cpu")
     encoder_model = cVAE.load_from_checkpoint(
-        "/home/bnovak/projects/autoencoder_training/VAE_training/testing_cond_vae/nll_ESM_8M_conditioning_decoder_conditioning_mlp/model-kernel-epoch=00-epoch_val_loss=5.84.ckpt",
+        "/home/bnovak/projects/autoencoder_training/VAE_training/testing_cond_vae/DiagonalGaussian/model-kernel-epoch=02-epoch_val_loss=2.15.ckpt",
         map_location=device,
     )
 
     diffusion_model = DiffusionModel(
         model=UNet_model,
         encoder_model=encoder_model,
-        image_size=16,
+        image_size=24,
         beta_scheduler="cosine",
         timesteps=1000,
         schedule_fn_kwargs=None,
@@ -122,6 +124,7 @@ def train_vae():
     # Set up PyTorch Lightning Trainer
     trainer = pl.Trainer(
         devices=config["device"]["cuda"],
+        # accelerator="cpu",
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor],
         gradient_clip_val=1.0,
