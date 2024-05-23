@@ -1,3 +1,4 @@
+import random
 from typing import List, Union
 
 import esm
@@ -152,18 +153,35 @@ class DiffusionModel(pl.LightningModule):
                     self.esm[self.labels]["latent_dim"],
                     self.esm[self.labels]["latent_dim"],
                 ),
-                nn.ReLU(inplace=False),
-                nn.Linear(self.esm[self.labels]["latent_dim"], 512),
-                nn.ReLU(inplace=False),
-                nn.Linear(512, 512),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    self.esm[self.labels]["latent_dim"],
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    self.model.config.block_out_channels[0] * 4,
+                    self.model.config.block_out_channels[0] * 4,
+                ),
             )
 
         # Provide labels for length of the sequences
-        self.embed_length = nn.Embedding(384, 512)
+        self.embed_length = nn.Embedding(384, self.model.config.block_out_channels[0])
         self.length_mlp = nn.Sequential(
-            nn.Linear(512, 512),
-            nn.ReLU(inplace=False),
-            nn.Linear(512, 512),
+            nn.Linear(
+                self.model.config.block_out_channels[0],
+                self.model.config.block_out_channels[0],
+            ),
+            nn.ReLU(inplace=True),
+            nn.Linear(
+                self.model.config.block_out_channels[0],
+                self.model.config.block_out_channels[0] * 4,
+            ),
+            nn.ReLU(inplace=True),
+            nn.Linear(
+                self.model.config.block_out_channels[0] * 4,
+                self.model.config.block_out_channels[0] * 4,
+            ),
         )
 
     @torch.inference_mode()
@@ -218,7 +236,11 @@ class DiffusionModel(pl.LightningModule):
 
     @torch.inference_mode()
     def p_sample_loop(
-        self, shape: tuple, labels, return_all_timesteps: bool = False
+        self,
+        shape: tuple,
+        labels,
+        steps: int = None,
+        return_all_timesteps: bool = False,
     ) -> torch.Tensor:
         """
         Sampling loop for the diffusion model. It loops over the timesteps
@@ -259,8 +281,13 @@ class DiffusionModel(pl.LightningModule):
 
         return latents
 
+    @torch.inference_mode()
     def sample(
-        self, batch_size: int, labels, return_all_timesteps: bool = False
+        self,
+        batch_size: int,
+        labels,
+        steps: int = None,
+        return_all_timesteps: bool = False,
     ) -> torch.Tensor:
         """
         Sample from the trained diffusion model
@@ -282,11 +309,30 @@ class DiffusionModel(pl.LightningModule):
         """
 
         shape = (batch_size, self.channels, self.image_size, self.image_size)
-        labels = self.sequence2labels([labels])
-        labels = self.mlp(labels)
+
+        # Make sure there is -1 here to get the correct length, nn.Embedding is 0-indexed
+        lengths = [len(labels) - 1]
+        length_labels = torch.tensor(
+            lengths,
+            device=self.device,
+            dtype=torch.long,
+        )
+
+        with torch.no_grad():
+            # Get the length class of the sequence
+            length_labels = self.embed_length(length_labels)
+            length_labels = self.length_mlp(length_labels)
+
+            # Get the ESM2 embeddings for the sequence
+            labels = self.sequence2labels([labels])
+            labels = self.mlp(labels)
+
+        # ESM2 embeddings and length embeddings are summed
+        labels += length_labels
+
         labels = labels.repeat(batch_size, 1)
         return self.p_sample_loop(
-            shape, labels, return_all_timesteps=return_all_timesteps
+            shape, labels, steps=steps, return_all_timesteps=return_all_timesteps
         )
 
     # Remove mixed precision from this function,
@@ -393,7 +439,16 @@ class DiffusionModel(pl.LightningModule):
         """
         if noise is None:
             noise = torch.randn_like(x_start)
+            # Offset noise that seems to improve the inference
+            # According to https://www.crosslabs.org/blog/diffusion-with-offset-noise
+            noise += 0.1 * torch.randn(
+                x_start.shape[0], x_start.shape[1], 1, 1, device=self.device
+            )
         x_noised = self.q_sample(x_start, t, noise=noise)
+
+        # Remove the labels 10% of the time
+        if random.random() <= 0.1:
+            labels = None
 
         if labels is not None:
             # nn.Embedding is 0-indexes, so we subtract 1 from the lengths
@@ -408,9 +463,13 @@ class DiffusionModel(pl.LightningModule):
             labels = self.sequence2labels(labels)
             labels = self.mlp(labels)
             labels += length_labels
-            predicted_noise = self.model(x_noised, t, labels)[0]
         else:
-            predicted_noise = self.model(x_noised, t)[0]
+            labels = torch.zeros(
+                x_start.shape[0],
+                self.model.config.block_out_channels[0] * 4,
+                device=self.device,
+            )
+        predicted_noise = self.model(x_noised, t, labels)[0]
 
         if loss_type == "l2":
             loss = F.mse_loss(noise, predicted_noise)
@@ -452,7 +511,7 @@ class DiffusionModel(pl.LightningModule):
 
         with torch.no_grad():
             latent_encoding = self.encoder_model.encode(data, labels=encoder_labels)
-            latent_encoding = latent_encoding.mode()
+            latent_encoding = latent_encoding.sample()
 
         # Figure out the standard deviation of the latent space using
         # the first batch of the data. This is to scale it to have unit variance
@@ -478,7 +537,7 @@ class DiffusionModel(pl.LightningModule):
 
         with torch.no_grad():
             latent_encoding = self.encoder_model.encode(data, labels=encoder_labels)
-            latent_encoding = latent_encoding.mode()
+            latent_encoding = latent_encoding.sample()
 
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
@@ -561,3 +620,24 @@ class DiffusionModel(pl.LightningModule):
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
         return [optimizer], [lr_scheduler]
+
+
+def reduce_sampling_steps(T, K):
+    # Calculate the spacing between each sample
+    spacing = (T - 1) / (K - 1)
+
+    # Initialize an empty list to store the rounded numbers
+    samples = []
+
+    # Generate K evenly spaced real numbers between 1 and T (inclusive)
+    for i in range(K):
+        # Calculate the current sample
+        sample = 1 + spacing * i
+
+        # Round the sample to the nearest integer
+        rounded_sample = round(sample)
+
+        # Append the rounded sample to the list
+        samples.append(rounded_sample)
+
+    return samples
