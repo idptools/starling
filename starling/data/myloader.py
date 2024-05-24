@@ -3,6 +3,8 @@ import os
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from finches.epsilon_calculation import Interaction_Matrix_Constructor
+from finches.forcefields.mPiPi import mPiPi_model
 from finches.frontend.mpipi_frontend import Mpipi_frontend
 from IPython import embed
 
@@ -71,6 +73,8 @@ class MatrixDataset(torch.utils.data.Dataset):
             "data": sample,
             "encoder_condition": encoder_condition,
             "decoder_condition": sequence,
+            # "decoder_condition": torch.from_numpy(self.epsilon_vector(sequence)),
+            "length": torch.tensor([len(sequence) - 1]),
         }
 
     def get_interaction_matrix(self, sequence):
@@ -79,6 +83,26 @@ class MatrixDataset(torch.utils.data.Dataset):
             sequence, sequence, window_size=1
         )
         return interaction_matrix[0][0]
+
+    def epsilon_vector(self, sequence):
+        # Initialize a finches.forcefields.Mpipi.Mpipi_model object
+        Mpipi_GGv1_params = mPiPi_model(version="mPiPi_GGv1")
+
+        # initialize an InteractionMatrixConstructor
+        IMC = Interaction_Matrix_Constructor(parameters=Mpipi_GGv1_params)
+
+        attractive, repulsive = IMC.calculate_epsilon_vectors(sequence, sequence)
+        # Pad with zeros up to length 384
+        attractive = np.pad(attractive, (0, 384 - len(attractive)), "constant")
+        repulsive = np.pad(repulsive, (0, 384 - len(repulsive)), "constant")
+
+        attractive = np.array(attractive, dtype=np.float32)
+        repulsive = np.array(repulsive, dtype=np.float32)
+
+        # Concatenate the padded arrays
+        epsilon_vector = np.concatenate((attractive, repulsive))
+
+        return epsilon_vector
 
 
 # Step 2: Create a data module
