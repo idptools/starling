@@ -1,4 +1,3 @@
-import random
 from typing import List, Union
 
 import esm
@@ -15,6 +14,7 @@ from torch.optim.lr_scheduler import (
 )
 from tqdm import tqdm
 
+from starling.data.data_wrangler import one_hot_encode
 from starling.data.esm_embeddings import esm_embeddings
 from starling.data.schedulers import (
     cosine_beta_schedule,
@@ -53,7 +53,7 @@ class DiffusionModel(pl.LightningModule):
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         schedule_fn_kwargs: Union[dict, None] = None,
-        labels="esm2_t6_8M_UR50D",
+        labels="learned-embeddings",
         set_lr=1e-4,
         config_scheduler="CosineAnnealingLR",
     ) -> None:
@@ -156,6 +156,38 @@ class DiffusionModel(pl.LightningModule):
                 nn.ReLU(inplace=True),
                 nn.Linear(
                     self.esm[self.labels]["latent_dim"],
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    self.model.config.block_out_channels[0] * 4,
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+            )
+
+        elif self.labels == "epsilon":
+            # self.epsilon_vector_embedding = epsilon_vector
+            self.mlp = nn.Sequential(
+                nn.Linear(384 * 2, 384 * 2),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    384 * 2,
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    self.model.config.block_out_channels[0] * 4,
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+            )
+        elif self.labels == "learned-embeddings":
+            embedding_dim = 1
+            self.learned_embedding = nn.Embedding(21, embedding_dim)
+            self.mlp = nn.Sequential(
+                nn.Linear(384 * embedding_dim, 384 * embedding_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    384 * embedding_dim,
                     self.model.config.block_out_channels[0] * 4,
                 ),
                 nn.ReLU(inplace=True),
@@ -324,7 +356,17 @@ class DiffusionModel(pl.LightningModule):
             length_labels = self.length_mlp(length_labels)
 
             # Get the ESM2 embeddings for the sequence
-            labels = self.sequence2labels([labels])
+            if self.labels in self.esm.keys():
+                labels = self.sequence2labels([labels])
+            elif self.labels == "epsilon":
+                labels = self.epsilon_vector_embedding(labels)
+            elif self.labels == "learned-embeddings":
+                labels = [seq.ljust(384, "0") for seq in [labels]]
+                labels = torch.argmax(
+                    torch.tensor(one_hot_encode(labels), device=self.device), dim=-1
+                )
+                labels = self.learned_embedding(labels).squeeze(-1)
+
             labels = self.mlp(labels)
 
         # ESM2 embeddings and length embeddings are summed
@@ -446,30 +488,27 @@ class DiffusionModel(pl.LightningModule):
             )
         x_noised = self.q_sample(x_start, t, noise=noise)
 
-        # Remove the labels 10% of the time
-        if random.random() <= 0.1:
-            labels = None
-
         if labels is not None:
             # nn.Embedding is 0-indexes, so we subtract 1 from the lengths
-            lengths = list(map(lambda label: len(label) - 1, labels))
-            length_labels = torch.tensor(
-                lengths,
-                device=x_start.device,
-                dtype=torch.long,
-            )
-            length_labels = self.embed_length(length_labels)
-            length_labels = self.length_mlp(length_labels)
-            labels = self.sequence2labels(labels)
+            labels, lengths = labels
+            lengths = self.embed_length(lengths.squeeze())
+            lengths = self.length_mlp(lengths)
+
+            if self.labels in self.esm.keys():
+                labels = self.sequence2labels(labels)
+            elif self.labels == "epsilon":
+                pass
+            elif self.labels == "learned-embeddings":
+                labels = [seq.ljust(384, "0") for seq in labels]
+                labels = torch.argmax(
+                    torch.tensor(one_hot_encode(labels), device=self.device), dim=-1
+                )
+                labels = self.learned_embedding(labels).squeeze()
+
             labels = self.mlp(labels)
-            labels += length_labels
-        else:
-            labels = torch.zeros(
-                x_start.shape[0],
-                self.model.config.block_out_channels[0] * 4,
-                device=self.device,
-            )
-        predicted_noise = self.model(x_noised, t, labels)[0]
+            labels += lengths
+
+            predicted_noise = self.model(x_noised, t, labels)[0]
 
         if loss_type == "l2":
             loss = F.mse_loss(noise, predicted_noise)
@@ -507,7 +546,7 @@ class DiffusionModel(pl.LightningModule):
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         data = batch["data"]
         encoder_labels = batch["encoder_condition"]
-        unet_labels = batch["decoder_condition"]
+        unet_labels = [batch["decoder_condition"], batch["length"]]
 
         with torch.no_grad():
             latent_encoding = self.encoder_model.encode(data, labels=encoder_labels)
@@ -533,7 +572,7 @@ class DiffusionModel(pl.LightningModule):
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         data = batch["data"]
         encoder_labels = batch["encoder_condition"]
-        unet_labels = batch["decoder_condition"]
+        unet_labels = [batch["decoder_condition"], batch["length"]]
 
         with torch.no_grad():
             latent_encoding = self.encoder_model.encode(data, labels=encoder_labels)

@@ -77,25 +77,16 @@ def train_vae():
         layers_per_block=2,
         class_embed_type="identity",
         block_out_channels=(128, 128, 256, 512),
-        down_block_types=(
-            "DownBlock2D",
-            "DownBlock2D",
-            "AttnDownBlock2D",
-            "DownBlock2D",
-        ),
-        up_block_types=(
-            "UpBlock2D",
-            "AttnUpBlock2D",
-            "UpBlock2D",
-            "UpBlock2D",
-        ),
     )
 
-    device = torch.device(f"cuda:{config['device']['cuda'][0]}")
-    # device = torch.device("cpu")
+    gpu_ids = config["device"]["cuda"]
+    map_location = {
+        f"cuda:{i}": f"cuda:{gpu_ids[i % len(gpu_ids)]}" for i in range(len(gpu_ids))
+    }
+
     encoder_model = cVAE.load_from_checkpoint(
-        "/home/bnovak/projects/autoencoder_training/VAE_training/testing_cond_vae/DiagonalGaussian/model-kernel-epoch=02-epoch_val_loss=2.15.ckpt",
-        map_location=device,
+        "/home/bnovak/github/starling/starling/models/trained_models/model-kernel-epoch=05-epoch_val_loss=1.86_VAE.ckpt",
+        map_location=map_location,
     )
 
     diffusion_model = DiffusionModel(
@@ -124,7 +115,6 @@ def train_vae():
     # Set up PyTorch Lightning Trainer
     trainer = pl.Trainer(
         devices=config["device"]["cuda"],
-        # accelerator="cpu",
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor],
         gradient_clip_val=1.0,
