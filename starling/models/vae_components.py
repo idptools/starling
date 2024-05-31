@@ -20,8 +20,13 @@ class ResNet_Encoder(nn.Module):
         norm,
         base=64,
         block_type=ResBlockEncBasic,
+        conditional=False,
+        conditional_dim=None,
     ) -> None:
         super().__init__()
+
+        self.conditional = conditional
+        self.conditional_dim = conditional_dim
 
         self.block_type = block_type
         self.norm = norm
@@ -42,7 +47,6 @@ class ResNet_Encoder(nn.Module):
                 padding=3,
             ),
             normalization[norm](base),
-            # nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
         )
 
         self.in_channels = base
@@ -64,21 +68,46 @@ class ResNet_Encoder(nn.Module):
         )
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
-        layers = []
-        layers.append(block(self.in_channels, out_channels, stride, norm=self.norm))
+        layers = nn.ModuleList()
+        layers.append(
+            block(
+                self.in_channels,
+                out_channels,
+                stride,
+                norm=self.norm,
+                cross_attention=self.conditional,
+                label_embed_dim=self.conditional_dim,
+            )
+        )
         self.in_channels = out_channels * block.expansion
         for _ in range(1, blocks):
             layers.append(
-                block(self.in_channels, out_channels, stride=1, norm=self.norm)
+                block(
+                    self.in_channels,
+                    out_channels,
+                    stride=1,
+                    norm=self.norm,
+                    cross_attention=False,
+                    label_embed_dim=None,
+                )
             )
-        return nn.Sequential(*layers)
+        return layers
 
-    def forward(self, data):
+    def forward(self, data, labels=None):
         data = self.first_conv(data)
-        data = self.layer1(data)
-        data = self.layer2(data)
-        data = self.layer3(data)
-        data = self.layer4(data)
+
+        for block in self.layer1:
+            data = block(data, labels)
+
+        for block in self.layer2:
+            data = block(data, labels)
+
+        for block in self.layer3:
+            data = block(data, labels)
+
+        for block in self.layer4:
+            data = block(data, labels)
+
         return data
 
 
@@ -92,15 +121,13 @@ class ResNet_Decoder(nn.Module):
         block_type=ResBlockDecBasic,
         base=64,
         conditional=False,
+        conditional_dim=None,
     ) -> None:
         super().__init__()
 
         self.norm = norm
-        normalization = {
-            "batch": nn.BatchNorm2d,
-            "instance": nn.InstanceNorm2d,
-            "layer": LayerNorm,
-        }
+        self.conditional = conditional
+        self.conditional_dim = conditional_dim
 
         # Calculate the input channels from the encoder, assuming
         # symmetric encoder and decoder setup
@@ -112,50 +139,26 @@ class ResNet_Decoder(nn.Module):
             layer_in_channels = [base * (4**i) for i in range(len(num_blocks))]
             self.in_channels = layer_in_channels[-1]
 
-        # self.interpolate = int(dimension / (2 ** (len(num_blocks) + 1)))
-
-        # self.resize_conv = ResizeConv2d(
-        #     in_channels=self.in_channels,
-        #     out_channels=self.in_channels,
-        #     kernel_size=3,
-        #     padding=1,
-        #     norm=normalization[norm],
-        #     activation="relu",
-        #     size=(self.interpolate, self.interpolate),
-        # )
-
         # Setting up the layers for the decoder
 
         self.layer1 = self._make_layer(
-            self.block_type, layer_in_channels[-1], num_blocks[0], conditional, stride=2
+            self.block_type, layer_in_channels[-1], num_blocks[0], stride=2
         )
         self.layer2 = self._make_layer(
-            self.block_type, layer_in_channels[-2], num_blocks[1], conditional, stride=2
+            self.block_type, layer_in_channels[-2], num_blocks[1], stride=2
         )
         self.layer3 = self._make_layer(
-            self.block_type, layer_in_channels[-3], num_blocks[2], conditional, stride=2
+            self.block_type, layer_in_channels[-3], num_blocks[2], stride=2
         )
         self.layer4 = self._make_layer(
             self.block_type,
             layer_in_channels[-4],
             num_blocks[3],
-            conditional,
             stride=1,
             last_layer=True,
         )
 
         in_channels_post_resnets = layer_in_channels[-4]
-
-        # This part could be done through interpolation (analogous to MaxPool)
-        # self.reshaping_conv = ResizeConv2d(
-        #     in_channels=in_channels_post_resnets,
-        #     out_channels=in_channels_post_resnets,
-        #     kernel_size=3,
-        #     padding=1,
-        #     norm=normalization[norm],
-        #     activation="relu",
-        #     scale_factor=2,
-        # )
 
         self.output_layer = ResizeConv2d(
             in_channels=in_channels_post_resnets,
@@ -167,10 +170,8 @@ class ResNet_Decoder(nn.Module):
             scale_factor=2,
         )
 
-    def _make_layer(
-        self, block, out_channels, blocks, conditional, stride=1, last_layer=False
-    ):
-        layers = []
+    def _make_layer(self, block, out_channels, blocks, stride=1, last_layer=False):
+        layers = nn.ModuleList()
         self.in_channels = out_channels * block.contraction
         for _ in range(1, blocks):
             layers.append(
@@ -179,7 +180,8 @@ class ResNet_Decoder(nn.Module):
                     out_channels,
                     stride=1,
                     norm=self.norm,
-                    conditional=conditional,
+                    cross_attention=self.conditional,
+                    label_embed_dim=self.conditional_dim,
                 )
             )
         if stride > 1 and block == ResBlockDecBasic:
@@ -191,18 +193,26 @@ class ResNet_Decoder(nn.Module):
                 stride,
                 last_layer=last_layer,
                 norm=self.norm,
-                conditional=conditional,
+                cross_attention=False,
+                label_embed_dim=None,
             )
         )
-        return ConditionalSequential(*layers)
+
+        return layers
 
     def forward(self, data, labels=None):
-        # data = self.resize_conv(data)
-        data = self.layer1(data, labels)
-        data = self.layer2(data, labels)
-        data = self.layer3(data, labels)
-        data = self.layer4(data, labels)
-        # data = self.reshaping_conv(data)
+        for block in self.layer1:
+            data = block(data, labels)
+
+        for block in self.layer2:
+            data = block(data, labels)
+
+        for block in self.layer3:
+            data = block(data, labels)
+
+        for block in self.layer4:
+            data = block(data, labels)
+
         data = self.output_layer(data)
         return data
 
@@ -221,16 +231,20 @@ class ConditionalSequential(nn.Sequential):
 # Current implementations of ResNets
 
 
-def Resnet18_Encoder(in_channels, norm, base):
+def Resnet18_Encoder(in_channels, norm, base, conditional=False, conditional_dim=None):
     return ResNet_Encoder(
         in_channels,
         num_blocks=[2, 2, 2, 2],
         base=base,
         norm=norm,
+        conditional=conditional,
+        conditional_dim=conditional_dim,
     )
 
 
-def Resnet18_Decoder(out_channels, dimension, base, norm, conditional):
+def Resnet18_Decoder(
+    out_channels, dimension, base, norm, conditional=False, conditional_dim=None
+):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[2, 2, 2, 2],
@@ -238,6 +252,7 @@ def Resnet18_Decoder(out_channels, dimension, base, norm, conditional):
         base=base,
         norm=norm,
         conditional=conditional,
+        conditional_dim=conditional_dim,
     )
 
 
