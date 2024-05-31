@@ -40,18 +40,23 @@ class UNet(nn.Module):
         norm,
         blocks=[2, 2, 2, 2],
         sinusoidal_pos_emb_theta=10000,
-        time_dim=320,
     ):
         super().__init__()
 
         self.norm = norm
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.time_dim = base
         self.base = base
         self.dimension = dimension
 
         # Time embeddings
-        self.time_emb = SinusoidalPosEmb(time_dim, theta=sinusoidal_pos_emb_theta)
+        self.time_emb = SinusoidalPosEmb(base, theta=sinusoidal_pos_emb_theta)
+        self.time_mlp = nn.Sequential(
+            nn.Linear(base, base),
+            nn.ReLU(inplace=False),
+            nn.Linear(base, base * 4),
+        )
 
         # Encoder part of UNet
 
@@ -175,12 +180,12 @@ class UNet(nn.Module):
     def forward(self, x, time, labels=None):
         # Get the time embeddings
         time = self.time_emb(time)
+        time = self.time_mlp(time.view(time.shape[0], -1))
 
         # Add the labels to time embeddings if they are provided
         if labels is not None:
             time += labels
 
-        # embed()
         # Start the UNet pass
         x = self.init_conv(x)
 
@@ -208,6 +213,7 @@ class UNet(nn.Module):
         x = self.decoder_layer1(x, time)
 
         # Residual connection from the encoder
+        # embed()
         x = x + x_layer3
         x = self.decoder_layer2(x, time)
 
