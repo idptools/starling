@@ -3,6 +3,8 @@ import torch.nn.functional as F
 from IPython import embed
 from torch import nn
 
+from starling.models.attention import CrossAttention
+
 
 class LayerNorm(nn.Module):
     r"""LayerNorm that supports two data formats: channels_last (default) or channels_first.
@@ -101,29 +103,21 @@ class ResBlockEncBasic(nn.Module):
         out_channels,
         stride,
         norm,
-        conditional=False,
-        conditional_dim=320,
+        cross_attention=False,
+        label_embed_dim=None,
         kernel_size=None,
     ) -> None:
         super().__init__()
 
         kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
+        self.cross_attention = cross_attention
 
         normalization = {
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
         }
-
-        if conditional:
-            self.mlp = nn.Sequential(
-                nn.Linear(conditional_dim, in_channels),
-                nn.ReLU(inplace=True),
-                nn.Linear(in_channels, in_channels),
-                nn.ReLU(inplace=True),
-                nn.Linear(in_channels, in_channels),
-            )
 
         self.conv1 = nn.Sequential(
             nn.Conv2d(
@@ -136,6 +130,14 @@ class ResBlockEncBasic(nn.Module):
             normalization[norm](out_channels),
             nn.ReLU(inplace=True),
         )
+
+        if self.cross_attention:
+            self.linear_projection = (
+                nn.Linear(label_embed_dim, out_channels)
+                if label_embed_dim != out_channels
+                else nn.Identity()
+            )
+            self.cross_attention_layer = CrossAttention(out_channels, 8)
 
         self.conv2 = nn.Sequential(
             nn.Conv2d(
@@ -166,13 +168,13 @@ class ResBlockEncBasic(nn.Module):
     def forward(self, data, labels=None):
         # Set up the shortcut connection if necessary
         identity = self.shortcut(data)
-        if labels is not None:
-            labels = (
-                self.mlp(labels.view(labels.shape[0], -1)).unsqueeze(-1).unsqueeze(-1)
-            )
-            data = data + labels
         # First convolution
         data = self.conv1(data)
+        # Apply cross attention if labels are provided
+        if self.cross_attention:
+            labels = self.linear_projection(labels)
+            data = self.cross_attention_layer(query=data, key=labels, value=labels)
+
         # Second convolution
         data = self.conv2(data)
         # Add the input and run it through activation function
@@ -189,8 +191,8 @@ class ResBlockDecBasic(nn.Module):
         out_channels,
         stride,
         norm,
-        conditional=False,
-        conditional_dim=320,
+        cross_attention=False,
+        label_embed_dim=None,
         last_layer=None,
         kernel_size=None,
     ) -> None:
@@ -198,22 +200,13 @@ class ResBlockDecBasic(nn.Module):
 
         kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
-        self.conditional = conditional
+        self.cross_attention = cross_attention
 
         normalization = {
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
         }
-
-        if conditional:
-            self.mlp = nn.Sequential(
-                nn.Linear(conditional_dim, in_channels),
-                nn.ReLU(inplace=True),
-                nn.Linear(in_channels, in_channels),
-                nn.ReLU(inplace=True),
-                nn.Linear(in_channels, in_channels),
-            )
 
         # First convolution which doesn't change the shape of the tensor
         # (b, c, h, w) -> (b, c, h, w) stride = 1
@@ -228,6 +221,14 @@ class ResBlockDecBasic(nn.Module):
             normalization[norm](in_channels),
             nn.ReLU(inplace=True),
         )
+
+        if self.cross_attention:
+            self.linear_projection = (
+                nn.Linear(label_embed_dim, in_channels)
+                if label_embed_dim != in_channels
+                else nn.Identity()
+            )
+            self.cross_attention_layer = CrossAttention(in_channels, 8)
 
         if stride > 1:
             self.conv2 = ResizeConv2d(
@@ -270,13 +271,13 @@ class ResBlockDecBasic(nn.Module):
         # Setup the shortcut connection if necessary
         identity = self.shortcut(data)
         # First convolution of the data
-        if labels is not None:
-            labels = (
-                self.mlp(labels.view(labels.shape[0], -1)).unsqueeze(-1).unsqueeze(-1)
-            )
-            # Add the conditional information to the data
-            data = data + labels
         data = self.conv1(data)
+
+        if self.cross_attention:
+            # Make sure the labels have the same number of features as the number of channels in the data
+            labels = self.linear_projection(labels)
+            data = self.cross_attention_layer(query=data, key=labels, value=labels)
+
         # Second convolution of the data
         data = self.conv2(data)
         # Connect the input data to the output of convolutions
