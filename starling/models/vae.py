@@ -11,6 +11,8 @@ from torch.optim.lr_scheduler import (
     OneCycleLR,
 )
 
+from starling.data.data_wrangler import one_hot_encode
+from starling.data.distributions import DiagonalGaussianDistribution
 from starling.models import resnets_original, vae_components
 
 
@@ -30,19 +32,19 @@ torch.set_float32_matmul_precision("high")
 class VAE(pl.LightningModule):
     def __init__(
         self,
-        model,
+        model_type,
         in_channels,
         latent_dim,
-        kernel_size,
         dimension,
         loss_type,
         weights_type,
         KLD_weight,
         lr_scheduler,
         set_lr,
+        labels=None,
         norm="instance",
-        encoder_block="original",
-        decoder_block="original",
+        encoder_model="modified",
+        decoder_model="modified",
         base=64,
     ):
         super().__init__()
@@ -103,6 +105,9 @@ class VAE(pl.LightningModule):
             },
         }
 
+        # Input dimensions
+        self.dimension = dimension
+
         # Loss params
         self.loss_type = loss_type
         self.weights_type = weights_type
@@ -115,44 +120,77 @@ class VAE(pl.LightningModule):
         self.KLD_weight = KLD_weight
 
         # these are used to monitor the training losses for the *EPOCH*
-        self.total_train_step_losses = []
-        self.recon_step_losses = []
-        self.KLD_step_losses = []
+        self.total_train_step_losses = 0
+        self.recon_step_losses = 0
+        self.KLD_step_losses = 0
+        self.num_batches = 0
 
         self.monitor = "epoch_val_loss"
 
+        # Set up whether we are turning on cross-attention or not
+        self.labels = labels
+        conditional = True if self.labels is not None else False
+        conditional_dim = 512 if self.labels is not None else None
+
         # Encoder
-        self.encoder = resnets[model]["encoder"][encoder_block](
-            in_channels=in_channels, kernel_size=kernel_size, base=base, norm=norm
+        encoder_chanel = in_channels
+        self.encoder = resnets[encoder_model]["encoder"][model_type](
+            in_channels=encoder_chanel,
+            base=base,
+            norm=norm,
+            conditional=conditional,
+            conditional_dim=conditional_dim,
         )
 
         # This is usually 4 in ResNets
         num_stages = 4
         expansion = self.encoder.block_type.expansion
         exponent = num_stages - 1 if expansion == 1 else num_stages + 1
-        linear_layer_params = int(base * 2**exponent)
-        self.shape_from_final_encoding_layer = linear_layer_params, 6, 6
 
-        # Latent space
-        self.latent_dim = latent_dim
-        self.fc_mu = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
-        self.fc_var = nn.Linear(linear_layer_params * 6 * 6, latent_dim)
-        self.first_decode_layer = nn.Linear(latent_dim, linear_layer_params * 6 * 6)
+        # Spatial size of the distance map after the final encoding layer
+        self.compressed_size = dimension / (2**num_stages)
+        final_channels = int(base * 2**exponent)
+        self.shape_from_final_encoding_layer = (
+            final_channels,
+            self.compressed_size,
+            self.compressed_size,
+        )
+
+        # Latent space (some parts are hard coded in - need to change this)
+        self.encoder_to_latent = nn.Sequential(
+            nn.Conv2d(
+                final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
+            ),
+            nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
+        )
+
+        self.latent_to_decoder = nn.Sequential(
+            nn.Conv2d(latent_dim, latent_dim, kernel_size=1, stride=1),
+            nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
+        )
 
         # Decoder
-        self.decoder = resnets[model]["decoder"][decoder_block](
+        self.decoder = resnets[decoder_model]["decoder"][model_type](
             out_channels=in_channels,
-            kernel_size=kernel_size,
             dimension=dimension,
             base=base,
             norm=norm,
+            conditional=conditional,
+            conditional_dim=conditional_dim,
         )
 
+        if labels is not None:
+            self.sequence_embedding = nn.Embedding(
+                num_embeddings=21,
+                embedding_dim=conditional_dim,
+            )
         # Params to learn for reconstruction loss
         if self.loss_type == "nll":
-            self.log_std = nn.Parameter(torch.zeros((dimension * (dimension + 1) // 2)))
+            self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
 
-    def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    def encode(
+        self, data: torch.Tensor, labels: torch.Tensor
+    ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
         Takes the data and encodes it into the latent space,
         by returning the mean and log variance
@@ -161,132 +199,47 @@ class VAE(pl.LightningModule):
         ----------
         data : torch.Tensor
             Data in the shape of (batch, channel, height, width)
+        labels : torch.Tensor
+            Labels to be concatenated with the data
 
         Returns
         -------
         List[Tuple[torch.Tensor, torch.Tensor]]
             Return the mean and log variance of the latent space
         """
-        data = self.encoder(data)
-        data = torch.flatten(data, start_dim=1)
-        mu = self.fc_mu(data)
-        log_var = self.fc_var(data)
 
-        return [mu, log_var]
+        data = self.encoder(data, labels)
+        data = self.encoder_to_latent(data)
+        moments = DiagonalGaussianDistribution(data)
 
-    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        return moments
+
+    def decode(self, latents: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """
         Decodes the latent space back into the original data
 
         Parameters
         ----------
         latents : torch.Tensor
-            latents in the shape of (batch, features)
+            latents in the shape of (batch, channel, height, width)
+        labels : torch.Tensor
+            Labels to be concatenated with the data
 
         Returns
         -------
         torch.Tensor
             Returns the reconstructed data
         """
-        # Linear layer first to get the shape of the final encoding layer
-        data = self.first_decode_layer(latents)
-        data = data.view(-1, *self.shape_from_final_encoding_layer)
-        data = self.decoder(data)
-        return data
+        latents = self.latent_to_decoder(latents)
 
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        """
-        Reparametarization trick that allows for the flow of gradients through the
-        non-random process. Check out the paper for more details:
-        https://arxiv.org/abs/1312.6114
-
-        Parameters
-        ----------
-        mu : torch.Tensor
-            A tensor containing means of the latent space
-        logvar : torch.Tensor
-            A tensor containg the log variance of the latent space
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the latent encoding
-        """
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-
-    def get_weights(self, ground_truth: torch.Tensor, scale: str) -> torch.Tensor:
-        """
-        A function that calculates weights for the reconstruction loss based on the
-        distance between the residues in the ground truth distance map. The weights
-        are calculated based on the scale parameter.
-
-        Parameters
-        ----------
-        ground_truth : torch.Tensor
-            Input data or the ground truth distance map
-        scale : str
-            A string that determines how the weights will be calculated. The options
-            are "linear", "reciprocal", and "equal"
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the weights for the reconstruction loss
-
-        Raises
-        ------
-        ValueError
-            If the scale parameter is not one of the three options
-        """
-        #! not sure linear is correct rn
-        if scale == "linear":
-            max_distance = ground_truth.max()
-            min_distance = ground_truth.min()
-            weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
-            weights = weights / weights.sum()
-            return weights
-        # Reciprocal of the distance between the two residues is taken as the weight
-        elif scale == "reciprocal":
-            # Handling division by zero
-            nonzero_indices = ground_truth != 0
-            weights = torch.zeros_like(ground_truth)
-            weights[nonzero_indices] = torch.reciprocal(ground_truth[nonzero_indices])
-            weights = weights / weights.sum()
-            return weights
-        # We assign equal weight to each distance here
-        elif scale == "equal":
-            weights = torch.ones_like(ground_truth)
-            # Set diagonal elements to zero
-            weights = weights - torch.diag(torch.diag(weights))
-            weights = weights / weights.sum()
-            return weights
-        else:
-            raise ValueError(f"Variable name '{scale}' for get_weights does not exist")
-
-    def symmetrize(self, data_reconstructed: torch.Tensor) -> torch.Tensor:
-        """
-        Symmetrizes the reconstructed data so that the weights can learn other patterns.
-        Loss calculated only on the reconstruction faithfulness of the upper triangle
-        of the distance map
-
-        Parameters
-        ----------
-        data_reconstructed : torch.Tensor
-            Reconstructed data; output of the decoder
-
-        Returns
-        -------
-        torch.Tensor
-            Symmetric version of the reconstructed data
-        """
-        upper_triangle = data_reconstructed.triu()
-        symmetrized_array = upper_triangle + upper_triangle.t()
-        return symmetrized_array.fill_diagonal_(0)
+        latents = self.decoder(latents, labels)
+        return latents
 
     def gaussian_likelihood(
-        self, data_hat: torch.Tensor, log_std: torch.Tensor, data: torch.Tensor
+        self,
+        data_reconstructed: torch.Tensor,
+        log_std: torch.Tensor,
+        data: torch.Tensor,
     ) -> torch.Tensor:
         """
         Calculates the likelihood of input data given latent space (p(x|z))
@@ -296,7 +249,7 @@ class VAE(pl.LightningModule):
 
         Parameters
         ----------
-        data_hat : torch.Tensor
+        data_reconstructed : torch.Tensor
             A tensor containing the reconstructed data that will be treated as the mean to
             parameterize the Gaussian distribution
         log_std : torch.Tensor
@@ -309,65 +262,14 @@ class VAE(pl.LightningModule):
         torch.Tensor
             Returns the likelihood of the input data given the latent space
         """
-        std = torch.exp(log_std)
-        mean = data_hat
-        input_size = mean.shape[0]
-
-        # Construct the covariance matrix
-        matrix_std = torch.zeros_like(mean).to(torch.float32)
-        triu_indices = torch.triu_indices(input_size, input_size, offset=0)
-        matrix_std[triu_indices[0], triu_indices[1]] = std[
-            : input_size * (input_size + 1) // 2
-        ]
-        matrix_std = matrix_std + matrix_std.t() - torch.diag(matrix_std.diag())
 
         # Create the normal distributions
-        dist = torch.distributions.Normal(mean, matrix_std)
+        dist = torch.distributions.Normal(data_reconstructed, torch.exp(log_std))
 
         # Calculate log probability of seeing image under p(x|z)
         log_pxz = dist.log_prob(data)
 
         return log_pxz
-
-    def BCE_contact_map_loss(
-        self,
-        ground_truth_dist_map: torch.Tensor,
-        reconstructed_dist_map: torch.Tensor,
-        weights: torch.Tensor = None,
-    ) -> torch.Tensor:
-        """
-        Calculates the binary cross entropy loss between the ground truth distance map
-        and the reconstructed distance map. This is used to calculate the loss of the
-        contact map. The contact map is defined as the distance between two residues
-        being between 1 and 25 angstroms.
-
-        Parameters
-        ----------
-        ground_truth_dist_map : torch.Tensor
-            Ground truth distance map that will be converted to a contact map
-        reconstructed_dist_map : torch.Tensor
-            Reconstructed distance map that will be converted to a contact map
-        weights : torch.Tensor
-            Weights to be applied to the loss, mostly here to exclude the diagonal
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the binary cross entropy loss between the two contact maps
-        """
-
-        # Get the mask for ground truth and reconstructed contacts
-        true_contacts_mask = (1 < ground_truth_dist_map) & (ground_truth_dist_map < 25)
-        reconstructed_contacts_mask = (1 < reconstructed_dist_map) & (
-            reconstructed_dist_map < 25
-        )
-
-        # Calculate the binary cross entropy loss
-        BCE_loss = torch.dist(
-            reconstructed_contacts_mask.float(), true_contacts_mask.float()
-        )
-
-        return BCE_loss
 
     def vae_loss(
         self,
@@ -411,69 +313,37 @@ class VAE(pl.LightningModule):
             If the loss type is not mse or elbo
         """
         if KLD_weight is None:
-            KLD_weight = self.KLD_weight
+            KLD_weight = float(self.KLD_weight)
 
-        # Find where the padding starts by counting the number of
-        start_of_padding = torch.sum(data != 0, dim=(1, 2))[:, 0] + 1
+        # Find out where 0s are in the data
+        mask = (data != 0).float()
+        # Remove the lower triangle of the mask so that loss is only calculated on the upper triangle of the distance map
+        mask = mask - mask.tril()
 
-        # Initialize the losses
-        recon = 0
-        # contact_map_loss = 0
+        # Mean squared error weighted by ground truth distance
+        if self.loss_type == "mse":
+            recon = F.mse_loss(data_reconstructed, data, reduction="none")
 
-        # Input is padded, so the padding needs to be removed before calculating loss
-        for num, padding_start in enumerate(start_of_padding):
-            data_reconstructed_no_padding = data_reconstructed[num][0][
-                :padding_start, :padding_start
-            ]
-
-            # Make the reconstructed map symmetric so that weights are freed to learn other
-            # patterns
-            data_reconstructed_no_padding = self.symmetrize(
-                data_reconstructed_no_padding
+        # Negative log likelihood of the input data given the latent space
+        elif self.loss_type == "nll":
+            # Get the reconstruction loss and convert it to positive values
+            recon = -1 * self.gaussian_likelihood(
+                data_reconstructed=data_reconstructed,
+                log_std=self.log_std,
+                data=data,
+            )
+        else:
+            raise ValueError(
+                f"loss type of name '{self.loss_type}' does not exist. Current implementations include 'mse' and 'nll'"
             )
 
-            # Get unpadded ground truth
-            data_no_padding = data[num][0][:padding_start, :padding_start]
-
-            # Get the weights for the loss
-            weights = self.get_weights(data_no_padding, scale=self.weights_type)
-
-            # Mean squared error weighted by ground truth distance
-            if self.loss_type == "mse":
-                mse_loss = F.mse_loss(
-                    data_reconstructed_no_padding, data_no_padding, reduction="none"
-                )
-
-                recon += (mse_loss * weights).sum()
-
-            # Negative log likelihood of the input data given the latent space
-            elif self.loss_type == "nll":
-                # Get the reconstruction loss
-                gaussian_likelihood = self.gaussian_likelihood(
-                    data_hat=data_reconstructed_no_padding,
-                    log_std=self.log_std,
-                    data=data_no_padding,
-                )
-                recon += -(gaussian_likelihood * weights).sum()
-            else:
-                raise ValueError(
-                    f"loss type of name '{self.loss_type}' does not exist. Current implementations include 'mse' and 'nll'"
-                )
-
-            # # Additional loss to ensure the contacts are reconstructured correctly
-            # contact_map_loss += self.BCE_contact_map_loss(
-            #     ground_truth_dist_map=data_no_padding,
-            #     reconstructed_dist_map=data_reconstructed_no_padding,
-            #     weights=weights,
-            # )
-
-        # Taking the mean of the loss
-        recon /= num + 1
-        # contact_map_loss /= num + 1
+        # Calculate the loss of only part of the distance map and take the mean
+        recon = recon * mask
+        recon = torch.sum(recon) / torch.sum(mask)
 
         # For more information of KLD loss check out Appendix B:
         # https://arxiv.org/abs/1312.6114
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
         KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
         loss = recon + KLD_weight * KLD
@@ -481,7 +351,7 @@ class VAE(pl.LightningModule):
         return {"loss": loss, "recon": recon, "KLD": KLD}
 
     def forward(
-        self, data: torch.Tensor
+        self, data: torch.Tensor, labels: torch.Tensor = None
     ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         Forward pass of the VAE
@@ -496,17 +366,14 @@ class VAE(pl.LightningModule):
         List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
             Returns the reconstructed data, the mean of the latent space, and the log variance
         """
-        mu, logvar = self.encode(data)
-        latent_encoding = self.reparameterize(mu, logvar)
 
-        data_reconstructed = self.decode(latent_encoding)
+        moments = self.encode(data, labels)
 
-        if data.shape != data_reconstructed.shape:
-            raise ValueError(
-                f"Input data shape {data.shape} does not match reconstructed data shape {data_reconstructed.shape}"
-            )
+        latent_encoding = moments.sample()
 
-        return data_reconstructed, mu, logvar
+        data_reconstructed = self.decode(latent_encoding, labels)
+
+        return data_reconstructed, moments
 
     def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
         """
@@ -526,24 +393,33 @@ class VAE(pl.LightningModule):
         """
         data = batch["data"]
 
-        data_reconstructed, mu, logvar = self.forward(data=data)
+        # Prepare the labels for the model
+        if self.labels is not None:
+            sequences = batch["sequence"]
+            sequences = [seq.ljust(self.dimension, "0") for seq in sequences]
+            sequences = torch.argmax(
+                torch.from_numpy(one_hot_encode(sequences)).to(self.device), dim=-1
+            )
+            sequences = self.sequence_embedding(sequences)
+        else:
+            sequences = None
+
+        data_reconstructed, moments = self.forward(data=data, labels=sequences)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=mu,
-            logvar=logvar,
+            mu=moments.mean,
+            logvar=moments.logvar,
         )
 
-        if batch_idx % 100 == 0:
-            self.total_train_step_losses.append(loss["loss"])
-            self.recon_step_losses.append(loss["recon"])
-            self.KLD_step_losses.append(loss["KLD"])
-            # self.contacts_step_losses.append(loss["contacts"])
+        self.total_train_step_losses += loss["loss"].item()
+        self.recon_step_losses += loss["recon"].item()
+        self.KLD_step_losses += loss["KLD"].item()
+        self.num_batches += 1
 
-        self.log("train_loss", loss["loss"], prog_bar=True)
-        self.log("recon_loss", loss["recon"], prog_bar=True)
-        # self.log("contacts", loss["contacts"], prog_bar=True)
+        self.log("train_loss", loss["loss"], prog_bar=True, batch_size=data.size(0))
+        self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=data.size(0))
 
         return loss["loss"]
 
@@ -553,23 +429,20 @@ class VAE(pl.LightningModule):
         Clear the lists that have been filled with losses during the epoch
         for memory management.
         """
-        epoch_mean = torch.stack(self.total_train_step_losses).mean()
+        epoch_mean = self.total_train_step_losses / self.num_batches
         self.log("epoch_train_loss", epoch_mean, prog_bar=True, sync_dist=True)
 
-        recon_mean = torch.stack(self.recon_step_losses).mean()
+        recon_mean = self.recon_step_losses / self.num_batches
         self.log("epoch_recon_loss", recon_mean, prog_bar=True, sync_dist=True)
 
-        # contacts_mean = torch.stack(self.contacts_step_losses).mean()
-        # self.log("epoch_contacts_loss", contacts_mean, prog_bar=True, sync_dist=True)
-
-        KLD_mean = torch.stack(self.KLD_step_losses).mean()
+        KLD_mean = self.KLD_step_losses / self.num_batches
         self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
 
-        # free up the memory
-        self.total_train_step_losses.clear()
-        self.recon_step_losses.clear()
-        self.KLD_step_losses.clear()
-        # self.contacts_step_losses.clear()
+        # Reset the total losses
+        self.total_train_step_losses = 0
+        self.recon_step_losses = 0
+        self.KLD_step_losses = 0
+        self.num_batches = 0
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
         """
@@ -590,16 +463,22 @@ class VAE(pl.LightningModule):
         """
         data = batch["data"]
 
-        data_reconstructed, mu, logvar = self.forward(data)
+        data_reconstructed, moments = self.forward(data=data)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=mu,
-            logvar=logvar,
+            mu=moments.mean,
+            logvar=moments.logvar,
         )
 
-        self.log("epoch_val_loss", loss["loss"], prog_bar=True, sync_dist=True)
+        self.log(
+            "epoch_val_loss",
+            loss["loss"],
+            prog_bar=True,
+            sync_dist=True,
+            batch_size=data.size(0),
+        )
 
         return loss["loss"]
 
@@ -684,7 +563,7 @@ class VAE(pl.LightningModule):
                 "scheduler": CosineAnnealingLR(
                     optimizer,
                     T_max=num_epochs,
-                    eta_min=1e-4,
+                    eta_min=1e-7,
                 ),
                 "monitor": self.monitor,
                 "interval": "epoch",
@@ -694,32 +573,71 @@ class VAE(pl.LightningModule):
 
         return [optimizer], [lr_scheduler]
 
-    def sample(
-        self, batch: int, mean: torch.Tensor = None, std: torch.Tensor = None
-    ) -> torch.Tensor:
+    def symmetrize(self, data_reconstructed: torch.Tensor) -> torch.Tensor:
         """
-        Sample from the latent space of the VAE
+        Symmetrizes the reconstructed data so that the weights can learn other patterns.
+        Loss calculated only on the reconstruction faithfulness of the upper triangle
+        of the distance map
 
         Parameters
         ----------
-        batch : torch.Tensor
-            A number of latent encodings to sample
-        mean : torch.Tensor, optional
-            Means of the latent space, by default None
-        std : torch.Tensor, optional
-            Standard deviations of the latent space, by default None
+        data_reconstructed : torch.Tensor
+            Reconstructed data; output of the decoder
 
         Returns
         -------
         torch.Tensor
-            Returns the sampled data from the latent space
+            Symmetric version of the reconstructed data
         """
-        if mean and std is None:
-            latent_encoding = torch.rand(batch, self.latent_dim)
+        # Get the upper triangular part of each tensor in the batch
+        upper_triangles = torch.triu(data_reconstructed)
+
+        # Symmetrize each tensor in the batch individually
+        symmetrized_arrays = upper_triangles + torch.transpose(upper_triangles, -1, -2)
+
+        # Fill diagonal elements with zeros for each tensor individually
+        diag_values = torch.diagonal(symmetrized_arrays, dim1=-2, dim2=-1)
+        symmetrized_arrays = symmetrized_arrays - torch.diag_embed(diag_values)
+
+        return symmetrized_arrays
+
+    def sample(self, num_samples: int, sequence: torch.Tensor = None) -> torch.Tensor:
+        """
+        Sample from the latent space of the VAE and optionally
+        condition on a sequence
+
+        Parameters
+        ----------
+        num_samples : int
+            Number of samples to generate
+        sequence : torch.Tensor
+            Sequence to generate distance maps for (sequence needs to be < 385), by default None
+
+        Returns
+        -------
+        torch.Tensor
+            Returns the generated distance maps
+        """
+        # If no sequence is given, generate zeroes (no conditioning)
+        if sequence is None:
+            sequence = torch.zeros(
+                (num_samples, self.hparams.dimension, self.vocab_size),
+                dtype=torch.float32,
+            ).to(self.device)
         else:
-            raise ValueError("Not operational yet")
+            sequence = [sequence] * num_samples
+        # Sample the latent encoding from N(0, I)
+        latent_samples = torch.randn(
+            num_samples, 1, int(self.compressed_size), int(self.compressed_size)
+        ).to(self.device)
 
+        # Decode the samples conditioned on sequence/labels
         with torch.no_grad():
-            sampled_data = self.decode(latent_encoding)
+            generated_samples = self.decode(latent_samples, sequence)
 
-        return sampled_data
+        if sequence is not None:
+            sequence_length = len(sequence[0])
+            generated_samples = generated_samples[
+                :, :, :sequence_length, :sequence_length
+            ]
+        return generated_samples
