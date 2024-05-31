@@ -34,17 +34,23 @@ def one_hot_encode(sequences):
         "Y": 20,
     }
 
-    # One-hot encode the sequence
-    one_hot_encoded_seq = []
-    for sequence in sequences:
-        one_hot_sequence = np.zeros((len(sequence), len(aa_to_int)), dtype=np.float32)
-        for i, aa in enumerate(sequence):
-            if aa in aa_to_int:
-                one_hot_sequence[i, aa_to_int[aa]] = 1
-            else:
-                one_hot_sequence[i, aa_to_int["X"]] = 1
-        one_hot_encoded_seq.append(one_hot_sequence)
-    one_hot_encoded_seq = np.array(one_hot_encoded_seq)
+    # Convert sequences to numpy array of integers
+    int_sequences = [[aa_to_int[aa] for aa in sequence] for sequence in sequences]
+    int_sequences = np.array(int_sequences)
+
+    # Create an array of zeros with shape (num_sequences, sequence_length, num_classes)
+    num_sequences = len(sequences)
+    sequence_length = max(len(sequence) for sequence in sequences)
+    num_classes = len(aa_to_int)
+
+    one_hot_encoded_seq = np.zeros(
+        (num_sequences, sequence_length, num_classes), dtype=np.float32
+    )
+
+    # Use advanced indexing to set the appropriate elements to 1
+    for i, sequence in enumerate(int_sequences):
+        one_hot_encoded_seq[i, np.arange(len(sequence)), sequence] = 1
+
     return one_hot_encoded_seq
 
 
