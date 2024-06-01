@@ -135,11 +135,7 @@ class VAE(pl.LightningModule):
         # Encoder
         encoder_chanel = in_channels
         self.encoder = resnets[encoder_model]["encoder"][model_type](
-            in_channels=encoder_chanel,
-            base=base,
-            norm=norm,
-            conditional=conditional,
-            conditional_dim=conditional_dim,
+            in_channels=encoder_chanel, base=base, norm=norm
         )
 
         # This is usually 4 in ResNets
@@ -171,12 +167,7 @@ class VAE(pl.LightningModule):
 
         # Decoder
         self.decoder = resnets[decoder_model]["decoder"][model_type](
-            out_channels=in_channels,
-            dimension=dimension,
-            base=base,
-            norm=norm,
-            conditional=conditional,
-            conditional_dim=conditional_dim,
+            out_channels=in_channels, dimension=dimension, base=base, norm=norm
         )
 
         if labels is not None:
@@ -208,7 +199,7 @@ class VAE(pl.LightningModule):
             Return the mean and log variance of the latent space
         """
 
-        data = self.encoder(data, labels)
+        data = self.encoder(data)
         data = self.encoder_to_latent(data)
         moments = DiagonalGaussianDistribution(data)
 
@@ -232,7 +223,7 @@ class VAE(pl.LightningModule):
         """
         latents = self.latent_to_decoder(latents)
 
-        latents = self.decoder(latents, labels)
+        latents = self.decoder(latents)
         return latents
 
     def gaussian_likelihood(
