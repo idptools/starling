@@ -17,9 +17,7 @@ from starling.data.data_wrangler import (
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(
-        self, tsv_file: str, target_shape: int, pretraining: bool = False
-    ) -> None:
+    def __init__(self, tsv_file: str, target_shape: int) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
 
@@ -34,34 +32,17 @@ class MatrixDataset(torch.utils.data.Dataset):
         """
         self.data = read_tsv_file(tsv_file)
         self.target_shape = (target_shape, target_shape)
-        self.pretraining = pretraining
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
-        # Get a single data sample
-        try:
-            sample = np.loadtxt(self.data[index], dtype=np.float32)
-        except Exception as e:
-            data_path, frame = self.data[index]
-            data = load_hdf5_compressed(
-                data_path, keys_to_load=["dm", "seq"], frame=int(frame)
-            )
-            sample = symmetrize(data["dm"]).astype(np.float32)
-            sequence = data["seq"][()].decode()
-
-        if not self.pretraining:
-            encoder_condition = self.get_interaction_matrix(sequence)
-            encoder_condition = symmetrize(encoder_condition)
-            encoder_condition = MaxPad(encoder_condition, shape=(self.target_shape))
-
-            encoder_condition = torch.from_numpy(
-                encoder_condition.astype(np.float32)
-            ).unsqueeze(0)
-        else:
-            encoder_condition = {}
-            sequence = {}
+        data_path, frame = self.data[index]
+        data = load_hdf5_compressed(
+            data_path, keys_to_load=["dm", "seq"], frame=int(frame)
+        )
+        sample = symmetrize(data["dm"]).astype(np.float32)
+        sequence = data["seq"][()].decode()
 
         # Resize the input distance map with padding
         sample = MaxPad(sample, shape=(self.target_shape))
@@ -71,9 +52,7 @@ class MatrixDataset(torch.utils.data.Dataset):
 
         return {
             "data": sample,
-            "encoder_condition": encoder_condition,
-            "decoder_condition": sequence,
-            # "decoder_condition": torch.from_numpy(self.epsilon_vector(sequence)),
+            "sequence": sequence,
             "length": torch.tensor([len(sequence) - 1]),
         }
 
@@ -114,16 +93,14 @@ class MatrixDataModule(pl.LightningDataModule):
         test_data=None,
         batch_size=None,
         target_shape=None,
-        pretraining=False,
     ):
         super().__init__()
         self.train_data = train_data
-        self.pretraining = pretraining
         self.val_data = val_data
         self.test_data = test_data
         self.batch_size = batch_size
         self.target_shape = target_shape
-        self.num_workers = int(os.cpu_count() / 4)
+        self.num_workers = int(os.cpu_count() / 2)
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -134,24 +111,20 @@ class MatrixDataModule(pl.LightningDataModule):
             self.train_dataset = MatrixDataset(
                 self.train_data,
                 target_shape=self.target_shape,
-                pretraining=self.pretraining,
             )
             self.val_dataset = MatrixDataset(
                 self.val_data,
                 target_shape=self.target_shape,
-                pretraining=self.pretraining,
             )
         if stage == "test":
             self.test_dataset = MatrixDataset(
                 self.test_data,
                 target_shape=self.target_shape,
-                pretraining=self.pretraining,
             )
         if stage == "predict":
             self.predict_dataset = MatrixDataset(
                 self.predict_data,
                 target_shape=self.target_shape,
-                pretraining=self.pretraining,
             )
 
     def train_dataloader(self):
