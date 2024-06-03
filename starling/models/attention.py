@@ -7,7 +7,22 @@ from starling.models.normalization import RMSNorm
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, kernel_size=1):
+    def __init__(self, embed_dim: int, num_heads: int, kernel_size: int = 1) -> None:
+        """
+        CrossAttention module for use in UNet models. This module is used to
+        perform attention on query (distance maps/2D data) using key and value
+        (sequence labels). It is used to attend to 2D features using text/sequence
+        embeddings, effectively conditioning the model on the text/sequence labels.
+
+        Parameters
+        ----------
+        embed_dim : int
+            Dimension of the input embedding
+        num_heads : int
+            Number of heads for multi-head attention
+        kernel_size : int, optional
+            Size of the kernel for generating query, by default 1
+        """
         super(CrossAttention, self).__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -17,6 +32,8 @@ class CrossAttention(nn.Module):
             self.head_dim * num_heads == embed_dim
         ), "embed_dim must be divisible by num_heads"
 
+        # Convolutional projections on 2D data for query matrix, since there are spatial components
+        # to this data we are using Conv2s instead of Linear layers
         self.query_conv = nn.Conv2d(
             embed_dim, embed_dim, kernel_size=kernel_size, padding=kernel_size // 2
         )
@@ -25,6 +42,8 @@ class CrossAttention(nn.Module):
         self.key_conv = nn.Linear(embed_dim, embed_dim)
         self.value_conv = nn.Linear(embed_dim, embed_dim)
 
+        # Output convolutional layer (unclear whether this normalization is necessary)
+        # - this is done in transformers
         self.out_conv = nn.Sequential(
             nn.Conv2d(embed_dim, embed_dim, kernel_size=1), RMSNorm(embed_dim)
         )
@@ -64,7 +83,22 @@ class CrossAttention(nn.Module):
 
 
 class SelfAttentionConv(nn.Module):
-    def __init__(self, embed_dim, num_heads, kernel_size=1):
+    def __init__(self, embed_dim: int, num_heads: int, kernel_size: int = 1) -> None:
+        """
+        SelfAttentionConv module for use in UNet models. This module is used to
+        perform self-attention on 2D data. It is used to attend to spatial features
+        in the 2D data, effectively allowing the model to learn spatial relationships
+        between pixels.
+
+        Parameters
+        ----------
+        embed_dim : int
+            Dimension of the input embedding
+        num_heads : int
+            Number of heads for multi-head attention
+        kernel_size : int, optional
+            Size of the kernel for generating query, key, and value matrices, by default 1
+        """
         super(SelfAttentionConv, self).__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -87,7 +121,7 @@ class SelfAttentionConv(nn.Module):
             nn.Conv2d(embed_dim, embed_dim, kernel_size=1), RMSNorm(embed_dim)
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor):
         batch_size, channels, height, width = x.size()
 
         # Convolutional projections
@@ -122,7 +156,24 @@ class SelfAttentionConv(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads, channels_last=False):
+    def __init__(
+        self, embed_dim: int, num_heads: int, channels_last: bool = False
+    ) -> None:
+        """
+        This is a basic self-attention module. It uses linear layers to project
+        the input into query, key, and value matrices, then performs scaled dot-product
+        attention on these matrices. The output is then projected back to the original
+        embedding dimension. Commonly used in transformer models.
+
+        Parameters
+        ----------
+        embed_dim : int
+            Dimension of the input embedding
+        num_heads : int
+            Number of heads for multi-head attention
+        channels_last : bool, optional
+            Whether the input has channels last format, if not it will be rearranged, by default False
+        """
         super(SelfAttention, self).__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
