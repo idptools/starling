@@ -12,8 +12,11 @@ from pytorch_lightning.loggers import WandbLogger
 from starling.data.argument_parser import get_params
 from starling.data.myloader import MatrixDataModule
 from starling.models.cvae import cVAE
+
+# from starling.models.diffusion_test_conditional import DiffusionModel
 from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNet
+from starling.models.unet import UNetConditional, UNetSelfAttention
+from starling.models.vae import VAE
 
 
 def train_vae():
@@ -45,38 +48,39 @@ def train_vae():
     dataset = MatrixDataModule(**config["data"], target_shape=384)
 
     dataset.setup(stage="fit")
-    # from torch.utils.data import DataLoader, random_split
-    # from torchvision import transforms
-    # from torchvision.datasets import MNIST
-
-    # transform_with_padding = transforms.Compose(
-    #     [
-    #         transforms.Pad(2, 2),  # Add padding to the images
-    #         transforms.ToTensor(),
-    #         # transforms.Normalize((0.5,), (0.5,)),
-    #     ]
-    # )
-
-    # train_ds = MNIST(
-    #     "MNIST/raw/train-images-idx3-ubyte",
-    #     train=True,
-    #     download=True,
-    #     transform=transform_with_padding,
-    # )
-    # dataset = DataLoader(train_ds, batch_size=256)
 
     # Loading in a model from diffusers, will replace with my own UNet model
     # Assuming I can make it work
 
-    import diffusers
+    # import diffusers
 
-    UNet_model = diffusers.UNet2DModel(
-        sample_size=24,
+    # UNet_model = diffusers.UNet2DConditionModel(
+    #     sample_size=24,  # the target image resolution
+    #     in_channels=1,  # the number of input channels, 3 for RGB images
+    #     out_channels=1,  # the number of output channels
+    #     layers_per_block=2,  # how many ResNet layers to use per UNet block
+    #     block_out_channels=(128, 128, 256, 256),
+    #     cross_attention_dim=320,
+    #     # encoder_hid_dim_type="text_proj",
+    #     # encoder_hid_dim=100,
+    # )
+
+    # UNet_model = UNetSelfAttention(
+    #     in_channels=1,
+    #     out_channels=1,
+    #     base=64,
+    #     norm="group",
+    #     blocks=[2, 2, 2],
+    #     middle_blocks=2,
+    # )
+
+    UNet_model = UNetConditional(
         in_channels=1,
         out_channels=1,
-        layers_per_block=2,
-        class_embed_type="identity",
-        block_out_channels=(128, 128, 256, 512),
+        base=64,
+        norm="group",
+        blocks=[2, 2, 2],
+        middle_blocks=2,
     )
 
     gpu_ids = config["device"]["cuda"]
@@ -84,8 +88,8 @@ def train_vae():
         f"cuda:{i}": f"cuda:{gpu_ids[i % len(gpu_ids)]}" for i in range(len(gpu_ids))
     }
 
-    encoder_model = cVAE.load_from_checkpoint(
-        "/home/bnovak/github/starling/starling/models/trained_models/model-kernel-epoch=05-epoch_val_loss=1.86_VAE.ckpt",
+    encoder_model = VAE.load_from_checkpoint(
+        "/home/bnovak/projects/autoencoder_training/VAE_training/non_conditional_VAE/KLD_1e-6_Resnet18_instance_norm/model-kernel-epoch=02-epoch_val_loss=2.65.ckpt",
         map_location=map_location,
     )
 
@@ -96,6 +100,8 @@ def train_vae():
         beta_scheduler="cosine",
         timesteps=1000,
         schedule_fn_kwargs=None,
+        set_lr=1e-4,
+        labels=None,
     )
 
     # Make the directories to save the model and logs
