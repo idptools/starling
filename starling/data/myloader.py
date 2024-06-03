@@ -17,7 +17,7 @@ from starling.data.data_wrangler import (
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, tsv_file: str, target_shape: int) -> None:
+    def __init__(self, tsv_file: str, target_shape: int, finches_conditioning) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
 
@@ -32,6 +32,7 @@ class MatrixDataset(torch.utils.data.Dataset):
         """
         self.data = read_tsv_file(tsv_file)
         self.target_shape = (target_shape, target_shape)
+        self.finches_conditioning = finches_conditioning
 
     def __len__(self):
         return len(self.data)
@@ -50,10 +51,19 @@ class MatrixDataset(torch.utils.data.Dataset):
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
 
+        if self.finches_conditioning:
+            # Should I make the diagonal 0? - this would be as positional encodings for the model
+            labels = self.get_interaction_matrix(sequence)
+            labels = MaxPad(labels, shape=(self.target_shape))
+            labels = torch.from_numpy(labels).to(torch.float32)
+        else:
+            labels = None
+
         return {
             "data": sample,
             "sequence": sequence,
             "length": torch.tensor([len(sequence) - 1]),
+            "labels": labels,
         }
 
     def get_interaction_matrix(self, sequence):
@@ -93,6 +103,7 @@ class MatrixDataModule(pl.LightningDataModule):
         test_data=None,
         batch_size=None,
         target_shape=None,
+        finches_conditioning=False,
     ):
         super().__init__()
         self.train_data = train_data
@@ -101,6 +112,7 @@ class MatrixDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.target_shape = target_shape
         self.num_workers = int(os.cpu_count() / 2)
+        self.finches_conditioning = finches_conditioning
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -111,20 +123,24 @@ class MatrixDataModule(pl.LightningDataModule):
             self.train_dataset = MatrixDataset(
                 self.train_data,
                 target_shape=self.target_shape,
+                finches_conditioning=self.finches_conditioning,
             )
             self.val_dataset = MatrixDataset(
                 self.val_data,
                 target_shape=self.target_shape,
+                finches_conditioning=self.finches_conditioning,
             )
         if stage == "test":
             self.test_dataset = MatrixDataset(
                 self.test_data,
                 target_shape=self.target_shape,
+                finches_conditioning=self.finches_conditioning,
             )
         if stage == "predict":
             self.predict_dataset = MatrixDataset(
                 self.predict_data,
                 target_shape=self.target_shape,
+                finches_conditioning=self.finches_conditioning,
             )
 
     def train_dataloader(self):
