@@ -70,7 +70,8 @@ class DiffusionModel(pl.LightningModule):
         self.encoder_model.eval()
 
         # self.channels = self.model.config.in_channels
-        self.channels = self.model.in_channels
+        # self.channels = self.model.in_channels
+        self.channels = 1
         self.image_size = image_size
 
         # Learning rate params
@@ -237,7 +238,7 @@ class DiffusionModel(pl.LightningModule):
             (b,), timestamp, device=device, dtype=torch.long
         )
 
-        preds = self.model(x, batched_timestamps, labels)[0]
+        preds = self.model(x, batched_timestamps, labels)
 
         betas_t = extract(self.betas, batched_timestamps, x.shape)
         sqrt_recip_alphas_t = extract(
@@ -345,38 +346,26 @@ class DiffusionModel(pl.LightningModule):
 
         shape = (batch_size, self.channels, self.image_size, self.image_size)
 
-        # Make sure there is -1 here to get the correct length, nn.Embedding is 0-indexed
-        lengths = [len(labels) - 1]
-        length_labels = torch.tensor(
-            lengths,
-            device=self.device,
-            dtype=torch.long,
-        )
+        # with torch.no_grad():
+        #     # Get the ESM2 embeddings for the sequence
+        #     if self.labels in self.esm.keys():
+        #         labels = self.sequence2labels([labels])
+        #     elif self.labels == "epsilon":
+        #         labels = self.epsilon_vector_embedding(labels)
+        #     elif self.labels == "learned-embeddings":
+        #         labels = [seq.ljust(384, "0") for seq in [labels]]
+        #         labels = torch.argmax(
+        #             torch.tensor(one_hot_encode(labels), device=self.device), dim=-1
+        #         )
+        #         labels = self.learned_embedding(labels).squeeze(-1)
+        #         labels = labels.view(labels.shape[0], -1)
 
-        with torch.no_grad():
-            # Get the length class of the sequence
-            length_labels = self.embed_length(length_labels)
-            # length_labels = self.length_mlp(length_labels)
+        #     labels = self.mlp(labels)
 
-            # Get the ESM2 embeddings for the sequence
-            if self.labels in self.esm.keys():
-                labels = self.sequence2labels([labels])
-            elif self.labels == "epsilon":
-                labels = self.epsilon_vector_embedding(labels)
-            elif self.labels == "learned-embeddings":
-                labels = [seq.ljust(384, "0") for seq in [labels]]
-                labels = torch.argmax(
-                    torch.tensor(one_hot_encode(labels), device=self.device), dim=-1
-                )
-                labels = self.learned_embedding(labels).squeeze(-1)
-                labels = labels.view(labels.shape[0], -1)
+        # # ESM2 embeddings and length embeddings are summed
+        # labels += length_labels
 
-            labels = self.mlp(labels)
-
-        # ESM2 embeddings and length embeddings are summed
-        labels += length_labels
-
-        labels = labels.repeat(batch_size, 1)
+        # labels = labels.repeat(batch_size, 1)
         return self.p_sample_loop(
             shape, labels, steps=steps, return_all_timesteps=return_all_timesteps
         )
@@ -492,7 +481,7 @@ class DiffusionModel(pl.LightningModule):
             # )
         x_noised = self.q_sample(x_start, t, noise=noise)
 
-        predicted_noise = self.model(x_noised, t)
+        predicted_noise = self.model(x_noised, t, labels)
 
         if loss_type == "l2":
             loss = F.mse_loss(noise, predicted_noise)
@@ -529,7 +518,7 @@ class DiffusionModel(pl.LightningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         data = batch["data"]
-        sequences = batch["sequence"]
+        labels = batch["labels"]
 
         with torch.no_grad():
             latent_encoding = self.encoder_model.encode(data, None)
@@ -546,7 +535,7 @@ class DiffusionModel(pl.LightningModule):
         # # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
-        loss = self.forward(latent_encoding)
+        loss = self.forward(latent_encoding, labels=labels)
 
         self.log("train_loss", loss, prog_bar=True, batch_size=data.size(0))
 
@@ -554,7 +543,7 @@ class DiffusionModel(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         data = batch["data"]
-        sequences = batch["sequence"]
+        labels = batch["labels"]
 
         with torch.no_grad():
             latent_encoding = self.encoder_model.encode(data, None)
@@ -571,7 +560,7 @@ class DiffusionModel(pl.LightningModule):
         # # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
-        loss = self.forward(latent_encoding)
+        loss = self.forward(latent_encoding, labels=labels)
 
         self.log(
             "epoch_val_loss",
