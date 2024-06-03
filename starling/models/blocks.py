@@ -1,9 +1,11 @@
 import torch
 import torch.nn.functional as F
+from einops import rearrange, reduce, repeat
 from IPython import embed
 from torch import nn
 
 from starling.models.attention import CrossAttention
+from starling.models.normalization import RMSNorm
 
 
 class LayerNorm(nn.Module):
@@ -78,11 +80,17 @@ class ResizeConv2d(nn.Module):
         self.size = size
         self.scale_factor = scale_factor
         self.mode = mode
+
+        if norm is not None:
+            normalization = (
+                norm(out_channels) if norm != nn.GroupNorm else norm(32, out_channels)
+            )
+
         self.conv = nn.Sequential(
             nn.Conv2d(
                 in_channels, out_channels, kernel_size, stride=1, padding=padding
             ),
-            nn.Identity() if norm is None else norm(out_channels),
+            nn.Identity() if norm is None else normalization,
             nn.Identity() if activation is None else nn.ReLU(inplace=True),
         )
 
@@ -115,6 +123,8 @@ class ResBlockEncBasic(nn.Module):
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
+            "rms": RMSNorm,
+            "group": nn.GroupNorm,
         }
 
         self.conv1 = nn.Conv2d(
@@ -124,12 +134,17 @@ class ResBlockEncBasic(nn.Module):
             padding=padding,
             kernel_size=kernel_size,
         )
-        self.norm1 = normalization[norm](out_channels)
+        self.norm1 = (
+            normalization[norm](out_channels)
+            if norm != "group"
+            else normalization[norm](32, out_channels)
+        )
+
         self.activation1 = nn.ReLU(inplace=True)
 
         if timestep is not None:
             self.time_mlp = nn.Sequential(
-                nn.ReLU(inplace=False), nn.Linear(timestep, out_channels)
+                nn.SiLU(inplace=False), nn.Linear(timestep, out_channels * 2)
             )
 
         self.conv2 = nn.Sequential(
@@ -140,7 +155,9 @@ class ResBlockEncBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            normalization[norm](out_channels),
+            normalization[norm](out_channels)
+            if norm != "group"
+            else normalization[norm](32, out_channels),
         )
 
         if stride > 1 or in_channels != out_channels:
@@ -152,7 +169,9 @@ class ResBlockEncBasic(nn.Module):
                     stride=stride,
                     padding=0,
                 ),
-                normalization[norm](out_channels),
+                normalization[norm](out_channels)
+                if norm != "group"
+                else normalization[norm](32, out_channels),
             )
         else:
             self.shortcut = nn.Sequential()
@@ -162,16 +181,19 @@ class ResBlockEncBasic(nn.Module):
         # Set up the shortcut connection if necessary
         identity = self.shortcut(data)
 
-        # First convolution
+        # First convolution and normalization
         data = self.conv1(data)
 
         # Add timestep conditioning if provided
         if timestep is not None:
             timestep = self.time_mlp(timestep)
-            data += timestep[:, :, None, None]
+            timestep = rearrange(timestep, "b c -> b c 1 1")
+            scale, shift = timestep.chunk(2, dim=1)
+            data = data * (scale + 1) + shift
 
-        # Add normalization and activation function after timestep conditioning
-        data = self.activation1(self.norm1(data))
+        # Add activation function after timestep conditioning
+        data = self.norm1(data)
+        data = self.activation1(data)
 
         # Second convolution
         data = self.conv2(data)
