@@ -1,7 +1,6 @@
 from typing import List, Tuple
 
 import esm
-import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -13,7 +12,7 @@ from torch.optim.lr_scheduler import (
     OneCycleLR,
 )
 
-from starling.data.data_wrangler import MaxPad, one_hot_encode
+from starling.data.data_wrangler import one_hot_encode
 from starling.data.distributions import DiagonalGaussianDistribution
 from starling.data.esm_embeddings import esm_embeddings
 from starling.models import resnets_original, vae_components
@@ -250,7 +249,6 @@ class cVAE(pl.LightningModule):
             dimension=dimension,
             base=base,
             norm=norm,
-            conditional=decoder_conditioning,
         )
 
         # Params to learn for reconstruction loss
@@ -327,7 +325,7 @@ class cVAE(pl.LightningModule):
         if not self.decoder_conditioning:
             labels = None
 
-        latents = self.decoder(latents, labels)
+        latents = self.decoder(latents)
         return latents
 
     def sequence2labels(self, sequences: List) -> torch.Tensor:

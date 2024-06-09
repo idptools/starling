@@ -5,7 +5,6 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from IPython import embed
-from memory_profiler import profile
 from torch.cuda.amp import autocast
 from torch.functional import F
 from torch.optim.lr_scheduler import (
@@ -15,8 +14,8 @@ from torch.optim.lr_scheduler import (
 )
 from tqdm import tqdm
 
-from starling.data.data_wrangler import MaxPad, one_hot_encode, symmetrize
-from starling.data.esm_embeddings import BatchConverter, esm_embeddings
+from starling.data.data_wrangler import MaxPad, one_hot_encode
+from starling.data.esm_embeddings import esm_embeddings
 from starling.data.schedulers import (
     cosine_beta_schedule,
     linear_beta_schedule,
@@ -38,33 +37,6 @@ def extract(
 torch.set_float32_matmul_precision("high")
 
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, max_seq_len, embedding_size):
-        super(PositionalEncoding, self).__init__()
-        self.max_seq_len = max_seq_len
-        self.embedding_size = embedding_size
-        self.positional_encoding = self._generate_positional_encoding()
-
-    def _generate_positional_encoding(self):
-        pe = torch.zeros(self.max_seq_len, self.embedding_size)
-        position = torch.arange(0, self.max_seq_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.embedding_size, 2, dtype=torch.float32)
-            * (-torch.log(torch.tensor(10000.0)) / self.embedding_size)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # Add batch dimension
-        return pe
-
-    def forward(self, x):
-        # return x + self.positional_encoding[:, : x.size(1), :]
-        if self.positional_encoding.device != x.device:
-            self.positional_encoding = self.positional_encoding.to(x.device)
-
-        return x + self.positional_encoding
-
-
 class DiffusionModel(pl.LightningModule):
     SCHEDULER_MAPPING = {
         "linear": linear_beta_schedule,
@@ -81,7 +53,8 @@ class DiffusionModel(pl.LightningModule):
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         schedule_fn_kwargs: Union[dict, None] = None,
-        labels="learned-embeddings",
+        # labels="learned-embeddings",
+        labels="esm2_t6_8M_UR50D",
         set_lr=1e-4,
         config_scheduler="CosineAnnealingLR",
     ) -> None:
@@ -90,7 +63,6 @@ class DiffusionModel(pl.LightningModule):
         self.save_hyperparameters(ignore=["encoder_model", "model"])
 
         self.model = model
-        self.labels = labels
 
         # Freeze the encoder model parameters
         self.encoder_model = encoder_model
@@ -98,9 +70,8 @@ class DiffusionModel(pl.LightningModule):
             param.requires_grad = False
         self.encoder_model.eval()
 
-        # self.channels = self.model.config.in_channels
+        self.channels = self.model.config.in_channels
         # self.channels = self.model.in_channels
-        self.channels = 1
         self.image_size = image_size
 
         # Learning rate params
@@ -166,33 +137,59 @@ class DiffusionModel(pl.LightningModule):
             },
         }
 
+        # Making labels for the decoder
+
         # ESM2 model to generate labels
+        self.labels = labels
         if self.labels in self.esm.keys():
             self.esm_model, self.esm_alphabet = self.esm[self.labels]["model_name"]
             self.esm_layers = self.esm[self.labels]["layers"]
-
             # Freeze the parameters, we don't want to keep training ESM
             for param in self.esm_model.parameters():
                 param.requires_grad = False
-
             # Don't do any dropout within ESM model
             self.esm_model.eval()
-
-            self.sequence_mlp = nn.Sequential(
+            # Get the embeddings to the right shape for the decoder
+            self.mlp = nn.Sequential(
                 nn.Linear(
                     self.esm[self.labels]["latent_dim"],
-                    self.esm[self.labels]["latent_dim"] * 4,
+                    self.esm[self.labels]["latent_dim"],
                 ),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
                 nn.Linear(
-                    self.esm[self.labels]["latent_dim"] * 4,
                     self.esm[self.labels]["latent_dim"],
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    self.model.config.block_out_channels[0] * 4,
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+            )
+
+        elif self.labels == "epsilon":
+            # self.epsilon_vector_embedding = epsilon_vector
+            self.mlp = nn.Sequential(
+                nn.Linear(384 * 2, 384 * 2),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    384 * 2,
+                    self.model.config.block_out_channels[0] * 4,
+                ),
+                nn.ReLU(inplace=True),
+                nn.Linear(
+                    self.model.config.block_out_channels[0] * 4,
+                    self.model.config.block_out_channels[0] * 4,
                 ),
             )
         elif self.labels == "learned-embeddings":
-            pos_embed = PositionalEncoding(384, self.model.config.cross_attention_dim)
-            embedding = nn.Embedding(21, self.model.config.cross_attention_dim)
-            self.sequence_embedding = nn.Sequential(embedding, pos_embed)
+            embedding_dim = 100
+            self.learned_embedding = nn.Embedding(21, embedding_dim)
+
+        # # # Provide labels for length of the sequences
+        # self.embed_length = nn.Embedding(
+        #     384, self.model.config.block_out_channels[0] * 4
+        # )
 
     @torch.inference_mode()
     def p_sample(
@@ -275,35 +272,21 @@ class DiffusionModel(pl.LightningModule):
 
         batch, device = shape[0], self.device
 
-        all_latents = []
-
         latents = torch.randn(shape, device=device)
 
-        if steps is not None:
-            timesteps = torch.linspace(1, self.num_timesteps - 1, steps).to(torch.int64)
-        else:
-            timesteps = range(0, self.num_timesteps)
-
         for t in tqdm(
-            reversed(timesteps),
+            reversed(range(0, self.num_timesteps)),
             desc="Generating Latents",
-            total=len(timesteps),
+            total=self.num_timesteps,
         ):
-            if return_all_timesteps:
-                all_latents.append(latents)
-
             latents = self.p_sample(latents, t, labels)
 
         # Scale the latents back to the original scale
         latents = (1 / self.latent_space_scaling_factor) * latents
 
         # if not return_all_timesteps else torch.stack(imgs, dim=1)
-        if return_all_timesteps:
-            return torch.stack(all_latents, dim=1) * (
-                1 / self.latent_space_scaling_factor
-            )
-        else:
-            return latents
+
+        return latents
 
     @torch.inference_mode()
     def sample(
@@ -333,24 +316,39 @@ class DiffusionModel(pl.LightningModule):
         """
 
         shape = (batch_size, self.channels, self.image_size, self.image_size)
-        sequence_length = len(labels)
 
-        if self.labels in self.esm.keys():
-            with torch.no_grad():
+        # Make sure there is -1 here to get the correct length, nn.Embedding is 0-indexed
+        lengths = [len(labels) - 1]
+        length_labels = torch.tensor(
+            lengths,
+            device=self.device,
+            dtype=torch.long,
+        )
+
+        with torch.no_grad():
+            # Get the length class of the sequence
+            # length_labels = self.embed_length(length_labels)
+            # length_labels = self.length_mlp(length_labels)
+
+            # Get the ESM2 embeddings for the sequence
+            if self.labels in self.esm.keys():
                 labels = self.sequence2labels([labels])
-        else:
-            labels = self.sequence_embedding(labels)
+            elif self.labels == "epsilon":
+                labels = self.epsilon_vector_embedding(labels)
+            elif self.labels == "learned-embeddings":
+                labels = [seq.ljust(384, "0") for seq in [labels]]
+                labels = torch.argmax(
+                    torch.tensor(one_hot_encode(labels), device=self.device), dim=-1
+                )
+                labels = self.learned_embedding(labels).squeeze(-1)
 
         labels = labels.repeat(batch_size, 1, 1)
-        latents = self.p_sample_loop(
+        return self.p_sample_loop(
             shape, labels, steps=steps, return_all_timesteps=return_all_timesteps
         )
 
-        distance_map = self.encoder_model.decode(latents)
-
-        return distance_map, latents
-
-    # Remove mixed precision from this function, I've experienced numerical instability here
+    # Remove mixed precision from this function,
+    # I've experienced numerical instability here
     @autocast(enabled=False)
     def q_sample(
         self, x_start: torch.Tensor, t: int, noise: torch.Tensor = None
@@ -411,6 +409,7 @@ class DiffusionModel(pl.LightningModule):
                 sequences,
                 self.device,
                 self.esm_layers,
+                type="residue",
             )
 
         return encoded
@@ -458,17 +457,28 @@ class DiffusionModel(pl.LightningModule):
             # noise += 0.1 * torch.randn(
             #     x_start.shape[0], x_start.shape[1], 1, 1, device=self.device
             # )
-
         x_noised = self.q_sample(x_start, t, noise=noise)
-        if self.labels in self.esm.keys():
-            labels = self.sequence2labels(labels)
-            labels = self.sequence_mlp(labels)
-        else:
-            labels = labels.squeeze()
-            labels = self.sequence_embedding(labels)
 
-        # predicted_noise = self.model(x_noised, t, labels)[0]
-        predicted_noise = self.model(x_noised, t, labels)
+        if labels is not None:
+            labels, lengths = labels
+            # lengths = self.embed_length(lengths.squeeze())
+
+            if self.labels in self.esm.keys():
+                labels = self.sequence2labels(labels)
+            elif self.labels == "epsilon":
+                pass
+            elif self.labels == "learned-embeddings":
+                labels = [seq.ljust(384, "0") for seq in labels]
+                labels = torch.argmax(
+                    torch.tensor(one_hot_encode(labels), device=self.device), dim=-1
+                )
+                labels = self.learned_embedding(labels).squeeze()
+
+            # labels = labels.view(x_start.shape[0], -1)
+            # labels = self.mlp(labels)
+            # labels += lengths
+
+            predicted_noise = self.model(x_noised, t, labels)[0]
 
         if loss_type == "l2":
             loss = F.mse_loss(noise, predicted_noise)
@@ -504,17 +514,16 @@ class DiffusionModel(pl.LightningModule):
         return self.p_loss(x, timestamps, labels)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences, labels = batch
+        data = batch["data"]
+        encoder_labels = batch["encoder_condition"]
+        unet_labels = [batch["decoder_condition"], batch["length"]]
 
         with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(
-                data, labels=labels.unsqueeze(1)
-            )
+            latent_encoding = self.encoder_model.encode(data, labels=encoder_labels)
             latent_encoding = latent_encoding.sample()
 
         # Figure out the standard deviation of the latent space using
         # the first batch of the data. This is to scale it to have unit variance
-        # stabilizes denoising-diffusion training
         if self.global_step == 0 and batch_idx == 0:
             latent_space_scaling_factor = 1 / latent_encoding.std()
             self.latent_space_scaling_factor = latent_space_scaling_factor.float().to(
@@ -524,25 +533,25 @@ class DiffusionModel(pl.LightningModule):
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
-        loss = self.forward(latent_encoding, labels=sequences)
+        loss = self.forward(latent_encoding, unet_labels)
 
         self.log("train_loss", loss, prog_bar=True, batch_size=data.size(0))
 
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences, labels = batch
+        data = batch["data"]
+        encoder_labels = batch["encoder_condition"]
+        unet_labels = [batch["decoder_condition"], batch["length"]]
 
         with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(
-                data, labels=labels.unsqueeze(1)
-            )
+            latent_encoding = self.encoder_model.encode(data, labels=encoder_labels)
             latent_encoding = latent_encoding.sample()
 
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
-        loss = self.forward(latent_encoding, labels=sequences)
+        loss = self.forward(latent_encoding, unet_labels)
 
         self.log(
             "epoch_val_loss",

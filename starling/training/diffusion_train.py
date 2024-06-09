@@ -15,7 +15,7 @@ from starling.models.cvae import cVAE
 
 # from starling.models.diffusion_test_conditional import DiffusionModel
 from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNetConditional, UNetSelfAttention
+from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
 
 
@@ -52,7 +52,7 @@ def train_vae():
     # Loading in a model from diffusers, will replace with my own UNet model
     # Assuming I can make it work
 
-    # import diffusers
+    import diffusers
 
     # UNet_model = diffusers.UNet2DConditionModel(
     #     sample_size=24,  # the target image resolution
@@ -60,18 +60,9 @@ def train_vae():
     #     out_channels=1,  # the number of output channels
     #     layers_per_block=2,  # how many ResNet layers to use per UNet block
     #     block_out_channels=(128, 128, 256, 256),
-    #     cross_attention_dim=320,
+    #     cross_attention_dim=640,
     #     # encoder_hid_dim_type="text_proj",
     #     # encoder_hid_dim=100,
-    # )
-
-    # UNet_model = UNetSelfAttention(
-    #     in_channels=1,
-    #     out_channels=1,
-    #     base=64,
-    #     norm="group",
-    #     blocks=[2, 2, 2],
-    #     middle_blocks=2,
     # )
 
     UNet_model = UNetConditional(
@@ -81,6 +72,7 @@ def train_vae():
         norm="group",
         blocks=[2, 2, 2],
         middle_blocks=2,
+        labels_dim=480,
     )
 
     gpu_ids = config["device"]["cuda"]
@@ -88,8 +80,8 @@ def train_vae():
         f"cuda:{i}": f"cuda:{gpu_ids[i % len(gpu_ids)]}" for i in range(len(gpu_ids))
     }
 
-    encoder_model = VAE.load_from_checkpoint(
-        "/home/bnovak/projects/autoencoder_training/VAE_training/non_conditional_VAE/KLD_1e-6_Resnet18_instance_norm/model-kernel-epoch=02-epoch_val_loss=2.65.ckpt",
+    encoder_model = cVAE.load_from_checkpoint(
+        "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
         map_location=map_location,
     )
 
@@ -101,7 +93,8 @@ def train_vae():
         timesteps=1000,
         schedule_fn_kwargs=None,
         set_lr=1e-4,
-        labels=None,
+        # labels="esm2_t30_150M_UR50D",
+        labels="esm2_t12_35M_UR50D",
     )
 
     # Make the directories to save the model and logs
@@ -126,6 +119,7 @@ def train_vae():
         gradient_clip_val=1.0,
         precision="16-mixed",
         logger=wandb_logger,
+        strategy="ddp" if len(gpu_ids) > 1 else "auto",
     )
 
     # Start training

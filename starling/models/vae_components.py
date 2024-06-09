@@ -20,13 +20,8 @@ class ResNet_Encoder(nn.Module):
         norm,
         base=64,
         block_type=ResBlockEncBasic,
-        conditional=False,
-        conditional_dim=None,
     ) -> None:
         super().__init__()
-
-        self.conditional = conditional
-        self.conditional_dim = conditional_dim
 
         self.block_type = block_type
         self.norm = norm
@@ -69,14 +64,13 @@ class ResNet_Encoder(nn.Module):
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
         layers = nn.ModuleList()
+        # layers = []
         layers.append(
             block(
                 self.in_channels,
                 out_channels,
                 stride,
                 norm=self.norm,
-                cross_attention=self.conditional,
-                label_embed_dim=self.conditional_dim,
             )
         )
         self.in_channels = out_channels * block.expansion
@@ -87,26 +81,25 @@ class ResNet_Encoder(nn.Module):
                     out_channels,
                     stride=1,
                     norm=self.norm,
-                    cross_attention=False,
-                    label_embed_dim=None,
                 )
             )
         return layers
+        # return nn.Sequential(*layers)
 
-    def forward(self, data, labels=None):
+    def forward(self, data):
         data = self.first_conv(data)
 
         for block in self.layer1:
-            data = block(data, labels)
+            data = block(data)
 
         for block in self.layer2:
-            data = block(data, labels)
+            data = block(data)
 
         for block in self.layer3:
-            data = block(data, labels)
+            data = block(data)
 
         for block in self.layer4:
-            data = block(data, labels)
+            data = block(data)
 
         return data
 
@@ -120,14 +113,10 @@ class ResNet_Decoder(nn.Module):
         norm: str,
         block_type=ResBlockDecBasic,
         base=64,
-        conditional=False,
-        conditional_dim=None,
     ) -> None:
         super().__init__()
 
         self.norm = norm
-        self.conditional = conditional
-        self.conditional_dim = conditional_dim
 
         # Calculate the input channels from the encoder, assuming
         # symmetric encoder and decoder setup
@@ -180,8 +169,6 @@ class ResNet_Decoder(nn.Module):
                     out_channels,
                     stride=1,
                     norm=self.norm,
-                    cross_attention=self.conditional,
-                    label_embed_dim=self.conditional_dim,
                 )
             )
         if stride > 1 and block == ResBlockDecBasic:
@@ -193,25 +180,23 @@ class ResNet_Decoder(nn.Module):
                 stride,
                 last_layer=last_layer,
                 norm=self.norm,
-                cross_attention=False,
-                label_embed_dim=None,
             )
         )
 
         return layers
 
-    def forward(self, data, labels=None):
+    def forward(self, data):
         for block in self.layer1:
-            data = block(data, labels)
+            data = block(data)
 
         for block in self.layer2:
-            data = block(data, labels)
+            data = block(data)
 
         for block in self.layer3:
-            data = block(data, labels)
+            data = block(data)
 
         for block in self.layer4:
-            data = block(data, labels)
+            data = block(data)
 
         data = self.output_layer(data)
         return data
@@ -231,28 +216,22 @@ class ConditionalSequential(nn.Sequential):
 # Current implementations of ResNets
 
 
-def Resnet18_Encoder(in_channels, norm, base, conditional=False, conditional_dim=None):
+def Resnet18_Encoder(in_channels, norm, base):
     return ResNet_Encoder(
         in_channels,
         num_blocks=[2, 2, 2, 2],
         base=base,
         norm=norm,
-        conditional=conditional,
-        conditional_dim=conditional_dim,
     )
 
 
-def Resnet18_Decoder(
-    out_channels, dimension, base, norm, conditional=False, conditional_dim=None
-):
+def Resnet18_Decoder(out_channels, dimension, base, norm):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[2, 2, 2, 2],
         dimension=dimension,
         base=base,
         norm=norm,
-        conditional=conditional,
-        conditional_dim=conditional_dim,
     )
 
 

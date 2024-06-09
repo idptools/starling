@@ -11,6 +11,7 @@ from IPython import embed
 from starling.data.data_wrangler import (
     MaxPad,
     load_hdf5_compressed,
+    one_hot_encode,
     read_tsv_file,
     symmetrize,
 )
@@ -20,9 +21,6 @@ class MatrixDataset(torch.utils.data.Dataset):
     def __init__(self, tsv_file: str, target_shape: int, finches_conditioning) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
-
-        Parameters
-        ----------
         tsv_file : str
             A path to a tsv file containing the paths to distance maps as a first column
             and index of a distance map to load as a second column
@@ -38,12 +36,12 @@ class MatrixDataset(torch.utils.data.Dataset):
         return len(self.data)
 
     def __getitem__(self, index):
-        data_path, frame = self.data[index]
-        data = load_hdf5_compressed(
+        # data_path, frame = self.data[index]
+        data_path, frame = self.data.iloc[index]
+        sample, sequence = load_hdf5_compressed(
             data_path, keys_to_load=["dm", "seq"], frame=int(frame)
         )
-        sample = symmetrize(data["dm"]).astype(np.float32)
-        sequence = data["seq"][()].decode()
+        sample = symmetrize(sample).astype(np.float32)
 
         # Resize the input distance map with padding
         sample = MaxPad(sample, shape=(self.target_shape))
@@ -59,12 +57,21 @@ class MatrixDataset(torch.utils.data.Dataset):
         else:
             labels = None
 
-        return {
-            "data": sample,
-            "sequence": sequence,
-            "length": torch.tensor([len(sequence) - 1]),
-            "labels": labels,
-        }
+        # sequence = torch.argmax(
+        #     torch.from_numpy(one_hot_encode(sequence.ljust(384, "0"))), dim=-1
+        # ).to(torch.int64)
+
+        # Memory leak discussion
+        # https://github.com/pytorch/pytorch/issues/13246
+
+        # return {
+        #     "data": sample,
+        #     "sequence": sequence,
+        #     "length": torch.tensor([len(sequence) - 1]),
+        #     "labels": labels,
+        # }
+
+        return sample, sequence, labels
 
     def get_interaction_matrix(self, sequence):
         mf = Mpipi_frontend()
@@ -111,7 +118,8 @@ class MatrixDataModule(pl.LightningDataModule):
         self.test_data = test_data
         self.batch_size = batch_size
         self.target_shape = target_shape
-        self.num_workers = int(os.cpu_count() / 2)
+        # self.num_workers = int(os.cpu_count() / 4)
+        self.num_workers = 16
         self.finches_conditioning = finches_conditioning
 
     def prepare_data(self):
@@ -149,6 +157,7 @@ class MatrixDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
+            pin_memory=True,
         )
 
     def val_dataloader(self):
@@ -156,6 +165,7 @@ class MatrixDataModule(pl.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            pin_memory=True,
         )
 
     def test_dataloader(self):
@@ -163,4 +173,5 @@ class MatrixDataModule(pl.LightningDataModule):
             self.test_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            pin_memory=True,
         )

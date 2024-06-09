@@ -3,7 +3,6 @@ data:
   test_data: null
   train_data: null
   val_data: null
-  pretraining: false
 device:
   cuda:
     - 0
@@ -20,8 +19,6 @@ model:
   lr_scheduler: CosineAnnealingLR
   set_lr: 0.128
   weights_type: equal
-  labels: esm2_t6_8M_UR50D
-  decoder_conditioning: false 
   norm: instance
 training:
   num_epochs: 250

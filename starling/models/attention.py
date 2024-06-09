@@ -1,4 +1,5 @@
 import torch
+from einops import rearrange
 from IPython import embed
 from torch import nn
 from torch.nn import functional as F
@@ -7,7 +8,9 @@ from starling.models.normalization import RMSNorm
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, kernel_size: int = 1) -> None:
+    def __init__(
+        self, embed_dim: int, num_heads: int, context_dim: int, channel_last=False
+    ) -> None:
         """
         CrossAttention module for use in UNet models. This module is used to
         perform attention on query (distance maps/2D data) using key and value
@@ -27,44 +30,48 @@ class CrossAttention(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
+        self.channel_last = channel_last
+        self.context_dim = context_dim
 
         assert (
             self.head_dim * num_heads == embed_dim
         ), "embed_dim must be divisible by num_heads"
 
-        # Convolutional projections on 2D data for query matrix, since there are spatial components
-        # to this data we are using Conv2s instead of Linear layers
-        self.query_conv = nn.Conv2d(
-            embed_dim, embed_dim, kernel_size=kernel_size, padding=kernel_size // 2
-        )
+        self.query_norm = nn.LayerNorm(embed_dim)
+        self.context_norm = nn.LayerNorm(context_dim)
 
-        # Sequence labels of shape (batch, sequence_length, embed_dim)
-        self.key_conv = nn.Linear(embed_dim, embed_dim)
-        self.value_conv = nn.Linear(embed_dim, embed_dim)
+        self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.key_proj = nn.Linear(self.context_dim, embed_dim, bias=False)
+        self.value_proj = nn.Linear(self.context_dim, embed_dim, bias=False)
 
-        # Output convolutional layer (unclear whether this normalization is necessary)
-        # - this is done in transformers
-        self.out_conv = nn.Sequential(
-            nn.Conv2d(embed_dim, embed_dim, kernel_size=1), RMSNorm(embed_dim)
-        )
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, query, key, value):
+    def forward(self, query, context):
         batch_size, channels, height, width = query.size()
 
-        # Convolutional projections
-        Q = self.query_conv(query)
-        K = self.key_conv(key)
-        V = self.value_conv(value)
+        if not self.channel_last:
+            query = rearrange(query, "b c h w -> b h w c")
 
-        # Reshape to (batch_size, num_heads, head_dim, height * width)
-        Q = Q.view(batch_size, self.num_heads, self.head_dim, -1)
-        K = K.view(batch_size, self.num_heads, self.head_dim, -1)
-        V = V.view(batch_size, self.num_heads, self.head_dim, -1)
+        # Prenormalization
+        query = self.query_norm(query)
+        context = self.context_norm(context)
 
-        # Transpose for multi-head attention (batch_size, num_heads, height * width, head_dim)
-        Q = Q.transpose(2, 3)
-        K = K.transpose(2, 3)
-        V = V.transpose(2, 3)
+        # Linear projection for the query (image features) - might be useful to change to Conv2d
+        Q = self.query_proj(query)  # [batch_size, height, width, channels]
+
+        # Linear projections for the key and value (text embeddings)
+        K = self.key_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
+        V = self.value_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
+
+        # Reshape query (image features) to match multi-head attention dimensions
+        # [batch_size, num_heads, height*width, head_dim]
+        Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+
+        # Reshape key and value (text embeddings) for multi-head attention
+        # [batch_size, num_heads, seq_len, head_dim]
+        K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
+        # [batch_size, num_heads, seq_len, head_dim]
+        V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
 
         # Scaled Dot-Product Attention
         scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
@@ -72,14 +79,46 @@ class CrossAttention(nn.Module):
         attention_output = torch.matmul(attention_weights, V)
 
         # Concatenate heads and reshape back to original dimensions
-        attention_output = (
-            attention_output.transpose(2, 3)
-            .contiguous()
-            .view(batch_size, self.embed_dim, height, width)
+        attention_output = rearrange(
+            attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
         )
-        attention_output = self.out_conv(attention_output)
+        attention_output = self.out_proj(attention_output)
+
+        if not self.channel_last:
+            attention_output = rearrange(attention_output, "b h w c -> b c h w")
 
         return attention_output
+
+
+# The attention pooling could be used as an additional conditioning mechanism where its concatenated with
+# timestep embeddings and then added to ResNet blocks (either in the middle or at the beginning)
+# - Imagen seems to this at the beginning of the ResNet blocks
+class AttentionPooling(nn.Module):
+    def __init__(self, feature_dim, hidden_dim):
+        super(AttentionPooling, self).__init__()
+        self.attention = nn.Sequential(
+            nn.SiLU(),  # Swish activation function
+            nn.Linear(feature_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, x):
+        # x: input features of shape (batch_size, num_features, feature_dim)
+        batch_size, num_features, feature_dim = x.size()
+
+        # Compute attention scores
+        attention_scores = self.attention(x)  # shape: (batch_size, num_features, 1)
+        attention_weights = torch.softmax(
+            attention_scores, dim=1
+        )  # shape: (batch_size, num_features, 1)
+
+        # Compute weighted sum of features
+        pooled_features = torch.sum(
+            attention_weights * x, dim=1
+        )  # shape: (batch_size, feature_dim)
+
+        return pooled_features
 
 
 class SelfAttentionConv(nn.Module):
@@ -184,41 +223,48 @@ class SelfAttention(nn.Module):
             self.head_dim * num_heads == embed_dim
         ), "embed_dim must be divisible by num_heads"
 
-        self.query = nn.Linear(embed_dim, embed_dim)
-        self.key = nn.Linear(embed_dim, embed_dim)
-        self.value = nn.Linear(embed_dim, embed_dim)
-        self.out = nn.Linear(embed_dim, embed_dim)
+        self.query_norm = nn.LayerNorm(embed_dim)
+
+        self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.key_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.value_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
 
     def forward(self, x):
-        output_shape = x.size()
-        batch_size = output_shape[0]
+        batch_size, channels, height, width = x.size()
 
-        # Reshape to put channels last
         if not self.channels_last:
-            x = x.permute(0, 2, 3, 1)
+            x = rearrange(x, "b c h w -> b h w c")
 
-        # Linear projections
-        Q = self.query(x)
-        K = self.key(x)
-        V = self.value(x)
+        # Prenormalization
+        x = self.query_norm(x)
 
-        # Split into multiple heads and transpose
-        Q = Q.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
-        K = K.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
-        V = V.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        # Linear projection for the query (image features) - might be useful to change to Conv2d
+        Q = self.query_proj(x)  # [batch_size, height, width, channels]
+
+        # Linear projections for the key and value (text embeddings)
+        K = self.key_proj(x)  # [batch_size, seq_len, head_dim * num_heads]
+        V = self.value_proj(x)  # [batch_size, seq_len, head_dim * num_heads]
+
+        # Reshape query (image features) to match multi-head attention dimensions
+        # [batch_size, num_heads, height*width, head_dim]
+        Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+        K = rearrange(K, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+        V = rearrange(V, "b x y (h d) -> b h (x y) d", h=self.num_heads)
 
         # Scaled Dot-Product Attention
         scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
         attention_weights = F.softmax(scores, dim=-1)
         attention_output = torch.matmul(attention_weights, V)
 
-        # Concatenate heads and put through final linear layer
-        attention_output = (
-            attention_output.transpose(1, 2)
-            .contiguous()
-            .view(batch_size, -1, self.embed_dim)
+        # Concatenate heads and reshape back to original dimensions
+        attention_output = rearrange(
+            attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
         )
+        attention_output = self.out_proj(attention_output)
 
-        output = self.out(attention_output).reshape(output_shape)
+        if not self.channels_last:
+            attention_output = rearrange(attention_output, "b h w c -> b c h w")
 
-        return output
+        return attention_output

@@ -107,13 +107,38 @@ class ResBlockEncBasic(nn.Module):
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        stride,
-        norm,
-        timestep=None,
-        kernel_size=None,
+        in_channels: int,
+        out_channels: int,
+        stride: int,
+        norm: str,
+        timestep: int = None,
+        kernel_size: int = 3,
     ) -> None:
+        """
+        A basic residual block. This block is often used in the ResNet architecture,
+        specifically in ResNet18 and ResNet34. It consists of two convolutional layers
+        with a ReLU activation function in between. The input is added to the output of
+        the second convolutional layer. The output is then passed through another ReLU
+        activation function. The block can also be conditioned on some class labels or
+        other information that is summed to the output of first convolutional output before
+        the normalization and activation function.
+
+        Parameters
+        ----------
+        in_channels : int
+            The number of input channels
+        out_channels : int
+            The number of output channels
+        stride : int
+            The stride of the first convolutional layer
+        norm : str
+            The normalization layer to use. Options are "batch", "instance", "layer", "rms" and "group"
+        timestep : int, optional
+            The dimension of the class labels/timesteps to condition the block on, if None no
+            conditioning is done, by default None
+        kernel_size : int, optional
+            The size of the kernel for convolutional layers, by default 3
+        """
         super().__init__()
 
         kernel_size = 3 if kernel_size is None else kernel_size
@@ -144,7 +169,8 @@ class ResBlockEncBasic(nn.Module):
 
         if timestep is not None:
             self.time_mlp = nn.Sequential(
-                nn.SiLU(inplace=False), nn.Linear(timestep, out_channels * 2)
+                nn.SiLU(inplace=False),
+                nn.Linear(timestep, out_channels * 2),
             )
 
         self.conv2 = nn.Sequential(
@@ -181,17 +207,19 @@ class ResBlockEncBasic(nn.Module):
         # Set up the shortcut connection if necessary
         identity = self.shortcut(data)
 
-        # First convolution and normalization
+        # First convolution
         data = self.conv1(data)
 
-        # Add timestep conditioning if provided
+        # Add timestep conditioning if provided using FiLM
         if timestep is not None:
             timestep = self.time_mlp(timestep)
             timestep = rearrange(timestep, "b c -> b c 1 1")
+            # See the following link for explaination of scale, shift for timestep/class conditioning
+            # https://distill.pub/2018/feature-wise-transformations/
             scale, shift = timestep.chunk(2, dim=1)
             data = data * (scale + 1) + shift
 
-        # Add activation function after timestep conditioning
+        # Add normalization and activation function after timestep conditioning
         data = self.norm1(data)
         data = self.activation1(data)
 
