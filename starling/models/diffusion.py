@@ -38,33 +38,6 @@ def extract(
 torch.set_float32_matmul_precision("high")
 
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, max_seq_len, embedding_size):
-        super(PositionalEncoding, self).__init__()
-        self.max_seq_len = max_seq_len
-        self.embedding_size = embedding_size
-        self.positional_encoding = self._generate_positional_encoding()
-
-    def _generate_positional_encoding(self):
-        pe = torch.zeros(self.max_seq_len, self.embedding_size)
-        position = torch.arange(0, self.max_seq_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, self.embedding_size, 2, dtype=torch.float32)
-            * (-torch.log(torch.tensor(10000.0)) / self.embedding_size)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)  # Add batch dimension
-        return pe
-
-    def forward(self, x):
-        # return x + self.positional_encoding[:, : x.size(1), :]
-        if self.positional_encoding.device != x.device:
-            self.positional_encoding = self.positional_encoding.to(x.device)
-
-        return x + self.positional_encoding
-
-
 class DiffusionModel(pl.LightningModule):
     SCHEDULER_MAPPING = {
         "linear": linear_beta_schedule,
@@ -178,6 +151,7 @@ class DiffusionModel(pl.LightningModule):
             # Don't do any dropout within ESM model
             self.esm_model.eval()
 
+            # # Do some more feature extraction
             self.sequence_mlp = nn.Sequential(
                 nn.Linear(
                     self.esm[self.labels]["latent_dim"],
@@ -189,10 +163,10 @@ class DiffusionModel(pl.LightningModule):
                     self.esm[self.labels]["latent_dim"],
                 ),
             )
-        elif self.labels == "learned-embeddings":
-            pos_embed = PositionalEncoding(384, self.model.config.cross_attention_dim)
-            embedding = nn.Embedding(21, self.model.config.cross_attention_dim)
-            self.sequence_embedding = nn.Sequential(embedding, pos_embed)
+        # elif self.labels == "learned-embeddings":
+        #     pos_embed = PositionalEncoding(384, self.model.config.cross_attention_dim)
+        #     embedding = nn.Embedding(21, self.model.config.cross_attention_dim)
+        #     self.sequence_embedding = nn.Sequential(embedding, pos_embed)
 
     @torch.inference_mode()
     def p_sample(
@@ -222,6 +196,7 @@ class DiffusionModel(pl.LightningModule):
         )
 
         preds = self.model(x, batched_timestamps, labels)[0]
+        # preds = self.model(x, batched_timestamps, labels)
 
         betas_t = extract(self.betas, batched_timestamps, x.shape)
         sqrt_recip_alphas_t = extract(
@@ -338,8 +313,7 @@ class DiffusionModel(pl.LightningModule):
         if self.labels in self.esm.keys():
             with torch.no_grad():
                 labels = self.sequence2labels([labels])
-        else:
-            labels = self.sequence_embedding(labels)
+                labels = self.sequence_mlp(labels)
 
         labels = labels.repeat(batch_size, 1, 1)
         latents = self.p_sample_loop(
@@ -348,7 +322,7 @@ class DiffusionModel(pl.LightningModule):
 
         distance_map = self.encoder_model.decode(latents)
 
-        return distance_map, latents
+        return distance_map, latents, labels
 
     # Remove mixed precision from this function, I've experienced numerical instability here
     @autocast(enabled=False)
@@ -462,10 +436,7 @@ class DiffusionModel(pl.LightningModule):
         x_noised = self.q_sample(x_start, t, noise=noise)
         if self.labels in self.esm.keys():
             labels = self.sequence2labels(labels)
-            labels = self.sequence_mlp(labels)
-        else:
-            labels = labels.squeeze()
-            labels = self.sequence_embedding(labels)
+            # labels = self.sequence_mlp(labels)
 
         # predicted_noise = self.model(x_noised, t, labels)[0]
         predicted_noise = self.model(x_noised, t, labels)

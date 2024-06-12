@@ -15,7 +15,7 @@ from starling.models.cvae import cVAE
 
 # from starling.models.diffusion_test_conditional import DiffusionModel
 from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNetConditional
+from starling.models.unet import UNetConditional, UNetConditionalTest
 from starling.models.vae import VAE
 
 
@@ -63,6 +63,13 @@ def train_vae():
     #     cross_attention_dim=640,
     #     # encoder_hid_dim_type="text_proj",
     #     # encoder_hid_dim=100,
+    # )
+    # UNet_model = diffusers.UNet2DConditionModel(
+    #     sample_size=24,  # the target image resolution
+    #     in_channels=1,  # the number of input channels, 3 for RGB images
+    #     out_channels=1,  # the number of output channels
+    #     cross_attention_dim=480,
+    #     block_out_channels=(160, 320, 640, 640),
     # )
 
     UNet_model = UNetConditional(

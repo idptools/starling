@@ -38,15 +38,15 @@ class CrossAttention(nn.Module):
         ), "embed_dim must be divisible by num_heads"
 
         self.query_norm = nn.LayerNorm(embed_dim)
-        self.context_norm = nn.LayerNorm(context_dim)
+        # self.context_norm = nn.LayerNorm(context_dim)
 
         self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.key_proj = nn.Linear(self.context_dim, embed_dim, bias=False)
-        self.value_proj = nn.Linear(self.context_dim, embed_dim, bias=False)
+        self.key_proj = nn.Linear(context_dim, embed_dim, bias=False)
+        self.value_proj = nn.Linear(context_dim, embed_dim, bias=False)
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, query, context):
+    def forward(self, query, context=None):
         batch_size, channels, height, width = query.size()
 
         if not self.channel_last:
@@ -54,7 +54,7 @@ class CrossAttention(nn.Module):
 
         # Prenormalization
         query = self.query_norm(query)
-        context = self.context_norm(context)
+        # context = self.context_norm(context)
 
         # Linear projection for the query (image features) - might be useful to change to Conv2d
         Q = self.query_proj(query)  # [batch_size, height, width, channels]
@@ -232,7 +232,14 @@ class SelfAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
     def forward(self, x):
-        batch_size, channels, height, width = x.size()
+        input_dim = x.dim()
+
+        if input_dim == 4:
+            batch_size, channels, height, width = x.size()
+        elif input_dim == 3:
+            batch_size, seq_len, channels = x.size()
+        else:
+            raise ValueError("Input dimension not supported")
 
         if not self.channels_last:
             x = rearrange(x, "b c h w -> b h w c")
@@ -249,9 +256,16 @@ class SelfAttention(nn.Module):
 
         # Reshape query (image features) to match multi-head attention dimensions
         # [batch_size, num_heads, height*width, head_dim]
-        Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
-        K = rearrange(K, "b x y (h d) -> b h (x y) d", h=self.num_heads)
-        V = rearrange(V, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+        if input_dim == 4:
+            # If input is 4D (images)
+            Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+            K = rearrange(K, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+            V = rearrange(V, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+        elif input_dim == 3:
+            # If input is 3D (text)
+            Q = rearrange(Q, "b x (h d) -> b h x d", h=self.num_heads)
+            K = rearrange(K, "b x (h d) -> b h x d", h=self.num_heads)
+            V = rearrange(V, "b x (h d) -> b h x d", h=self.num_heads)
 
         # Scaled Dot-Product Attention
         scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
@@ -259,9 +273,15 @@ class SelfAttention(nn.Module):
         attention_output = torch.matmul(attention_weights, V)
 
         # Concatenate heads and reshape back to original dimensions
-        attention_output = rearrange(
-            attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
-        )
+        if input_dim == 4:
+            attention_output = rearrange(
+                attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
+            )
+        elif input_dim == 3:
+            attention_output = rearrange(
+                attention_output, "b h x d -> b x (h d)", x=seq_len
+            )
+
         attention_output = self.out_proj(attention_output)
 
         if not self.channels_last:
