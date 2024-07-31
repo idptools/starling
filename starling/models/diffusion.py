@@ -151,22 +151,8 @@ class DiffusionModel(pl.LightningModule):
             # Don't do any dropout within ESM model
             self.esm_model.eval()
 
-            # # Do some more feature extraction
-            self.sequence_mlp = nn.Sequential(
-                nn.Linear(
-                    self.esm[self.labels]["latent_dim"],
-                    self.esm[self.labels]["latent_dim"] * 4,
-                ),
-                nn.ReLU(),
-                nn.Linear(
-                    self.esm[self.labels]["latent_dim"] * 4,
-                    self.esm[self.labels]["latent_dim"],
-                ),
-            )
-        # elif self.labels == "learned-embeddings":
-        #     pos_embed = PositionalEncoding(384, self.model.config.cross_attention_dim)
-        #     embedding = nn.Embedding(21, self.model.config.cross_attention_dim)
-        #     self.sequence_embedding = nn.Sequential(embedding, pos_embed)
+        elif self.labels == "learned-embeddings":
+            self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
 
     @torch.inference_mode()
     def p_sample(
@@ -195,8 +181,7 @@ class DiffusionModel(pl.LightningModule):
             (b,), timestamp, device=device, dtype=torch.long
         )
 
-        preds = self.model(x, batched_timestamps, labels)[0]
-        # preds = self.model(x, batched_timestamps, labels)
+        preds = self.model(x, batched_timestamps, labels)
 
         betas_t = extract(self.betas, batched_timestamps, x.shape)
         sqrt_recip_alphas_t = extract(
@@ -255,7 +240,9 @@ class DiffusionModel(pl.LightningModule):
         latents = torch.randn(shape, device=device)
 
         if steps is not None:
-            timesteps = torch.linspace(1, self.num_timesteps - 1, steps).to(torch.int64)
+            timesteps = (
+                torch.linspace(1, self.num_timesteps - 1, steps).round().to(torch.int64)
+            )
         else:
             timesteps = range(0, self.num_timesteps)
 
@@ -308,12 +295,20 @@ class DiffusionModel(pl.LightningModule):
         """
 
         shape = (batch_size, self.channels, self.image_size, self.image_size)
-        sequence_length = len(labels)
 
-        if self.labels in self.esm.keys():
-            with torch.no_grad():
+        with torch.no_grad():
+            if self.labels in self.esm.keys():
                 labels = self.sequence2labels([labels])
-                labels = self.sequence_mlp(labels)
+            elif self.labels == "learned-embeddings":
+                labels = (
+                    torch.argmax(
+                        torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
+                    )
+                    .to(torch.int64)
+                    .squeeze()
+                    .to(self.device)
+                )
+                labels = self.sequence2labels(labels)
 
         labels = labels.repeat(batch_size, 1, 1)
         latents = self.p_sample_loop(
@@ -386,6 +381,8 @@ class DiffusionModel(pl.LightningModule):
                 self.device,
                 self.esm_layers,
             )
+        elif self.labels == "learned-embeddings":
+            encoded = self.sequence_embedding(sequences)
 
         return encoded
 
@@ -434,9 +431,8 @@ class DiffusionModel(pl.LightningModule):
             # )
 
         x_noised = self.q_sample(x_start, t, noise=noise)
-        if self.labels in self.esm.keys():
-            labels = self.sequence2labels(labels)
-            # labels = self.sequence_mlp(labels)
+
+        labels = self.sequence2labels(labels)
 
         # predicted_noise = self.model(x_noised, t, labels)[0]
         predicted_noise = self.model(x_noised, t, labels)
