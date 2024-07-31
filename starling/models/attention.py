@@ -38,7 +38,7 @@ class CrossAttention(nn.Module):
         ), "embed_dim must be divisible by num_heads"
 
         self.query_norm = nn.LayerNorm(embed_dim)
-        # self.context_norm = nn.LayerNorm(context_dim)
+        self.context_norm = nn.LayerNorm(context_dim)
 
         self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.key_proj = nn.Linear(context_dim, embed_dim, bias=False)
@@ -52,9 +52,9 @@ class CrossAttention(nn.Module):
         if not self.channel_last:
             query = rearrange(query, "b c h w -> b h w c")
 
-        # Prenormalization
+        # Prenormalization of the query and context
         query = self.query_norm(query)
-        # context = self.context_norm(context)
+        context = self.context_norm(context)
 
         # Linear projection for the query (image features) - might be useful to change to Conv2d
         Q = self.query_proj(query)  # [batch_size, height, width, channels]
@@ -85,6 +85,98 @@ class CrossAttention(nn.Module):
         attention_output = self.out_proj(attention_output)
 
         if not self.channel_last:
+            attention_output = rearrange(attention_output, "b h w c -> b c h w")
+
+        return attention_output
+
+
+class SelfAttention(nn.Module):
+    def __init__(
+        self, embed_dim: int, num_heads: int, channels_last: bool = False
+    ) -> None:
+        """
+        This is a basic self-attention module. It uses linear layers to project
+        the input into query, key, and value matrices, then performs scaled dot-product
+        attention on these matrices. The output is then projected back to the original
+        embedding dimension. Commonly used in transformer models.
+
+        Parameters
+        ----------
+        embed_dim : int
+            Dimension of the input embedding
+        num_heads : int
+            Number of heads for multi-head attention
+        channels_last : bool, optional
+            Whether the input has channels last format, if not it will be rearranged, by default False
+        """
+        super(SelfAttention, self).__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.channels_last = channels_last
+
+        assert (
+            self.head_dim * num_heads == embed_dim
+        ), "embed_dim must be divisible by num_heads"
+
+        self.query_norm = nn.LayerNorm(embed_dim)
+
+        self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.key_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.value_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, x):
+        input_dim = x.dim()
+
+        if input_dim == 4:
+            batch_size, channels, height, width = x.size()
+        elif input_dim == 3:
+            batch_size, seq_len, channels = x.size()
+        else:
+            raise ValueError("Input dimension not supported")
+
+        if not self.channels_last and input_dim == 4:
+            x = rearrange(x, "b c h w -> b h w c")
+
+        # Prenormalization
+        x = self.query_norm(x)
+
+        # Linear projection for the query
+        Q = self.query_proj(x)
+        K = self.key_proj(x)
+        V = self.value_proj(x)
+
+        if input_dim == 4:
+            # If input is 4D (images)
+            Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+            K = rearrange(K, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+            V = rearrange(V, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+        elif input_dim == 3:
+            # If input is 3D (text)
+            Q = rearrange(Q, "b x (h d) -> b h x d", h=self.num_heads)
+            K = rearrange(K, "b x (h d) -> b h x d", h=self.num_heads)
+            V = rearrange(V, "b x (h d) -> b h x d", h=self.num_heads)
+
+        # Scaled Dot-Product Attention
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
+        attention_weights = F.softmax(scores, dim=-1)
+        attention_output = torch.matmul(attention_weights, V)
+
+        # Concatenate heads and reshape back to original dimensions
+        if input_dim == 4:
+            attention_output = rearrange(
+                attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
+            )
+        elif input_dim == 3:
+            attention_output = rearrange(
+                attention_output, "b h x d -> b x (h d)", x=seq_len
+            )
+
+        attention_output = self.out_proj(attention_output)
+
+        if not self.channels_last and input_dim == 4:
             attention_output = rearrange(attention_output, "b h w c -> b c h w")
 
         return attention_output
@@ -190,101 +282,5 @@ class SelfAttentionConv(nn.Module):
             .view(batch_size, self.embed_dim, height, width)
         )
         attention_output = self.out_conv(attention_output)
-
-        return attention_output
-
-
-class SelfAttention(nn.Module):
-    def __init__(
-        self, embed_dim: int, num_heads: int, channels_last: bool = False
-    ) -> None:
-        """
-        This is a basic self-attention module. It uses linear layers to project
-        the input into query, key, and value matrices, then performs scaled dot-product
-        attention on these matrices. The output is then projected back to the original
-        embedding dimension. Commonly used in transformer models.
-
-        Parameters
-        ----------
-        embed_dim : int
-            Dimension of the input embedding
-        num_heads : int
-            Number of heads for multi-head attention
-        channels_last : bool, optional
-            Whether the input has channels last format, if not it will be rearranged, by default False
-        """
-        super(SelfAttention, self).__init__()
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
-        self.head_dim = embed_dim // num_heads
-        self.channels_last = channels_last
-
-        assert (
-            self.head_dim * num_heads == embed_dim
-        ), "embed_dim must be divisible by num_heads"
-
-        self.query_norm = nn.LayerNorm(embed_dim)
-
-        self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.key_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.value_proj = nn.Linear(embed_dim, embed_dim, bias=False)
-
-        self.out_proj = nn.Linear(embed_dim, embed_dim)
-
-    def forward(self, x):
-        input_dim = x.dim()
-
-        if input_dim == 4:
-            batch_size, channels, height, width = x.size()
-        elif input_dim == 3:
-            batch_size, seq_len, channels = x.size()
-        else:
-            raise ValueError("Input dimension not supported")
-
-        if not self.channels_last:
-            x = rearrange(x, "b c h w -> b h w c")
-
-        # Prenormalization
-        x = self.query_norm(x)
-
-        # Linear projection for the query (image features) - might be useful to change to Conv2d
-        Q = self.query_proj(x)  # [batch_size, height, width, channels]
-
-        # Linear projections for the key and value (text embeddings)
-        K = self.key_proj(x)  # [batch_size, seq_len, head_dim * num_heads]
-        V = self.value_proj(x)  # [batch_size, seq_len, head_dim * num_heads]
-
-        # Reshape query (image features) to match multi-head attention dimensions
-        # [batch_size, num_heads, height*width, head_dim]
-        if input_dim == 4:
-            # If input is 4D (images)
-            Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
-            K = rearrange(K, "b x y (h d) -> b h (x y) d", h=self.num_heads)
-            V = rearrange(V, "b x y (h d) -> b h (x y) d", h=self.num_heads)
-        elif input_dim == 3:
-            # If input is 3D (text)
-            Q = rearrange(Q, "b x (h d) -> b h x d", h=self.num_heads)
-            K = rearrange(K, "b x (h d) -> b h x d", h=self.num_heads)
-            V = rearrange(V, "b x (h d) -> b h x d", h=self.num_heads)
-
-        # Scaled Dot-Product Attention
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
-        attention_weights = F.softmax(scores, dim=-1)
-        attention_output = torch.matmul(attention_weights, V)
-
-        # Concatenate heads and reshape back to original dimensions
-        if input_dim == 4:
-            attention_output = rearrange(
-                attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
-            )
-        elif input_dim == 3:
-            attention_output = rearrange(
-                attention_output, "b h x d -> b x (h d)", x=seq_len
-            )
-
-        attention_output = self.out_proj(attention_output)
-
-        if not self.channels_last:
-            attention_output = rearrange(attention_output, "b h w c -> b c h w")
 
         return attention_output
