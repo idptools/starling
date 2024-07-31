@@ -18,7 +18,9 @@ from starling.data.data_wrangler import (
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, tsv_file: str, target_shape: int, finches_conditioning) -> None:
+    def __init__(
+        self, tsv_file: str, target_shape: int, finches_conditioning, labels
+    ) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
         tsv_file : str
@@ -29,6 +31,7 @@ class MatrixDataset(torch.utils.data.Dataset):
             padded
         """
         self.data = read_tsv_file(tsv_file)
+        self.labels = labels
         self.target_shape = (target_shape, target_shape)
         self.finches_conditioning = finches_conditioning
 
@@ -57,9 +60,14 @@ class MatrixDataset(torch.utils.data.Dataset):
         else:
             labels = None
 
-        # sequence = torch.argmax(
-        #     torch.from_numpy(one_hot_encode(sequence.ljust(384, "0"))), dim=-1
-        # ).to(torch.int64)
+        if self.labels == "learned-embeddings":
+            sequence = (
+                torch.argmax(
+                    torch.from_numpy(one_hot_encode(sequence.ljust(384, "0"))), dim=-1
+                )
+                .to(torch.int64)
+                .squeeze()
+            )
 
         # Memory leak discussion
         # https://github.com/pytorch/pytorch/issues/13246
@@ -111,6 +119,7 @@ class MatrixDataModule(pl.LightningDataModule):
         batch_size=None,
         target_shape=None,
         finches_conditioning=False,
+        labels=None,
     ):
         super().__init__()
         self.train_data = train_data
@@ -118,6 +127,7 @@ class MatrixDataModule(pl.LightningDataModule):
         self.test_data = test_data
         self.batch_size = batch_size
         self.target_shape = target_shape
+        self.labels = labels
         # self.num_workers = int(os.cpu_count() / 4)
         self.num_workers = 16
         self.finches_conditioning = finches_conditioning
@@ -132,23 +142,27 @@ class MatrixDataModule(pl.LightningDataModule):
                 self.train_data,
                 target_shape=self.target_shape,
                 finches_conditioning=self.finches_conditioning,
+                labels=self.labels,
             )
             self.val_dataset = MatrixDataset(
                 self.val_data,
                 target_shape=self.target_shape,
                 finches_conditioning=self.finches_conditioning,
+                labels=self.labels,
             )
         if stage == "test":
             self.test_dataset = MatrixDataset(
                 self.test_data,
                 target_shape=self.target_shape,
                 finches_conditioning=self.finches_conditioning,
+                labels=self.labels,
             )
         if stage == "predict":
             self.predict_dataset = MatrixDataset(
                 self.predict_data,
                 target_shape=self.target_shape,
                 finches_conditioning=self.finches_conditioning,
+                labels=self.labels,
             )
 
     def train_dataloader(self):
