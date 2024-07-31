@@ -115,7 +115,7 @@ class CrossAttentionResnetLayer(nn.Module):
                 ResBlockEncBasic(self.in_channels, out_channels, 1, norm, timestep_dim)
             )
             self.transformer.append(
-                CrossAttention(out_channels, attention_heads, label_dim),
+                SpatialTransformer(out_channels, attention_heads, label_dim),
             )
 
             self.in_channels = out_channels
@@ -123,7 +123,7 @@ class CrossAttentionResnetLayer(nn.Module):
     def forward(self, x, time, sequence_label):
         for layer, transformer in zip(self.layer, self.transformer):
             x = layer(x, time)
-            x = x + transformer(x, context=sequence_label)
+            x = transformer(x, context=sequence_label)
         return x
 
 
