@@ -1,4 +1,5 @@
 import torch
+from IPython import embed
 from torch import nn
 
 #! Make sure the non-learnable position encodings are properly implemented
@@ -33,48 +34,47 @@ class PositionalEncoding1D(nn.Module):
 
 
 class PositionalEncoding2D(nn.Module):
-    def __init__(self, height, width, channels, max_height=24, max_width=24):
+    def __init__(self, embed_dim: int):
         super(PositionalEncoding2D, self).__init__()
-        assert (
-            height <= max_height and width <= max_width
-        ), "Image size exceeds maximum positional encoding size"
-
-        self.height = height
-        self.width = width
-        self.channels = channels
-        self.max_height = max_height
-        self.max_width = max_width
-
-        # Compute positional encodings
-        self.register_buffer("pos_encoding2D", self._generate_positional_encoding())
-
-    def _generate_positional_encoding(self):
-        y = torch.arange(self.height, dtype=torch.float).unsqueeze(1) / self.max_height
-        x = torch.arange(self.width, dtype=torch.float).unsqueeze(0) / self.max_width
-
-        sin_y = torch.sin(2 * torch.pi * y)
-        cos_x = torch.cos(2 * torch.pi * x)
-
-        sin_y = sin_y.unsqueeze(-1).expand(-1, self.width, self.channels // 2)
-        cos_x = cos_x.unsqueeze(-1).expand(self.height, -1, self.channels // 2)
-
-        pos_encoding = torch.cat([sin_y, cos_x], dim=-1)
-        return pos_encoding
+        self.embed_dim = embed_dim
 
     def forward(self, x):
-        """
-        Add positional encodings to input image.
+        b, c, h, w = x.shape
+        pe = self.generate_pe(h, w, x.device)
+        return x + pe
 
-        Args:
-        - x: Input image tensor of shape (batch_size, channels, height, width)
+    def generate_pe(self, height, width, device):
+        # Ensure the positional encoding tensor has the correct dimensions
+        pe = torch.zeros(self.embed_dim, height, width, device=device)
 
-        Returns:
-        - x_with_pos_encodings: Input image tensor with positional encodings added
-        """
-        batch_size = x.size(0)
-        pos_encoding = self.pos_encoding2D.unsqueeze(0).expand(batch_size, -1, -1, -1)
-        x_with_pos_encodings = x + pos_encoding.to(x.device)
-        return x_with_pos_encodings
+        y_position = torch.arange(
+            0, height, dtype=torch.float32, device=device
+        ).unsqueeze(1)
+        x_position = torch.arange(
+            0, width, dtype=torch.float32, device=device
+        ).unsqueeze(0)
+
+        # Compute div_term and positional encodings
+        div_term = torch.exp(
+            torch.arange(0, self.embed_dim, 2, dtype=torch.float32, device=device)
+            * (-torch.log(torch.tensor(10000.0, device=device)) / self.embed_dim)
+        )
+
+        # Reshape div_term to match (embed_dim/2, height, width) for broadcasting
+        div_term = div_term.unsqueeze(1).unsqueeze(1)  # Shape (embed_dim/2, 1, 1)
+
+        # Compute the positional encodings
+
+        # Shape (embed_dim/2, height, width)
+        pe_x = torch.sin(x_position.unsqueeze(0) * div_term)
+        # Shape (embed_dim/2, height, width)
+        pe_y = torch.sin(y_position.unsqueeze(0) * div_term)
+
+        # Assign to the positional encoding tensor
+        pe[0::2, :, :] = pe_x
+        pe[1::2, :, :] = pe_y
+
+        return pe.unsqueeze(0)  # Add batch dimension
 
 
 # Learnable positional encodings
