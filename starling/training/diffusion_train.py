@@ -18,6 +18,11 @@ from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional, UNetConditionalTest
 from starling.models.vae import VAE
 
+# labels="esm2_t30_150M_UR50D",
+# labels="esm2_t12_35M_UR50D",
+labels = "learned-embeddings"
+labels_dim = 384
+
 
 def train_vae():
     parser = argparse.ArgumentParser()
@@ -45,7 +50,7 @@ def train_vae():
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
     # # Set up data loaders
-    dataset = MatrixDataModule(**config["data"], target_shape=384)
+    dataset = MatrixDataModule(**config["data"], target_shape=384, labels=labels)
 
     dataset.setup(stage="fit")
 
@@ -79,7 +84,7 @@ def train_vae():
         norm="group",
         blocks=[2, 2, 2],
         middle_blocks=2,
-        labels_dim=480,
+        labels_dim=labels_dim,
     )
 
     gpu_ids = config["device"]["cuda"]
@@ -100,8 +105,7 @@ def train_vae():
         timesteps=1000,
         schedule_fn_kwargs=None,
         set_lr=1e-4,
-        # labels="esm2_t30_150M_UR50D",
-        labels="esm2_t12_35M_UR50D",
+        labels=labels,
     )
 
     # Make the directories to save the model and logs
@@ -126,7 +130,6 @@ def train_vae():
         gradient_clip_val=1.0,
         precision="16-mixed",
         logger=wandb_logger,
-        strategy="ddp" if len(gpu_ids) > 1 else "auto",
     )
 
     # Start training
