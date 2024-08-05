@@ -5,7 +5,6 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from IPython import embed
-from memory_profiler import profile
 from torch.cuda.amp import autocast
 from torch.functional import F
 from torch.optim.lr_scheduler import (
@@ -15,8 +14,8 @@ from torch.optim.lr_scheduler import (
 )
 from tqdm import tqdm
 
-from starling.data.data_wrangler import MaxPad, one_hot_encode, symmetrize
-from starling.data.esm_embeddings import BatchConverter, esm_embeddings
+from starling.data.data_wrangler import one_hot_encode
+from starling.data.esm_embeddings import esm_embeddings
 from starling.data.schedulers import (
     cosine_beta_schedule,
     linear_beta_schedule,
@@ -26,16 +25,33 @@ from starling.data.schedulers import (
 # Adapted from https://github.com/Camaltra/this-is-not-real-aerial-imagery/blob/main/src/ai/diffusion_process.py
 # and https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/classifier_free_guidance.py#L720
 
+torch.set_float32_matmul_precision("high")
 
+
+# Helper function
 def extract(
     constants: torch.Tensor, timestamps: torch.Tensor, shape: int
 ) -> torch.Tensor:
+    """
+    A function to extract values from a tensor based on the timestamps
+
+    Parameters
+    ----------
+    constants : torch.Tensor
+        A tensor to extract values from
+    timestamps : torch.Tensor
+        A 1D tensor containing the indices to extract from the constants tensor
+    shape : int
+        Desired shape of the output tensor
+
+    Returns
+    -------
+    torch.Tensor
+        Returns the extracted values from the constants tensor
+    """
     batch_size = timestamps.shape[0]
     out = constants.gather(-1, timestamps)
     return out.reshape(batch_size, *((1,) * (len(shape) - 1))).to(timestamps.device)
-
-
-torch.set_float32_matmul_precision("high")
 
 
 class DiffusionModel(pl.LightningModule):
@@ -54,25 +70,71 @@ class DiffusionModel(pl.LightningModule):
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         schedule_fn_kwargs: Union[dict, None] = None,
-        labels="learned-embeddings",
-        set_lr=1e-4,
-        config_scheduler="CosineAnnealingLR",
+        labels: str = "learned-embeddings",
+        set_lr: float = 1e-4,
+        config_scheduler: str = "CosineAnnealingLR",
     ) -> None:
+        """
+        Denoising-diffusion model framework for latent space diffusion models. This
+        class is a PyTorch Lightning module that can be used to train a diffusion model
+        on a given dataset. The model can be used to sample from the trained model
+        and generate new samples.
+
+        References
+        ----------
+        1) Sohl-Dickstein, J., Weiss, E., Maheswaranathan, N. & Ganguli, S.
+        Deep Unsupervised Learning using Nonequilibrium Thermodynamics.
+        in Proceedings of the 32nd International Conference on Machine Learning
+        (eds. Bach, F. & Blei, D.) vol. 37 2256–2265 (PMLR, Lille, France, 07--09 Jul 2015).
+
+        2) Ho, J., Jain, A. & Abbeel, P. Denoising Diffusion Probabilistic Models. arXiv [cs.LG] (2020).
+
+        3) Rombach, R., Blattmann, A., Lorenz, D., Esser, P. & Ommer, B.
+        High-resolution image synthesis with latent diffusion models. arXiv [cs.CV] (2021).
+
+
+        Parameters
+        ----------
+        model : nn.Module
+            A U-Net model that takes in an image, a timestamp, and optionally labels to condition on
+            and outputs the predicted noise
+        encoder_model : nn.Module
+            A VAE model that takes in an image (distance map) and outputs the latent space that the
+            diffusion model is trained in
+        image_size : int
+            The size of the latent space (height and width)
+        beta_scheduler : str, optional
+            The name of the beta scheduler to use, by default "cosine"
+        timesteps : int, optional
+            The number of timesteps to run the diffusion process, by default 1000
+        schedule_fn_kwargs : Union[dict, None], optional
+            Additional arguments to pass to the beta scheduler function, by default None
+        labels : str, optional
+            The type of labels to condition the model on, by default "learned-embeddings"
+        set_lr : float, optional
+            The initial learning rate for the optimizer, by default 1e-4
+        config_scheduler : str, optional
+            The name of the learning rate scheduler to use, by default "CosineAnnealingLR"
+
+        Raises
+        ------
+        ValueError
+            If the beta scheduler is not implemented
+        """
         super().__init__()
 
+        # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
         self.save_hyperparameters(ignore=["encoder_model", "model"])
 
         self.model = model
         self.labels = labels
 
-        # Freeze the encoder model parameters
+        # Freeze the encoder model parameters we don't want to keep training it (should already be trained)
         self.encoder_model = encoder_model
         for param in self.encoder_model.parameters():
             param.requires_grad = False
         self.encoder_model.eval()
 
-        # self.channels = self.model.config.in_channels
-        # self.channels = self.model.in_channels
         self.channels = 1
         self.image_size = image_size
 
@@ -90,6 +152,7 @@ class DiffusionModel(pl.LightningModule):
         # This will be calculated later on during the first global step
         # Need to register here so pytorch_lightning doesn't freak out
         # Assuming the expected shape for the buffer is [1]
+        # This is used to scale the latent space to have unit variance (see reference #3)
         latent_space_scaling_factor = torch.tensor(1.0, dtype=torch.float32)
 
         # Register the buffer
@@ -103,6 +166,7 @@ class DiffusionModel(pl.LightningModule):
             betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         )
 
+        # Register the buffers for the model
         self.register_buffer("betas", betas)
         self.register_buffer("alphas_cumprod", alphas_cumprod)
         self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
