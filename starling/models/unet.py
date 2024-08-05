@@ -1,31 +1,57 @@
 import math
+from typing import List
 
 import torch
 from IPython import embed
 from torch import nn
 
-from starling.models.attention import (
-    AttentionPooling,
-    CrossAttention,
-    SelfAttentionConv,
-)
 from starling.models.blocks import ResBlockEncBasic, ResizeConv2d
 from starling.models.normalization import RMSNorm
 from starling.models.transformer import SpatialTransformer
 
 
 class SinusoidalPosEmb(nn.Module):
-    def __init__(self, dim, theta=10000):
+    def __init__(self, dim: int, theta: int = 10000):
+        """
+        Generates sinusoidal positional embeddings that are used in the denoising-diffusion
+        models to encode the timestep information. The positional embeddings are generated
+        using sine and cosine functions. It takes in time in the shape of (batch_size, 1)
+        and returns the positional embeddings in the shape of (batch_size, dim). The positional
+        encodings are later used in each of the ResNet blocks to encode the timestep information.
+
+        Parameters
+        ----------
+        dim : int
+            Dimension of the input data.
+        theta : int, optional
+            A scaling factor for the positional embeddings. The default value is 10000.
+        """
         super().__init__()
         self.dim = dim
         self.theta = theta
 
-    def forward(self, x):
-        device = x.device
+    def forward(self, time: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the positional (timestep) embeddings.
+
+        Parameters
+        ----------
+        time : torch.Tensor
+            Timestep information in the shape of (batch_size, 1).
+
+        Returns
+        -------
+        torch.Tensor
+            Positional (timestep) embeddings in the shape of (batch_size, dim).
+        """
+        device = time.device
+
+        # The number of unique frequencies in the positional embeddings, half
+        # will be used for sine and the other half for cosine functions
         half_dim = self.dim // 2
         emb = math.log(self.theta) / (half_dim - 1)
         emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-        emb = x[:, None] * emb[None, :]
+        emb = time[:, None] * emb[None, :]
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
         return emb
 
@@ -38,7 +64,21 @@ class ConditionalSequential(nn.Sequential):
 
 
 class Downsample(nn.Module):
-    def __init__(self, in_channels, out_channels, norm):
+    def __init__(self, in_channels: int, out_channels: int, norm: str):
+        """
+        A convolutional block that reduces the spatial dimensions of the input tensor by a factor of 2.
+        The block consists of a convolutional layer with a kernel size of 3, stride of 2, and padding of 1.
+        The convolutional layer is followed by a normalization layer and a ReLU activation function.
+
+        Parameters
+        ----------
+        in_channels : int
+            The number of features in the input tensor.
+        out_channels : int
+            The number of features in the output tensor.
+        norm : str
+            The normalization layer to be used in the block. Choose from batch, instance, rms, or group.
+        """
         super().__init__()
 
         normalization = {
@@ -56,7 +96,7 @@ class Downsample(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
         return x
 
@@ -95,14 +135,36 @@ class ResnetLayer(nn.Module):
 class CrossAttentionResnetLayer(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        norm,
-        num_blocks,
-        attention_heads,
-        timestep_dim,
-        label_dim,
+        in_channels: int,
+        out_channels: int,
+        norm: str,
+        num_blocks: int,
+        attention_heads: int,
+        timestep_dim: int,
+        label_dim: int,
     ):
+        """
+        A combination of ResNet blocks followed by spatial transformer blocks. The ResNet block
+        processes the input tensor and the spatial transformer block captures the relationships
+        between the input tensor and the context data (protein sequences).
+
+        Parameters
+        ----------
+        in_channels : int
+            The number of features in the input tensor.
+        out_channels : int
+            The number of features in the output tensor.
+        norm : str
+            The normalization layer to be used in the block. Choose from batch, instance, rms, or group.
+        num_blocks : int
+            The number of ResNet + spatial transformer blocks in the layer.
+        attention_heads : int
+            The number of heads in the multi-head attention layer.
+        timestep_dim : int
+            The dimension of the timestep embeddings.
+        label_dim : int
+            The dimension of the context data (protein sequences).
+        """
         super().__init__()
 
         self.layer = nn.ModuleList()
@@ -120,7 +182,26 @@ class CrossAttentionResnetLayer(nn.Module):
 
             self.in_channels = out_channels
 
-    def forward(self, x, time, sequence_label):
+    def forward(
+        self, x: torch.Tensor, time: torch.Tensor, sequence_label: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Forward pass of the ResNet + spatial transformer blocks.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor to be processed by the ResNet + spatial transformer blocks.
+        time : torch.Tensor
+            Timestep embeddings to be used by the network.
+        sequence_label : torch.Tensor
+            Context data (protein sequences) to guide the prediction.
+
+        Returns
+        -------
+        torch.Tensor
+            Output of the ResNet + spatial transformer blocks.
+        """
         for layer, transformer in zip(self.layer, self.transformer):
             x = layer(x, time)
             x = transformer(x, context=sequence_label)
@@ -130,15 +211,40 @@ class CrossAttentionResnetLayer(nn.Module):
 class UNetConditional(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        base,
-        norm,
-        blocks=[2, 2, 2],
-        middle_blocks=2,
-        labels_dim=512,
-        sinusoidal_pos_emb_theta=10000,
+        in_channels: int,
+        out_channels: int,
+        base: int,
+        norm: str,
+        blocks: List = [2, 2, 2],
+        middle_blocks: int = 2,
+        labels_dim: int = 512,
+        sinusoidal_pos_emb_theta: int = 10000,
     ):
+        """
+        A U-Net architecture that uses ResNet blocks with spatial transformer blocks to process the input
+        tensor and the context data (protein sequences). The U-Net architecture consists of an encoder,
+        a middle section, and a decoder. The spatial transformer blocks are used to capture the relationships
+        between the input tensor and the context data (in our case protein sequences).
+
+        Parameters
+        ----------
+        in_channels : int
+            The number of features in the input tensor.
+        out_channels : int
+            The number of features in the output tensor.
+        base : int
+            The base number of features in the U-Net architecture.
+        norm : str
+            The normalization layer to be used in the block. Choose from batch, instance, rms, or group
+        blocks : List, optional
+            The number of ResNet + spatial transformer blocks in each section of the U-Net architecture, by default [2, 2, 2]
+        middle_blocks : int, optional
+            The number of ResNet + spatial transformer blocks in the middle section of the U-Net architecture, by default 2
+        labels_dim : int, optional
+            The dimension of the context data (i.e., protein sequences), by default 512
+        sinusoidal_pos_emb_theta : int, optional
+            A scaling factor for the positional (timestep) embeddings, by default 10000
+        """
         super().__init__()
 
         normalization = {
@@ -290,7 +396,26 @@ class UNetConditional(nn.Module):
 
         self.conv_out = nn.Conv2d(all_in_channels[0], out_channels, kernel_size=1)
 
-    def forward(self, x, time, labels=None):
+    def forward(
+        self, x: torch.Tensor, time: torch.Tensor, labels: torch.Tensor = None
+    ) -> torch.Tensor:
+        """
+        Forward pass of the UNet architecture.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Data to pass through the UNet architecture.
+        time : torch.Tensor
+            Timestep embeddings.
+        labels : torch.Tensor, optional
+            Context data (protein sequences) to guide the prediction, by default None
+
+        Returns
+        -------
+        torch.Tensor
+            Output of the UNet architecture.
+        """
         # Get the time embeddings
         time = self.time_mlp(time)
 
@@ -313,7 +438,7 @@ class UNetConditional(nn.Module):
         # Mid UNet
         x = self.middle(x, time, labels)
 
-        # Decoder forward passes
+        # Decoder forward passes with skip connections from the encoder
         x = self.upconv1(x)
         x = torch.cat((x, x_layer3), dim=1)
         x = self.decoder_layer1(x, time, labels)
@@ -611,4 +736,5 @@ class UNetConditionalTest(nn.Module):
         # Final convolutions
         x = self.conv_out(x)
 
+        return x
         return x
