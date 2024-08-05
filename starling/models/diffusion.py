@@ -241,12 +241,16 @@ class DiffusionModel(pl.LightningModule):
             Returns the denoised tensor (t-1)
         """
         b, *_, device = *x.shape, x.device
+
+        # Batch the timestep to the same size as the input tensor x
         batched_timestamps = torch.full(
             (b,), timestamp, device=device, dtype=torch.long
         )
 
+        # Run the model to predict the noise at the current timestamp
         preds = self.model(x, batched_timestamps, labels)
 
+        # Extract the necessary values from the buffers to calculate the predicted mean
         betas_t = extract(self.betas, batched_timestamps, x.shape)
         sqrt_recip_alphas_t = extract(
             self.sqrt_recip_alphas, batched_timestamps, x.shape
@@ -255,10 +259,12 @@ class DiffusionModel(pl.LightningModule):
             self.sqrt_one_minus_alphas_cumprod, batched_timestamps, x.shape
         )
 
+        # Calculate the predicted mean based on the model prediction of the noise
         predicted_mean = sqrt_recip_alphas_t * (
             x - betas_t * preds / sqrt_one_minus_alphas_cumprod_t
         )
 
+        # If the timestamp is 0, return the predicted mean
         if timestamp == 0:
             return predicted_mean
         else:
@@ -272,7 +278,7 @@ class DiffusionModel(pl.LightningModule):
     def p_sample_loop(
         self,
         shape: tuple,
-        labels,
+        labels: torch.Tensor,
         steps: int = None,
         return_all_timesteps: bool = False,
     ) -> torch.Tensor:
@@ -284,8 +290,10 @@ class DiffusionModel(pl.LightningModule):
         ----------
         shape : tuple
             The shape of the tensor to sample from N(0, I)
-        labels : _type_
-            Sequence to condition the sampling on
+        labels : torch.Tensor
+            Labels to condition the sampling on
+        steps : int, optional
+            Number of steps to sample, by default None (all timesteps)
         return_all_timesteps : bool, optional
             Whether to return the full trajectory of denoising,
             by default False
@@ -293,7 +301,7 @@ class DiffusionModel(pl.LightningModule):
         Returns
         -------
         torch.Tensor
-            Returns the fully denoised tensor, in this case a latent
+            Returns the fully denoised tensor, in this case a latent space
             that can be decoded using a pre-trained VAE
         """
 
@@ -301,8 +309,10 @@ class DiffusionModel(pl.LightningModule):
 
         all_latents = []
 
+        # Sample noise to generate the latent representation of the data
         latents = torch.randn(shape, device=device)
 
+        # Get the number of steps to run denoising
         if steps is not None:
             timesteps = (
                 torch.linspace(1, self.num_timesteps - 1, steps).round().to(torch.int64)
@@ -310,6 +320,7 @@ class DiffusionModel(pl.LightningModule):
         else:
             timesteps = range(0, self.num_timesteps)
 
+        # Loop over the timesteps to denoise the initial tensor
         for t in tqdm(
             reversed(timesteps),
             desc="Generating Latents",
@@ -335,7 +346,7 @@ class DiffusionModel(pl.LightningModule):
     def sample(
         self,
         batch_size: int,
-        labels,
+        labels: str,
         steps: int = None,
         return_all_timesteps: bool = False,
     ) -> torch.Tensor:
@@ -346,8 +357,10 @@ class DiffusionModel(pl.LightningModule):
         ----------
         batch_size : int
             The batch size to sample, higher the better if enough VRAM
-        labels : _type_
+        labels : str
             Sequence to condition the sampling on
+        steps : int, optional
+            Number of steps to sample, by default None (all timesteps)
         return_all_timesteps : bool, optional
             Whether to return all the tensors along the
             denoising trajectory, by default False
@@ -360,10 +373,12 @@ class DiffusionModel(pl.LightningModule):
 
         shape = (batch_size, self.channels, self.image_size, self.image_size)
 
+        # Prepare the labels to condition the sampling from the model on
         with torch.no_grad():
             if self.labels in self.esm.keys():
                 labels = self.sequence2labels([labels])
             elif self.labels == "learned-embeddings":
+                # Get the learned embeddings for the given sequence
                 labels = (
                     torch.argmax(
                         torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
@@ -374,11 +389,15 @@ class DiffusionModel(pl.LightningModule):
                 )
                 labels = self.sequence2labels(labels)
 
+        # Repeat the labels to match the number of samples that will be drawn from the model (batch size)
         labels = labels.repeat(batch_size, 1, 1)
+
+        # Sample the denoising-diffusion model to generate data (in our case, latent space)
         latents = self.p_sample_loop(
             shape, labels, steps=steps, return_all_timesteps=return_all_timesteps
         )
 
+        # Decode the latent space with the VAE to generate the distance map
         distance_map = self.encoder_model.decode(latents)
 
         return distance_map, latents, labels
@@ -408,18 +427,19 @@ class DiffusionModel(pl.LightningModule):
         if noise is None:
             noise = torch.randn_like(x_start)
 
+        # Extract the necessary values from the buffers to calculate the noise to be added
         sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
         sqrt_one_minus_alphas_cumprod_t = extract(
             self.sqrt_one_minus_alphas_cumprod, t, x_start.shape
         )
 
+        # Return the noised tensor based on the timestamp
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
     def sequence2labels(self, sequences: List) -> torch.Tensor:
         """
         Converts sequences to labels based on user defined models,
-        It can either use some ESM model to generate labels, one-hot-encode,
-        or learn the embeddings.
+        It can either use some ESM model to generate labels, or learn the embeddings
 
         Parameters
         ----------
@@ -460,7 +480,7 @@ class DiffusionModel(pl.LightningModule):
     ) -> torch.Tensor:
         """
         A function that runs the model and calculates the loss based on the
-        predicted noise and the actual noise. The loss can be either L1 or L2.
+        predicted noise and the actual noise. The loss can either be L1 or L2.
 
         Parameters
         ----------
@@ -494,13 +514,16 @@ class DiffusionModel(pl.LightningModule):
             #     x_start.shape[0], x_start.shape[1], 1, 1, device=self.device
             # )
 
+        # Noise the input data
         x_noised = self.q_sample(x_start, t, noise=noise)
 
+        # Get the labels to condition the model on
         labels = self.sequence2labels(labels)
 
-        # predicted_noise = self.model(x_noised, t, labels)[0]
+        # Run the model to predict the noise
         predicted_noise = self.model(x_noised, t, labels)
 
+        # Calculate the loss based on the predicted noise and the actual noise
         if loss_type == "l2":
             loss = F.mse_loss(noise, predicted_noise)
         elif loss_type == "l1":
@@ -530,6 +553,7 @@ class DiffusionModel(pl.LightningModule):
         b, c, h, w, device, img_size = *x.shape, x.device, self.image_size
         assert h == w == img_size, f"image size must be {img_size}"
 
+        # Generate random timestamps to noise the tensor and learn the denoising process
         timestamps = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
         return self.p_loss(x, timestamps, labels)
