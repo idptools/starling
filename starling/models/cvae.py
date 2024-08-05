@@ -40,8 +40,6 @@ class cVAE(pl.LightningModule):
         lr_scheduler: str,
         set_lr: float,
         norm: str = "instance",
-        encoder_model: str = "modified",
-        decoder_model: str = "modified",
         base: int = 64,
     ) -> None:
         """
@@ -86,10 +84,6 @@ class cVAE(pl.LightningModule):
             The learning rate to use for training the model
         norm : str, optional
             The normalization layer to use in the ResNet architecture, by default "instance"
-        encoder_model : str, optional
-            Original or modified ResNet to use in the encoder portion of the VAE, by default "modified"
-        decoder_model : str, optional
-            Original or modified ResNet to use in the decoder portion of the VAE, by default "modified
         base : int, optional
             The base (starting) number of channels to use in the ResNet architecture, by default 64
         """
@@ -98,58 +92,18 @@ class cVAE(pl.LightningModule):
         self.save_hyperparameters()
 
         # Set up the ResNet Encoder and Decoder combinations
-        resnets = {
-            "Resnet18": {
-                "encoder": {
-                    "original": resnets_original.Resnet18_Encoder,
-                    "modified": vae_components.Resnet18_Encoder,
+        resnets = (
+            {
+                "Resnet18": {
+                    "encoder": vae_components.Resnet18_Encoder,
+                    "decoder": vae_components.Resnet18_Decoder,
                 },
-                "decoder": {
-                    "original": resnets_original.Resnet18_Decoder,
-                    "modified": vae_components.Resnet18_Decoder,
-                },
-            },
-            "Resnet34": {
-                "encoder": {
-                    "original": resnets_original.Resnet34_Encoder,
-                    "modified": vae_components.Resnet34_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet34_Decoder,
-                    "modified": vae_components.Resnet34_Decoder,
+                "Resnet34": {
+                    "encoder": vae_components.Resnet34_Encoder,
+                    "decoder": vae_components.Resnet34_Decoder,
                 },
             },
-            "Resnet50": {
-                "encoder": {
-                    "original": resnets_original.Resnet50_Encoder,
-                    # "modified": vae_components.Resnet50_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet50_Decoder,
-                    # "modified": vae_components.Resnet50_Decoder,
-                },
-            },
-            "Resnet101": {
-                "encoder": {
-                    "original": resnets_original.Resnet101_Encoder,
-                    # "modified": vae_components.Resnet101_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet101_Decoder,
-                    # "modified": vae_components.Resnet101_Decoder,
-                },
-            },
-            "Resnet152": {
-                "encoder": {
-                    "original": resnets_original.Resnet152_Encoder,
-                    # "modified": vae_components.Resnet152_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet152_Decoder,
-                    # "modified": vae_components.Resnet152_Decoder,
-                },
-            },
-        }
+        )
 
         # Input dimensions
         self.dimension = dimension
@@ -176,7 +130,7 @@ class cVAE(pl.LightningModule):
         # Encoder
         encoder_chanel = in_channels
 
-        self.encoder = resnets[encoder_model]["encoder"][model_type](
+        self.encoder = resnets[model_type]["encoder"](
             in_channels=encoder_chanel, base=base, norm=norm
         )
 
@@ -211,7 +165,7 @@ class cVAE(pl.LightningModule):
         # Decoder
         decoder_channels = in_channels
 
-        self.decoder = resnets[decoder_model]["decoder"][model_type](
+        self.decoder = resnets[model_type]["decoder"](
             out_channels=decoder_channels,
             dimension=dimension,
             base=base,
