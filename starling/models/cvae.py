@@ -1,20 +1,16 @@
 from typing import List, Tuple
 
-import esm
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from IPython import embed
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
     OneCycleLR,
 )
 
-from starling.data.data_wrangler import one_hot_encode
 from starling.data.distributions import DiagonalGaussianDistribution
-from starling.data.esm_embeddings import esm_embeddings
 from starling.models import resnets_original, vae_components
 
 
@@ -34,23 +30,69 @@ torch.set_float32_matmul_precision("high")
 class cVAE(pl.LightningModule):
     def __init__(
         self,
-        model_type,
-        in_channels,
-        latent_dim,
-        dimension,
-        loss_type,
-        weights_type,
-        KLD_weight,
-        lr_scheduler,
-        set_lr,
-        labels="esm2_t6_8M_UR50D",
-        decoder_conditioning=False,
-        encoder_conditioning=True,
-        norm="instance",
-        encoder_model="modified",
-        decoder_model="modified",
-        base=64,
-    ):
+        model_type: str,
+        in_channels: int,
+        latent_dim: int,
+        dimension: int,
+        loss_type: str,
+        weights_type: str,
+        KLD_weight: float,
+        lr_scheduler: str,
+        set_lr: float,
+        norm: str = "instance",
+        encoder_model: str = "modified",
+        decoder_model: str = "modified",
+        base: int = 64,
+    ) -> None:
+        """
+        The variational autoencoder (VAE) model that is used to learn the latent space of
+        protein distance maps. The model is based on the ResNet architecture and uses a
+        Gaussian distribution to model the latent space. The model is trained using the
+        evidence lower bound (ELBO) loss, which is a combination of the reconstruction
+        loss and the Kullback-Leibler divergence loss. The reconstruction loss can be
+        either mean squared error or negative log likelihood. The weights for the
+        reconstruction loss can be calculated based on the distance between residues in
+        the ground truth distance map. The model can be trained using different learning
+        rate schedulers and the learning rate can be set manually.
+
+        References
+        ----------
+        1) Kingma, D. P. & Welling, M. Auto-Encoding Variational Bayes. arXiv [stat.ML] (2013).
+
+        2) Rombach, R., Blattmann, A., Lorenz, D., Esser, P. & Ommer, B.
+        High-resolution image synthesis with latent diffusion models. arXiv [cs.CV] (2021).
+
+        Parameters
+        ----------
+        model_type : str
+            What ResNet architecture to use for the encoder and decoder portion of the VAE
+        in_channels : int
+            Number of input channels in the input data
+        latent_dim : int
+            The number of channels in the latent space representation of the data
+        dimension : int
+            The size of the image in the height and width dimensions (i.e., distance maps)
+        loss_type : str
+            The type of loss to use for the reconstruction loss. Options are "mse" and "nll"
+        weights_type : str
+            The type of weights to use for the reconstruction loss. Options are "linear",
+            "reciprocal", and "equal"
+        KLD_weight : float
+            The weight to apply to the KLD loss in the ELBO loss function, KLD loss regularizes the latent space
+        lr_scheduler : str
+            The learning rate scheduler to use for training the model. Options are "CosineAnnealingWarmRestarts",
+            "OneCycleLR", and "CosineAnnealingLR"
+        set_lr : float
+            The learning rate to use for training the model
+        norm : str, optional
+            The normalization layer to use in the ResNet architecture, by default "instance"
+        encoder_model : str, optional
+            Original or modified ResNet to use in the encoder portion of the VAE, by default "modified"
+        decoder_model : str, optional
+            Original or modified ResNet to use in the decoder portion of the VAE, by default "modified
+        base : int, optional
+            The base (starting) number of channels to use in the ResNet architecture, by default 64
+        """
         super().__init__()
 
         self.save_hyperparameters()
@@ -129,17 +171,11 @@ class cVAE(pl.LightningModule):
         self.KLD_step_losses = 0
         self.num_batches = 0
 
-        # Pick how the encoder and decoder are conditioned
-        self.labels = labels
-        self.decoder_conditioning = decoder_conditioning
-        self.encoder_conditioning = encoder_conditioning
-
         self.monitor = "epoch_val_loss"
 
         # Encoder
         encoder_chanel = in_channels
-        if self.encoder_conditioning:
-            encoder_chanel += 1
+
         self.encoder = resnets[encoder_model]["encoder"][model_type](
             in_channels=encoder_chanel, base=base, norm=norm
         )
@@ -158,7 +194,7 @@ class cVAE(pl.LightningModule):
             self.compressed_size,
         )
 
-        # Latent space (some parts are hard coded in - need to change this)
+        # Latent space construction layer
         self.encoder_to_latent = nn.Sequential(
             nn.Conv2d(
                 final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
@@ -166,86 +202,17 @@ class cVAE(pl.LightningModule):
             nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
         )
 
-        # ESM models that are supported right now
-        self.esm = {
-            "esm2_t6_8M_UR50D": {
-                "model_name": esm.pretrained.esm2_t6_8M_UR50D(),
-                "layers": 6,
-                "latent_dim": 320,
-            },
-            "esm2_t12_35M_UR50D": {
-                "model_name": esm.pretrained.esm2_t12_35M_UR50D(),
-                "layers": 12,
-                "latent_dim": 480,
-            },
-            "esm2_t30_150M_UR50D": {
-                "model_name": esm.pretrained.esm2_t30_150M_UR50D(),
-                "layers": 30,
-                "latent_dim": 640,
-            },
-            "esm2_t33_650M_UR50D": {
-                "model_name": esm.pretrained.esm2_t33_650M_UR50D(),
-                "layers": 33,
-                "latent_dim": 1280,
-            },
-        }
-
-        # ESM2 model to generate labels
-        if self.labels in self.esm.keys():
-            self.esm_model, self.esm_alphabet = self.esm[self.labels]["model_name"]
-            self.esm_layers = self.esm[self.labels]["layers"]
-            # Freeze the parameters, we don't want to keep training ESM
-            for param in self.esm_model.parameters():
-                param.requires_grad = False
-            # Don't do any dropout within ESM model
-            self.esm_model.eval()
-            # Get the embeddings to the right shape for the decoder
-            self.embeddings = nn.Sequential(
-                nn.Linear(
-                    self.esm[self.labels]["latent_dim"],
-                    self.esm[self.labels]["latent_dim"],
-                ),
-                nn.ReLU(inplace=True),
-                nn.Linear(
-                    self.esm[self.labels]["latent_dim"], int(self.compressed_size**2)
-                ),
-                nn.ReLU(inplace=True),
-                nn.Linear(int(self.compressed_size**2), int(self.compressed_size**2)),
-            )
-
-        # One-hot-encoded labels
-        elif self.labels == "one-hot-encoding":
-            self.embeddings = nn.Linear(dimension * 21, latent_dim)
-
-        # Learned encodings; alternative to one-hot-encoding
-        elif self.labels == "learned-embeddings":
-            self.seq2embedding = nn.Embedding(21, 21)
-            self.embeddings = nn.Linear(dimension * 21, latent_dim)
-
-        # If no labels are provided
-        elif self.labels is None:
-            pass
-        else:
-            raise ValueError(f"Labels of name '{self.labels}' does not exist")
-
-        # Make sure the labels are given if decoder conditioning is set to True
-        if self.labels is None and decoder_conditioning:
-            raise ValueError(
-                "Decoder conditioning is set to True but no labels are given"
-            )
-
-        # Latent space to decoder space
-        if self.labels is not None:
-            latent_dim = latent_dim + 1
-
+        # Latent space to decoder layer
         self.latent_to_decoder = nn.Sequential(
             nn.Conv2d(latent_dim, latent_dim, kernel_size=1, stride=1),
             nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
         )
 
         # Decoder
+        decoder_channels = in_channels
+
         self.decoder = resnets[decoder_model]["decoder"][model_type](
-            out_channels=in_channels,
+            out_channels=decoder_channels,
             dimension=dimension,
             base=base,
             norm=norm,
@@ -255,9 +222,7 @@ class cVAE(pl.LightningModule):
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
 
-    def encode(
-        self, data: torch.Tensor, labels: torch.Tensor
-    ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
         Takes the data and encodes it into the latent space,
         by returning the mean and log variance
@@ -266,17 +231,12 @@ class cVAE(pl.LightningModule):
         ----------
         data : torch.Tensor
             Data in the shape of (batch, channel, height, width)
-        labels : torch.Tensor
-            Labels to be concatenated with the data
 
         Returns
         -------
         List[Tuple[torch.Tensor, torch.Tensor]]
             Return the mean and log variance of the latent space
         """
-
-        if labels is not None:
-            data = torch.cat((data, labels), dim=1)
 
         data = self.encoder(data)
 
@@ -286,9 +246,7 @@ class cVAE(pl.LightningModule):
 
         return moments
 
-    def decode(
-        self, latents: torch.Tensor, sequences: torch.Tensor = None
-    ) -> torch.Tensor:
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
         """
         Decodes the latent space back into the original data
 
@@ -296,82 +254,17 @@ class cVAE(pl.LightningModule):
         ----------
         latents : torch.Tensor
             latents in the shape of (batch, channel, height, width)
-        labels : torch.Tensor
-            Labels to be concatenated with the data
 
         Returns
         -------
         torch.Tensor
             Returns the reconstructed data
         """
-        if sequences is not None:
-            labels = self.sequence2labels(sequences)
 
-            # Concatenate the latents and the labels
-            latents = torch.cat(
-                (
-                    latents,
-                    self.embeddings(labels).view(
-                        -1, 1, int(self.compressed_size), int(self.compressed_size)
-                    ),
-                ),
-                dim=1,
-            )
-
-        # Linear layer first to get the shape of the final encoding layer
         latents = self.latent_to_decoder(latents)
-
-        # Decode the data
-        if not self.decoder_conditioning:
-            labels = None
 
         latents = self.decoder(latents)
         return latents
-
-    def sequence2labels(self, sequences: List) -> torch.Tensor:
-        """
-        Converts sequences to labels based on user defined models,
-        It can either use some ESM model to generate labels, one-hot-encode,
-        or learn the embeddings.
-
-        Parameters
-        ----------
-        sequences : List
-            A list of sequences to convert to labels
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the labels for the decoder
-
-        Raises
-        ------
-        ValueError
-            If the labels are not one of the three options
-        """
-        # Generate labels using one of the ESM models
-        if self.labels in self.esm.keys():
-            encoded = esm_embeddings(
-                self.esm_model,
-                self.esm_alphabet,
-                sequences,
-                self.device,
-                self.esm_layers,
-            )
-        # One-hot-encode or learn the embedding space
-        elif self.labels in ["one-hot-encoding", "learned-embeddings"]:
-            # Pad the sequence with 0s these get one-hot-encoded to [1, 0, ..., 0]
-            sequences = [seq.ljust(self.dimension, "0") for seq in sequences]
-            encoded = one_hot_encode(sequences)
-            encoded = torch.from_numpy(encoded).to(self.device)
-            if self.labels == "learned-embeddings":
-                encoded = self.seq2embedding(encoded)
-        elif sequences is None:
-            return None
-        else:
-            raise ValueError(f"Labels of name '{self.labels}' does not exist")
-
-        return encoded
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
@@ -562,8 +455,6 @@ class cVAE(pl.LightningModule):
     def forward(
         self,
         data: torch.Tensor,
-        encoder_labels: torch.Tensor = None,
-        decoder_labels: torch.Tensor = None,
     ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         Forward pass of the VAE
@@ -572,12 +463,6 @@ class cVAE(pl.LightningModule):
         ----------
         data : torch.Tensor
             Data in the shape of (batch, channel, height, width) to pass through the VAE
-        encoder_labels : torch.Tensor, optional
-            Labels to be concatenated with the data in the encoder, if not given
-            0s will be concatenated, by default None
-        decoder_labels : torch.Tensor, optional
-            Labels to be concatenated with the data in the decoder, if not given
-            0s will be concatenated, by default None
 
         Returns
         -------
@@ -585,11 +470,11 @@ class cVAE(pl.LightningModule):
             Returns the reconstructed data, the mean of the latent space, and the log variance
         """
 
-        moments = self.encode(data, labels=encoder_labels)
+        moments = self.encode(data)
 
         latent_encoding = moments.sample()
 
-        data_reconstructed = self.decode(latent_encoding, sequences=decoder_labels)
+        data_reconstructed = self.decode(latent_encoding)
 
         return data_reconstructed, moments
 
@@ -611,19 +496,7 @@ class cVAE(pl.LightningModule):
         """
         data = batch["data"]
 
-        if self.encoder_conditioning:
-            encoder_labels = batch["encoder_condition"]
-        else:
-            encoder_labels = None
-
-        if self.labels is not None:
-            decoder_labels = batch["decoder_condition"]
-        else:
-            decoder_labels = None
-
-        data_reconstructed, moments = self.forward(
-            data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
-        )
+        data_reconstructed, moments = self.forward(data=data)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
@@ -682,19 +555,7 @@ class cVAE(pl.LightningModule):
         """
         data = batch["data"]
 
-        if self.encoder_conditioning:
-            encoder_labels = batch["encoder_condition"]
-        else:
-            encoder_labels = None
-
-        if self.labels is not None:
-            decoder_labels = batch["decoder_condition"]
-        else:
-            decoder_labels = None
-
-        data_reconstructed, moments = self.forward(
-            data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
-        )
+        data_reconstructed, moments = self.forward(data=data)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
