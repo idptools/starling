@@ -8,10 +8,9 @@ from IPython import embed
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from starling.data.argument_parser import get_params
-from starling.data.myloader import MatrixDataModule
+from starling.data.argument_parser import get_vae_params
+from starling.data.VAE_loader import MatrixDataModule
 from starling.models.cvae import cVAE
-from starling.models.vae import VAE
 
 
 def train_vae():
@@ -25,28 +24,16 @@ def train_vae():
     )
 
     parser.add_argument(
-        "--pretrained_model",
-        type=str,
-        default=None,
-        help="Path to the pretrained model to start training from",
-    )
-
-    parser.add_argument(
-        "--model_type",
-        type=str,
-        default=None,
-        help="Type of a VAE used, currently [cVAE, VAE] are supported",
+        "--num_workers",
+        type=int,
+        default=16,
+        help="Number of workers to use for loading in the data",
     )
 
     args = parser.parse_args()
 
-    # Types of VAE models that can be trained using this script
-    # VAE is a regular unconditional VAE
-    # cVAE is a conditional VAE that can be pretrained with no labels
-    model_type = {"cVAE": cVAE, "VAE": VAE}
-
     # Reads in default and user defined configuration arguments
-    config = get_params(config_file=args.config_file)
+    config = get_vae_params(config_file=args.config_file)
 
     # Set up model checkpoint saving
     checkpoint_callback = ModelCheckpoint(
@@ -61,21 +48,14 @@ def train_vae():
 
     # Set up data loaders
     dataset = MatrixDataModule(
-        **config["data"], target_shape=config["model"]["dimension"]
+        **config["data"],
+        target_shape=config["model"]["dimension"],
+        num_workers=args.num_workers,
     )
 
     dataset.setup(stage="fit")
 
-    # Whether to load a pretrained model or train from scratch
-    if args.pretrained_model is None:
-        vae = model_type[args.model_type](**config["model"])
-    else:
-        vae = model_type[args.model_type].load_from_checkpoint(
-            args.pretrained_model, map_location=f'cuda:{config["device"]["cuda"][0]}'
-        )
-        # Change the params to whatever they
-        for param in config["model"]:
-            vae.hparams[param] = config["model"][param]
+    vae = cVAE(**config["model"])
 
     # Make the directories to save the model and logs
     os.makedirs(config["training"]["output_path"], exist_ok=True)
