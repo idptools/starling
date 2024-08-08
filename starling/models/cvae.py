@@ -4,6 +4,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from IPython import embed
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
@@ -11,7 +12,7 @@ from torch.optim.lr_scheduler import (
 )
 
 from starling.data.distributions import DiagonalGaussianDistribution
-from starling.models import resnets_original, vae_components
+from starling.models import vae_components
 
 
 class PrintLayer(nn.Module):
@@ -92,18 +93,16 @@ class cVAE(pl.LightningModule):
         self.save_hyperparameters()
 
         # Set up the ResNet Encoder and Decoder combinations
-        resnets = (
-            {
-                "Resnet18": {
-                    "encoder": vae_components.Resnet18_Encoder,
-                    "decoder": vae_components.Resnet18_Decoder,
-                },
-                "Resnet34": {
-                    "encoder": vae_components.Resnet34_Encoder,
-                    "decoder": vae_components.Resnet34_Decoder,
-                },
+        resnets = {
+            "Resnet18": {
+                "encoder": vae_components.Resnet18_Encoder,
+                "decoder": vae_components.Resnet18_Decoder,
             },
-        )
+            "Resnet34": {
+                "encoder": vae_components.Resnet34_Encoder,
+                "decoder": vae_components.Resnet34_Decoder,
+            },
+        }
 
         # Input dimensions
         self.dimension = dimension
@@ -448,7 +447,7 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Total training loss of this batch
         """
-        data = batch["data"]
+        data = batch
 
         data_reconstructed, moments = self.forward(data=data)
 
@@ -507,7 +506,8 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Total validation loss of this batch
         """
-        data = batch["data"]
+
+        data = batch
 
         data_reconstructed, moments = self.forward(data=data)
 
