@@ -66,6 +66,7 @@ class DiffusionModel(pl.LightningModule):
         model: nn.Module,
         encoder_model: nn.Module,
         image_size: int,
+        in_channels: int,
         *,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
@@ -135,7 +136,7 @@ class DiffusionModel(pl.LightningModule):
             param.requires_grad = False
         self.encoder_model.eval()
 
-        self.channels = 1
+        self.in_channels = in_channels
         self.image_size = image_size
 
         # Learning rate params
@@ -371,7 +372,7 @@ class DiffusionModel(pl.LightningModule):
             Returns the sampled fully denoised tensor
         """
 
-        shape = (batch_size, self.channels, self.image_size, self.image_size)
+        shape = (batch_size, self.in_channels, self.image_size, self.image_size)
 
         # Prepare the labels to condition the sampling from the model on
         with torch.no_grad():
