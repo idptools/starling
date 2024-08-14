@@ -100,8 +100,6 @@ def train_vae():
         gradient_clip_val=1.0,
         precision="16-mixed",
         logger=wandb_logger,
-        limit_train_batches=0.0001,
-        limit_val_batches=0.001,
     )
 
     # Start training
