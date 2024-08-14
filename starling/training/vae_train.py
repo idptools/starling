@@ -1,4 +1,6 @@
 import argparse
+import datetime
+import glob
 import os
 
 import pytorch_lightning as pl
@@ -40,9 +42,29 @@ def train_vae():
         monitor="epoch_val_loss",  # Monitor validation loss for saving the best model
         dirpath=f"{config['training']['output_path']}/",  # Directory to save checkpoints
         filename="model-kernel-{epoch:02d}-{epoch_val_loss:.2f}",  # File name format for saved models
-        save_top_k=3,  # Save the top 3 models based on monitored metric
+        save_top_k=1,
         mode="min",  # Minimize the monitored metric (val_loss)
     )
+
+    delta = datetime.timedelta(hours=1)
+    save_last_checkpoint = ModelCheckpoint(
+        dirpath=f"{config['training']['output_path']}/",  # Directory to save checkpoints
+        filename="last",
+        train_time_interval=delta,
+    )
+
+    checkpoint_dir = f"{config['training']['output_path']}/"
+    checkpoint_pattern = os.path.join(checkpoint_dir, "*.ckpt")
+
+    # Check if any checkpoint exists
+    checkpoint_files = glob.glob(checkpoint_pattern)
+
+    if checkpoint_files:
+        # This will load the most recent checkpoint
+        ckpt_path = "last"
+    else:
+        # This will start training from scratch
+        ckpt_path = None
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
@@ -75,14 +97,14 @@ def train_vae():
     trainer = pl.Trainer(
         devices=config["device"]["cuda"],
         max_epochs=config["training"]["num_epochs"],
-        callbacks=[checkpoint_callback, lr_monitor],
+        callbacks=[checkpoint_callback, lr_monitor, save_last_checkpoint],
         gradient_clip_val=1.0,
         precision="16-mixed",
         logger=wandb_logger,
     )
 
     # Start training
-    trainer.fit(vae, dataset)
+    trainer.fit(vae, dataset, ckpt_path=ckpt_path)
 
     # Detach the logging on wandb
     wandb_logger.experiment.unwatch(vae)
