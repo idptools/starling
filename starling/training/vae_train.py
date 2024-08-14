@@ -46,15 +46,14 @@ def train_vae():
         mode="min",  # Minimize the monitored metric (val_loss)
     )
 
-    delta = datetime.timedelta(hours=1)
+    # delta = datetime.timedelta(hours=1)
     save_last_checkpoint = ModelCheckpoint(
         dirpath=f"{config['training']['output_path']}/",  # Directory to save checkpoints
         filename="last",
-        train_time_interval=delta,
     )
 
     checkpoint_dir = f"{config['training']['output_path']}/"
-    checkpoint_pattern = os.path.join(checkpoint_dir, "*.ckpt")
+    checkpoint_pattern = os.path.join(checkpoint_dir, "last.ckpt")
 
     # Check if any checkpoint exists
     checkpoint_files = glob.glob(checkpoint_pattern)
@@ -101,6 +100,8 @@ def train_vae():
         gradient_clip_val=1.0,
         precision="16-mixed",
         logger=wandb_logger,
+        limit_train_batches=0.0001,
+        limit_val_batches=0.001,
     )
 
     # Start training
