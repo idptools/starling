@@ -1,6 +1,5 @@
 from typing import List, Tuple
 
-import esm
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -14,7 +13,6 @@ from torch.optim.lr_scheduler import (
 
 from starling.data.data_wrangler import one_hot_encode
 from starling.data.distributions import DiagonalGaussianDistribution
-from starling.data.esm_embeddings import esm_embeddings
 from starling.models import resnets_original, vae_components
 
 
@@ -166,55 +164,7 @@ class cVAE(pl.LightningModule):
             nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
         )
 
-        # ESM models that are supported right now
-        self.esm = {
-            "esm2_t6_8M_UR50D": {
-                "model_name": esm.pretrained.esm2_t6_8M_UR50D(),
-                "layers": 6,
-                "latent_dim": 320,
-            },
-            "esm2_t12_35M_UR50D": {
-                "model_name": esm.pretrained.esm2_t12_35M_UR50D(),
-                "layers": 12,
-                "latent_dim": 480,
-            },
-            "esm2_t30_150M_UR50D": {
-                "model_name": esm.pretrained.esm2_t30_150M_UR50D(),
-                "layers": 30,
-                "latent_dim": 640,
-            },
-            "esm2_t33_650M_UR50D": {
-                "model_name": esm.pretrained.esm2_t33_650M_UR50D(),
-                "layers": 33,
-                "latent_dim": 1280,
-            },
-        }
-
-        # ESM2 model to generate labels
-        if self.labels in self.esm.keys():
-            self.esm_model, self.esm_alphabet = self.esm[self.labels]["model_name"]
-            self.esm_layers = self.esm[self.labels]["layers"]
-            # Freeze the parameters, we don't want to keep training ESM
-            for param in self.esm_model.parameters():
-                param.requires_grad = False
-            # Don't do any dropout within ESM model
-            self.esm_model.eval()
-            # Get the embeddings to the right shape for the decoder
-            self.embeddings = nn.Sequential(
-                nn.Linear(
-                    self.esm[self.labels]["latent_dim"],
-                    self.esm[self.labels]["latent_dim"],
-                ),
-                nn.ReLU(inplace=True),
-                nn.Linear(
-                    self.esm[self.labels]["latent_dim"], int(self.compressed_size**2)
-                ),
-                nn.ReLU(inplace=True),
-                nn.Linear(int(self.compressed_size**2), int(self.compressed_size**2)),
-            )
-
-        # One-hot-encoded labels
-        elif self.labels == "one-hot-encoding":
+        if self.labels == "one-hot-encoding":
             self.embeddings = nn.Linear(dimension * 21, latent_dim)
 
         # Learned encodings; alternative to one-hot-encoding
@@ -349,17 +299,8 @@ class cVAE(pl.LightningModule):
         ValueError
             If the labels are not one of the three options
         """
-        # Generate labels using one of the ESM models
-        if self.labels in self.esm.keys():
-            encoded = esm_embeddings(
-                self.esm_model,
-                self.esm_alphabet,
-                sequences,
-                self.device,
-                self.esm_layers,
-            )
         # One-hot-encode or learn the embedding space
-        elif self.labels in ["one-hot-encoding", "learned-embeddings"]:
+        if self.labels in ["one-hot-encoding", "learned-embeddings"]:
             # Pad the sequence with 0s these get one-hot-encoded to [1, 0, ..., 0]
             sequences = [seq.ljust(self.dimension, "0") for seq in sequences]
             encoded = one_hot_encode(sequences)

@@ -1,11 +1,9 @@
 from typing import List, Union
 
-import esm
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from IPython import embed
-from memory_profiler import profile
 from torch.cuda.amp import autocast
 from torch.functional import F
 from torch.optim.lr_scheduler import (
@@ -16,7 +14,6 @@ from torch.optim.lr_scheduler import (
 from tqdm import tqdm
 
 from starling.data.data_wrangler import MaxPad, one_hot_encode, symmetrize
-from starling.data.esm_embeddings import BatchConverter, esm_embeddings
 from starling.data.schedulers import (
     cosine_beta_schedule,
     linear_beta_schedule,
@@ -120,38 +117,7 @@ class DiffusionModel(pl.LightningModule):
 
         self.monitor = "epoch_val_loss"
 
-        # ESM models currently supported
-        self.esm = {
-            "esm2_t6_8M_UR50D": {
-                "model_name": esm.pretrained.esm2_t6_8M_UR50D(),
-                "layers": 6,
-                "latent_dim": 320,
-            },
-            "esm2_t12_35M_UR50D": {
-                "model_name": esm.pretrained.esm2_t12_35M_UR50D(),
-                "layers": 12,
-                "latent_dim": 480,
-            },
-            "esm2_t30_150M_UR50D": {
-                "model_name": esm.pretrained.esm2_t30_150M_UR50D(),
-                "layers": 30,
-                "latent_dim": 640,
-            },
-        }
-
-        # ESM2 model to generate labels
-        if self.labels in self.esm.keys():
-            self.esm_model, self.esm_alphabet = self.esm[self.labels]["model_name"]
-            self.esm_layers = self.esm[self.labels]["layers"]
-
-            # Freeze the parameters, we don't want to keep training ESM
-            for param in self.esm_model.parameters():
-                param.requires_grad = False
-
-            # Don't do any dropout within ESM model
-            self.esm_model.eval()
-
-        elif self.labels == "learned-embeddings":
+        if self.labels == "learned-embeddings":
             self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
 
     @torch.inference_mode()
@@ -297,9 +263,7 @@ class DiffusionModel(pl.LightningModule):
         shape = (batch_size, self.channels, self.image_size, self.image_size)
 
         with torch.no_grad():
-            if self.labels in self.esm.keys():
-                labels = self.sequence2labels([labels])
-            elif self.labels == "learned-embeddings":
+            if self.labels == "learned-embeddings":
                 labels = (
                     torch.argmax(
                         torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
@@ -373,15 +337,7 @@ class DiffusionModel(pl.LightningModule):
             If the labels are not one of the three options
         """
         # Generate labels using one of the ESM models
-        if self.labels in self.esm.keys():
-            encoded = esm_embeddings(
-                self.esm_model,
-                self.esm_alphabet,
-                sequences,
-                self.device,
-                self.esm_layers,
-            )
-        elif self.labels == "learned-embeddings":
+        if self.labels == "learned-embeddings":
             encoded = self.sequence_embedding(sequences)
 
         return encoded

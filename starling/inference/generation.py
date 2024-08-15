@@ -17,7 +17,7 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("--number_maps", type=int, default=2)
     parser.add_argument("--sequence", type=str, default="A"*100)
-    parser.add_argument("--gpu", type=str, default="cuda:0")
+    parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--steps", type=int, default=1000)
 
     args = parser.parse_args()
@@ -38,12 +38,13 @@ def main():
         map_location=device,
     )
 
-    diffusion = DiffusionModel.load_from_checkpoint('/home/bnovak/projects/test_diffusion/diffusion_testing_my_UNet_attention/model-kernel-epoch=09-epoch_val_loss=0.05.ckpt', model=UNet_model, encoder_model=encoder_model, map_location=gpu)
+    diffusion = DiffusionModel.load_from_checkpoint('/home/bnovak/projects/test_diffusion/diffusion_testing_my_UNet_attention/model-kernel-epoch=09-epoch_val_loss=0.05.ckpt', model=UNet_model, encoder_model=encoder_model, map_location=args.device)
 
     distance_maps, *_ = diffusion.sample(args.number_maps, labels = args.sequence, steps=args.steps)
+    embed()
     sym_distance_maps = [(dist_map + dist_map.T) /2 for dist_map in distance_maps]
     sym_distance_maps = torch.tensor([dist_map.fill_diagonal_(0) for dist_map in sym_distance_maps])
-    embed()
+
     coordinates = [
             distance_matrix_to_3d_structure_gd(dist_map, num_iterations=5000, learning_rate=1e-3, verbose=True)
             for dist_map in sym_distance_maps
