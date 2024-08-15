@@ -7,6 +7,3 @@ from ._version import __version__
 from . import data
 from . import models
 from . import training
-from . import inference
-from . import tests
-from . import structure
