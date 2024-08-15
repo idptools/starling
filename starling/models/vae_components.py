@@ -244,12 +244,11 @@ def Resnet34_Encoder(in_channels, base, norm):
     )
 
 
-def Resnet34_Decoder(out_channels, dimension, base, norm, conditional):
+def Resnet34_Decoder(out_channels, dimension, base, norm):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[3, 4, 6, 3],
         dimension=dimension,
         base=base,
         norm=norm,
-        conditional=conditional,
     )
