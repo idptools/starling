@@ -89,6 +89,7 @@ def compare_distance_matrices(original_distance_matrix, coords):
 
 
 def main():
+    CONVERT_ANGSTROM_TO_NM = 10
     parser = ArgumentParser()
     parser.add_argument("--conformations", type=int, default=100)
     # parser.add_argument("--sequence", type=str, default="A" * 200)
@@ -145,8 +146,9 @@ def main():
                 )
                 for dist_map in sym_distance_maps
             ]
-        )
+        ) / CONVERT_ANGSTROM_TO_NM
     elif args.method == "mds":
+        # SCALE CORDINATES TO NM
         coordinates = np.array(
             [
                 distance_matrix_to_3d_structure(
@@ -154,7 +156,7 @@ def main():
                 )
                 for dist_map in sym_distance_maps
             ]
-        )
+        ) / CONVERT_ANGSTROM_TO_NM 
     else:
         raise NotImplementedError("Method not implemented")
 
@@ -189,7 +191,6 @@ def main():
     print(difference_matrix_gd)
 
     traj = create_ca_topology_from_coords(args.sequence,coordinates)
-    embed()
     traj.save(f"{args.filename}")
     
 
