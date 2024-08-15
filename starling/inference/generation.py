@@ -189,6 +189,7 @@ def main():
     print(difference_matrix_gd)
 
     traj = create_ca_topology_from_coords(args.sequence,coordinates)
+    embed()
     traj.save(f"{args.filename}")
     
 
