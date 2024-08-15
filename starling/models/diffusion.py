@@ -66,7 +66,7 @@ class DiffusionModel(pl.LightningModule):
         model: nn.Module,
         encoder_model: nn.Module,
         image_size: int,
-        in_channels: int,
+        # in_channels: int,
         *,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
@@ -136,7 +136,7 @@ class DiffusionModel(pl.LightningModule):
             param.requires_grad = False
         self.encoder_model.eval()
 
-        self.in_channels = in_channels
+        self.in_channels = self.model.in_channels
         self.image_size = image_size
 
         # Learning rate params
@@ -560,12 +560,10 @@ class DiffusionModel(pl.LightningModule):
         return self.p_loss(x, timestamps, labels)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences, labels = batch
+        data, sequences = batch
 
         with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(
-                data, labels=labels.unsqueeze(1)
-            )
+            latent_encoding = self.encoder_model.encode(data)
             latent_encoding = latent_encoding.sample()
 
         # Figure out the standard deviation of the latent space using
@@ -587,12 +585,10 @@ class DiffusionModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences, labels = batch
+        data, sequences = batch
 
         with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(
-                data, labels=labels.unsqueeze(1)
-            )
+            latent_encoding = self.encoder_model.encode(data)
             latent_encoding = latent_encoding.sample()
 
         # Scale the latent encoding to have unit std

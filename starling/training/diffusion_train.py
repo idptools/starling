@@ -2,7 +2,6 @@ import argparse
 import os
 
 import pytorch_lightning as pl
-import torch
 import wandb
 import yaml
 from IPython import embed
@@ -10,18 +9,19 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from starling.data.argument_parser import get_params
-from starling.data.myloader import MatrixDataModule
+from starling.data.ddpm_loader import MatrixDataModule
 from starling.models.cvae import cVAE
 
 # from starling.models.diffusion_test_conditional import DiffusionModel
 from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNetConditional, UNetConditionalTest
-from starling.models.vae import VAE
+from starling.models.unet import UNetConditional
 
 # labels="esm2_t30_150M_UR50D",
 # labels="esm2_t12_35M_UR50D",
 labels = "learned-embeddings"
 labels_dim = 384
+
+encoder_model_path = "/home/bnovak/projects/autoencoder_training/VAE_training/non_conditional_VAE/128x_KLD_1e-6_Resnet18/model-kernel-epoch=13-epoch_val_loss=1.57.ckpt"
 
 
 def train_vae():
@@ -57,7 +57,7 @@ def train_vae():
     # Loading in a model from diffusers, will replace with my own UNet model
     # Assuming I can make it work
 
-    import diffusers
+    # import diffusers
 
     # UNet_model = diffusers.UNet2DConditionModel(
     #     sample_size=24,  # the target image resolution
@@ -78,8 +78,8 @@ def train_vae():
     # )
 
     UNet_model = UNetConditional(
-        in_channels=1,
-        out_channels=1,
+        in_channels=2,
+        out_channels=2,
         base=64,
         norm="group",
         blocks=[2, 2, 2],
@@ -93,8 +93,7 @@ def train_vae():
     }
 
     encoder_model = cVAE.load_from_checkpoint(
-        "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
-        map_location=map_location,
+        encoder_model_path, map_location=map_location
     )
 
     diffusion_model = DiffusionModel(
