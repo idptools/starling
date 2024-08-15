@@ -3,68 +3,124 @@ import mdtraj as md
 import torch.optim as optim
 import numpy as np
 from scipy.spatial import distance_matrix
-import time
-
-
-
 
 def compute_pairwise_distances(coords):
-    """Function to compute the pairwise distances in 3D space
+    """Function to compute the pairwise distances in 3D space.
 
     Parameters
     ----------
-    coords : np.ndarray
-        An array of shape (n, 3) containing the 3D coordinates of n points
-
-    Returns
-    -------
-    np.ndarray
-        An array of pairwise distances between the points in 3D space
-    """
-    return torch.cdist(coords, coords)
-
-def loss_function(original_distance_matrix, coords):
-    """Function to compute the loss between the original distance matrix and the computed distance matrix
-
-    Parameters
-    ----------
-    original_distance_matrix : np.ndarray
-        An array of shape (n, n) containing the original pairwise distances between n points
-    coords : np.ndarray
-        An array of shape (n, 3) containing the 3D coordinates of n points
+    coords : torch.Tensor
+        A tensor of shape (n, 3) containing the 3D coordinates of n points.
 
     Returns
     -------
     torch.Tensor
-        The mean squared error between the original and computed distance matrices
+        A tensor of pairwise distances between the points in 3D space.
     """
-    computed_distances = compute_pairwise_distances(coords)
-    return torch.nn.functional.mse_loss(computed_distances, original_distance_matrix)
+    return torch.cdist(coords, coords)
 
-def distance_matrix_to_3d_structure_gd(original_distance_matrix, num_iterations=5000, learning_rate=1e-3, verbose=True):
-    """Function to reconstruct a 3D structure from a distance matrix using gradient descent
+#def loss_function(original_distance_matrix, coords):
+#    """Function to compute the loss between the original distance matrix and the computed distance matrix.
+#
+#    Parameters
+#    ----------
+#    original_distance_matrix : torch.Tensor
+#        A tensor of shape (n, n) containing the original pairwise distances between n points.
+#    coords : torch.Tensor
+#        A tensor of shape (n, 3) containing the 3D coordinates of n points.
+#
+#    Returns
+#    -------
+#    torch.Tensor
+#        The mean squared error between the original and computed distance matrices.
+#    """
+#    computed_distances = compute_pairwise_distances(coords)
+#    return torch.nn.functional.mse_loss(computed_distances, original_distance_matrix)
+
+
+def loss_function(original_distance_matrix, coords):
+    """Function to compute the loss between the original distance matrix and the computed distance matrix.
 
     Parameters
     ----------
-    original_distance_matrix : _type_
-        _description_
-    num_iterations : int, optional
-        _description_, by default 5000
-    learning_rate : _type_, optional
-        _description_, by default 1e-3
-    verbose : bool, optional
-        _description_, by default True
+    original_distance_matrix : torch.Tensor
+        A tensor of shape (n, n) containing the original pairwise distances between n points.
+    coords : torch.Tensor
+        A tensor of shape (n, 3) containing the 3D coordinates of n points.
 
     Returns
     -------
-    _type_
-        _description_
+    torch.Tensor
+        The mean squared error between the original and computed distance matrices, considering only the upper triangle.
     """
-    original_distance_matrix = torch.tensor(original_distance_matrix, dtype=torch.float32)
+    computed_distances = compute_pairwise_distances(coords)
+    
+    # Create a mask for the upper triangle
+    upper_triangle_mask = torch.triu(torch.ones_like(original_distance_matrix), diagonal=1).bool()
+    
+    # Apply the mask to both the original and computed distance matrices
+    masked_original = original_distance_matrix[upper_triangle_mask]
+    masked_computed = computed_distances[upper_triangle_mask]
 
-    coords = torch.randn((original_distance_matrix.size(0), 3), requires_grad=True)
+    # Compute the mean squared error only for the masked elements
+    loss = torch.nn.functional.mse_loss(masked_computed, masked_original)
 
-    optimizer = optim.SGD([coords], lr=learning_rate, momentum=0.99, nesterov=True)
+    return loss
+
+
+def create_incremental_coordinates(n_points, distance, device):
+    coordinates = torch.zeros((n_points, 3), dtype=torch.float64, device=device)
+    # Start the first coordinate at (0, 0, 0)
+
+    for i in range(1, n_points):
+        # Generate a random direction vector
+        direction = torch.randn(3, dtype=torch.float64, device=device)
+        direction /= torch.norm(direction)  # Normalize to get a unit vector
+
+        # Calculate the new coordinate by adding the direction scaled by the distance
+        new_coordinate = coordinates[i - 1] + direction * distance
+
+        coordinates[i] = new_coordinate
+
+    return torch.nn.Parameter(coordinates)
+
+
+def distance_matrix_to_3d_structure_gd(original_distance_matrix,
+                                       num_iterations=5000,
+                                       learning_rate=1e-3,
+                                       device="cuda:0",
+                                       verbose=True):
+    """Function to reconstruct a 3D structure from a distance matrix using gradient descent.
+
+    Parameters
+    ----------
+    original_distance_matrix : torch.Tensor or numpy.ndarray
+        The original distance matrix.
+    num_iterations : int, optional
+        Number of iterations for gradient descent, by default 5000.
+    learning_rate : float, optional
+        Learning rate for the optimizer, by default 1e-3.
+    device : str, optional
+        Device to which tensors are moved, by default "cuda:0".
+    verbose : bool, optional
+        Whether to print progress, by default True.
+
+    Returns
+    -------
+    numpy.ndarray
+        The reconstructed 3D coordinates.
+    """
+    if isinstance(original_distance_matrix, torch.Tensor):
+        original_distance_matrix = original_distance_matrix.to(device, dtype=torch.float64)
+    else:
+        original_distance_matrix = torch.tensor(original_distance_matrix, dtype=torch.float64, device=device)
+
+    coords = create_incremental_coordinates(original_distance_matrix.shape[0], 3.6, device=device)
+    #coords = torch.randn((original_distance_matrix.size(0), 3), requires_grad=True, device=device,dtype=torch.float64)
+
+
+    #optimizer = optim.SGD([coords], lr=learning_rate, momentum=0.99, nesterov=True)
+    optimizer = optim.Adam([coords], lr=learning_rate)
 
     for i in range(num_iterations):
         optimizer.zero_grad()
@@ -78,7 +134,8 @@ def distance_matrix_to_3d_structure_gd(original_distance_matrix, num_iterations=
         if i % 100 == 0 and verbose:
             print(f"Iteration {i}, Loss: {loss.item()}")
 
-    return coords.detach().numpy()
+
+    return coords.detach().cpu().numpy()
 
 def compare_distance_matrices(original_distance_matrix, coords):
     computed_distance_matrix = distance_matrix(coords, coords)
@@ -132,3 +189,4 @@ def save_trajectory(traj, filename):
     - filename (str): The name of the file to save the trajectory to.
     """
     traj.save(filename)
+
