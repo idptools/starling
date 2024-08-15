@@ -172,7 +172,11 @@ def create_ca_topology_from_coords(sequence, coords):
             topology.add_bond(topology.atom(i - 1), ca_atom)
 
     # Ensure the coordinates are in the right shape (1, num_atoms, 3)
-    coords = coords[np.newaxis, :, :]
+    print(coords.shape)
+    if coords.ndim != 3:
+       coords = coords[np.newaxis, :, :]
+    else:
+       print(coords.shape)
 
     # Create an MDTraj trajectory object with the topology and coordinates
     traj = md.Trajectory(coords, topology)

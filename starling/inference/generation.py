@@ -20,6 +20,17 @@ from starling.structure.coordinates import (
     save_trajectory,
 )
 
+from sklearn.manifold import MDS
+
+def distance_matrix_to_3d_structure(distance_matrix):
+    # Initialize MDS with 3 components (for 3D)
+    mds = MDS(n_components=3, dissimilarity='precomputed', random_state=42)
+    
+    # Fit the MDS model to the distance matrix
+    coords = mds.fit_transform(distance_matrix.cpu())
+    
+    return coords
+
 
 def plot_matrices(original, computed, difference, filename):
     """Plot the original, computed, and difference matrices using imshow and save to disk."""
@@ -79,12 +90,14 @@ def compare_distance_matrices(original_distance_matrix, coords):
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--number_maps", type=int, default=1)
+    parser.add_argument("--conformations", type=int, default=100)
     # parser.add_argument("--sequence", type=str, default="A" * 200)
     # parser.add_argument("--sequence", type=str, default="A"*384)
     parser.add_argument("--sequence", type=str, default="PKGS" * 50)
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--method", type=str, default="mds")
+    parser.add_argument("--filename", type=str, default="traj.xtc")
 
     args = parser.parse_args()
 
@@ -110,7 +123,7 @@ def main():
         map_location=args.device,
     )
 
-    distance_maps, *_ = diffusion.sample(args.number_maps, labels=args.sequence)
+    distance_maps, *_ = diffusion.sample(args.conformations, labels=args.sequence)
 
     # Initialize an empty list to store symmetrized distance maps
     sym_distance_maps = []
@@ -124,15 +137,26 @@ def main():
 
     # Convert the list back to a tensor
     sym_distance_maps = torch.stack(sym_distance_maps)
-
-    coordinates = np.array(
-        [
-            distance_matrix_to_3d_structure_gd(
-                dist_map, num_iterations=10000, learning_rate=0.05, verbose=True
-            )
-            for dist_map in sym_distance_maps
-        ]
-    )
+    if args.method == "gd":
+        coordinates = np.array(
+            [
+                distance_matrix_to_3d_structure_gd(
+                    dist_map, num_iterations=10000, learning_rate=0.05, verbose=True
+                )
+                for dist_map in sym_distance_maps
+            ]
+        )
+    elif args.method == "mds":
+        coordinates = np.array(
+            [
+                distance_matrix_to_3d_structure(
+                    dist_map,
+                )
+                for dist_map in sym_distance_maps
+            ]
+        )
+    else:
+        raise NotImplementedError("Method not implemented")
 
     computed_distance_matrix_gd, difference_matrix_gd = compare_distance_matrices(
         sym_distance_maps[0].cpu(), coordinates[0].squeeze()
@@ -164,6 +188,9 @@ def main():
     print("\nDifference Matrix (Gradient Descent):")
     print(difference_matrix_gd)
 
+    traj = create_ca_topology_from_coords(args.sequence,coordinates)
+    traj.save(f"{args.filename}")
+    
 
 if __name__ == "__main__":
     main()
