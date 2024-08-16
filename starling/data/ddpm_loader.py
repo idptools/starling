@@ -3,9 +3,6 @@ import os
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from finches.epsilon_calculation import Interaction_Matrix_Constructor
-from finches.forcefields.mPiPi import mPiPi_model
-from finches.frontend.mpipi_frontend import Mpipi_frontend
 from IPython import embed
 
 from starling.data.data_wrangler import (
@@ -51,12 +48,12 @@ class MatrixDataset(torch.utils.data.Dataset):
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
 
-        if self.labels == "finches":
-            sequence = self.get_interaction_matrix(data["seq"][()].decode())
-            sequence = MaxPad(sequence, shape=(self.target_shape))
-            sequence = torch.from_numpy(sequence).to(torch.float32)
+        #if self.labels == "finches":
+        #    sequence = self.get_interaction_matrix(data["seq"][()].decode())
+        #    sequence = MaxPad(sequence, shape=(self.target_shape))
+        #    sequence = torch.from_numpy(sequence).to(torch.float32)
 
-        elif self.labels == "learned-embeddings":
+        if self.labels == "learned-embeddings":
             sequence = (
                 torch.argmax(
                     torch.from_numpy(
@@ -70,12 +67,12 @@ class MatrixDataset(torch.utils.data.Dataset):
 
         return sample, sequence
 
-    def get_interaction_matrix(self, sequence):
-        mf = Mpipi_frontend()
-        interaction_matrix = mf.intermolecular_idr_matrix(
-            sequence, sequence, window_size=1
-        )
-        return interaction_matrix[0][0]
+    #def get_interaction_matrix(self, sequence):
+    #    mf = Mpipi_frontend()
+    #    interaction_matrix = mf.intermolecular_idr_matrix(
+    #        sequence, sequence, window_size=1
+    #    )
+    #    return interaction_matrix[0][0]
 
 
 # Step 2: Create a data module

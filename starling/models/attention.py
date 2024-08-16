@@ -48,47 +48,41 @@ class CrossAttention(nn.Module):
 
     def forward(self, query, context=None):
         batch_size, channels, height, width = query.size()
-
+    
         if not self.channel_last:
             query = rearrange(query, "b c h w -> b h w c")
-
+    
         # Prenormalization of the query and context
         query = self.query_norm(query)
         context = self.context_norm(context)
-
-        # Linear projection for the query (image features) - might be useful to change to Conv2d
+    
+        # Linear projection for the query (image features)
         Q = self.query_proj(query)  # [batch_size, height, width, channels]
-
+    
         # Linear projections for the key and value (text embeddings)
         K = self.key_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
         V = self.value_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
-
+    
         # Reshape query (image features) to match multi-head attention dimensions
-        # [batch_size, num_heads, height*width, head_dim]
         Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
-
+    
         # Reshape key and value (text embeddings) for multi-head attention
-        # [batch_size, num_heads, seq_len, head_dim]
         K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
-        # [batch_size, num_heads, seq_len, head_dim]
         V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
-
-        # Scaled Dot-Product Attention
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
-        attention_weights = F.softmax(scores, dim=-1)
-        attention_output = torch.matmul(attention_weights, V)
-
-        # Concatenate heads and reshape back to original dimensions
+    
+        # Use scaled_dot_product_attention
+        attention_output = F.scaled_dot_product_attention(Q, K, V)
+    
+        # Reshape back to original dimensions
         attention_output = rearrange(
             attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
         )
         attention_output = self.out_proj(attention_output)
-
+    
         if not self.channel_last:
             attention_output = rearrange(attention_output, "b h w c -> b c h w")
-
+    
         return attention_output
-
 
 class SelfAttention(nn.Module):
     def __init__(
@@ -160,10 +154,8 @@ class SelfAttention(nn.Module):
             V = rearrange(V, "b x (h d) -> b h x d", h=self.num_heads)
 
         # Scaled Dot-Product Attention
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
-        attention_weights = F.softmax(scores, dim=-1)
-        attention_output = torch.matmul(attention_weights, V)
-
+        attention_output = F.scaled_dot_product_attention(Q, K, V)
+        
         # Concatenate heads and reshape back to original dimensions
         if input_dim == 4:
             attention_output = rearrange(
@@ -271,6 +263,7 @@ class SelfAttentionConv(nn.Module):
         V = V.transpose(2, 3)
 
         # Scaled Dot-Product Attention
+
         scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
         attention_weights = F.softmax(scores, dim=-1)
         attention_output = torch.matmul(attention_weights, V)

@@ -21,7 +21,7 @@ from starling.models.unet import UNetConditional
 labels = "learned-embeddings"
 labels_dim = 384
 
-encoder_model_path = "/home/bnovak/projects/autoencoder_training/VAE_training/non_conditional_VAE/128x_KLD_1e-6_Resnet18/model-kernel-epoch=13-epoch_val_loss=1.57.ckpt"
+encoder_model_path = "/home/jlotthammer/projects/starling/model-kernel-epoch=13-epoch_val_loss=1.57.ckpt"
 
 
 def train_vae():
@@ -91,6 +91,8 @@ def train_vae():
     map_location = {
         f"cuda:{i}": f"cuda:{gpu_ids[i % len(gpu_ids)]}" for i in range(len(gpu_ids))
     }
+    map_location = "cuda:0"
+    print(map_location)
 
     encoder_model = cVAE.load_from_checkpoint(
         encoder_model_path, map_location=map_location
