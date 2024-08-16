@@ -77,7 +77,7 @@ def train_model():
     # Set up data loaders
     dataset = MatrixDataModule(
         **config["data"],
-        target_shape=config["model"]["dimension"],
+        target_shape=config["diffusion"]["max_seq_length"],
         num_workers=args.num_workers,
     )
 
