@@ -112,10 +112,7 @@ class MatrixDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.target_shape = target_shape
         self.labels = labels
-<<<<<<< HEAD
-=======
         # self.num_workers = int(os.cpu_count() / 4)
->>>>>>> 11ebaa98a678c196599dddc8724ba96cf9b23e2d
         self.num_workers = num_workers
 
     def prepare_data(self):
