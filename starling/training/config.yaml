@@ -16,6 +16,7 @@ diffusion:
   schedule_fn_kwargs: null
   set_lr: 0.0001  
   labels: learned-embeddings
+  max_seq_length: 384
 unet:
   encoder_path: null
   in_channels: 2
