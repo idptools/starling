@@ -73,21 +73,24 @@ def train_model():
         ckpt_path = None
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
-
+    
+    target_shape = config["diffusion"].pop("target_shape")
+    
     # Set up data loaders
     dataset = MatrixDataModule(
         **config["data"],
-        target_shape=config["diffusion"]["max_seq_length"],
+        target_shape=target_shape,
+        labels=config["diffusion"]["labels"],
         num_workers=args.num_workers,
     )
 
     dataset.setup(stage="fit")
+    encoder_model_path = config["unet"].pop("encoder_path")
     UNet_model = UNetConditional(**config["unet"])
 
     map_location = "cuda:0"
-
     encoder_model = cVAE.load_from_checkpoint(
-         config["unet"]["encoder_model_path"], map_location=map_location
+         encoder_model_path, map_location=map_location
     )
     
     #TODO
@@ -122,7 +125,7 @@ def train_model():
         precision="bf16-mixed",
         logger=wandb_logger,
     )
-
+    
     # Start training
     trainer.fit(diffusion_model, dataset)
 
