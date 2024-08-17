@@ -6,11 +6,16 @@ import torch.nn as nn
 from IPython import embed
 from torch.cuda.amp import autocast
 from torch.functional import F
+import math
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
+    _LRScheduler,
     CosineAnnealingWarmRestarts,
     OneCycleLR,
+    LambdaLR,
+    SequentialLR,
 )
+
 from tqdm import tqdm
 
 from starling.data.data_wrangler import one_hot_encode
@@ -24,7 +29,6 @@ from starling.data.schedulers import (
 # and https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/classifier_free_guidance.py#L720
 
 torch.set_float32_matmul_precision("high")
-
 
 # Helper function
 def extract(
@@ -613,7 +617,6 @@ class DiffusionModel(pl.LightningModule):
         ValueError
             If the scheduler is not implemented
         """
-
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=self.set_lr,
@@ -622,6 +625,7 @@ class DiffusionModel(pl.LightningModule):
             weight_decay=0.01,
             amsgrad=False,
         )
+        
 
         if self.config_scheduler == "CosineAnnealingWarmRestarts":
             lr_scheduler = {
@@ -654,12 +658,33 @@ class DiffusionModel(pl.LightningModule):
                 "monitor": self.monitor,
                 "interval": "epoch",
             }
+        elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
+            # REALLY SLOW AND DOESNT WORK IN DISTRIBUTED TRAINING FOR SOME REASON?!
+            warmup_steps = 500
+            num_epochs = self.trainer.max_epochs
+            total_steps = self.trainer.estimated_stepping_batches
+            steps_per_epoch = total_steps // num_epochs
 
+            def lr_lambda(current_step):
+                if current_step < warmup_steps:
+                    # Linear warmup phase
+                    return current_step / max(1, warmup_steps)
+                else:
+                    # Cosine annealing phase
+                    remaining_steps = current_step - warmup_steps
+                    current_epoch = remaining_steps // steps_per_epoch
+                    cosine_factor = 0.5 * (1 + torch.cos(math.pi * current_epoch / num_epochs))
+                    return cosine_factor.item()
+
+            lr_scheduler = {
+                "scheduler": LambdaLR(optimizer, lr_lambda=lr_lambda),
+                "monitor": self.monitor,
+                "interval": "step",
+            }
         else:
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
         return [optimizer], [lr_scheduler]
-
 
 def reduce_sampling_steps(T, K):
     # Calculate the spacing between each sample
