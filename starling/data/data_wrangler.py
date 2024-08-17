@@ -137,22 +137,28 @@ def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
     with h5py.File(file_path, "r") as f:
         keys = keys_to_load if keys_to_load else f.keys()
         for key in keys:
-            if (
-                frame is not None
-                and isinstance(f[key], h5py.Dataset)
-                and len(f[key].shape) > 0
-            ):
-                # If frame is specified and the dataset has multiple dimensions, load the specific frame
-                data[key] = f[key][frame]
-            else:
-                # Otherwise, load the entire dataset
-                if isinstance(f[key], h5py.Dataset):
-                    if f[key].dtype.kind == "S":  # Check if the data type is a string
-                        data[key] = f[key][...].astype(str)  # Convert bytes to string
+            if isinstance(f[key], h5py.Dataset):
+                if len(f[key].shape) > 0:
+                    if key == "dm" and frame is not None:
+                        # Index the "dm" key with the specified frame
+                        data[key] = f[key][frame]
+                    elif key == "seq":
+                        # Index the "seq" key at index 0
+                        data[key] = f[key][0]
                     else:
+                        # Load the entire dataset for other keys
                         data[key] = f[key][...]
                 else:
-                    data[key] = f[key][...]  # Load non-dataset objects if they exist
+                    # Handle datasets with no dimensions (scalar or 1D)
+                    data[key] = f[key][...]
+                
+                # Handle string conversion if needed
+                if f[key].dtype.kind == "S":  # Check if the data type is a string
+                    data[key] = data[key].astype(str)  # Convert bytes to string
+            else:
+                # Load non-dataset objects if they exist
+                data[key] = f[key][...]
+    
     return data
 
 

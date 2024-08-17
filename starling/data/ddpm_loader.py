@@ -35,10 +35,16 @@ class MatrixDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         data_path, frame = self.data.iloc[index]
-
+        #print("DATA_PTH: ",data_path)
+        #print("INDEX: ",index)
+        #print("FRAME: ",frame)
+        #print()
+        #print()
         data = load_hdf5_compressed(
             data_path, keys_to_load=["dm", "seq"], frame=int(frame)
         )
+
+        #print("DATA: ", data)
 
         sample = symmetrize(data["dm"]).astype(np.float32)
 
@@ -54,16 +60,28 @@ class MatrixDataset(torch.utils.data.Dataset):
         #    sequence = torch.from_numpy(sequence).to(torch.float32)
 
         if self.labels == "learned-embeddings":
-            sequence = (
-                torch.argmax(
-                    torch.from_numpy(
-                        one_hot_encode(data["seq"][()].decode().ljust(384, "0"))
-                    ),
-                    dim=-1,
+            try:
+                sequence = (
+                    torch.argmax(
+                        torch.from_numpy(
+                            one_hot_encode(data["seq"].decode().ljust(384, "0"))
+                        ),
+                        dim=-1,
+                    )
+                    .to(torch.int64)
+                    .squeeze()
                 )
-                .to(torch.int64)
-                .squeeze()
-            )
+            except AttributeError:
+                sequence = (
+                    torch.argmax(
+                        torch.from_numpy(
+                            one_hot_encode(data["seq"][0].ljust(384, "0"))
+                        ),
+                        dim=-1,
+                    )
+                    .to(torch.int64)
+                    .squeeze()
+                )
 
         return sample, sequence
 
@@ -85,6 +103,7 @@ class MatrixDataModule(pl.LightningDataModule):
         batch_size=None,
         target_shape=None,
         labels=None,
+        num_workers=None,
     ):
         super().__init__()
         self.train_data = train_data
@@ -94,7 +113,7 @@ class MatrixDataModule(pl.LightningDataModule):
         self.target_shape = target_shape
         self.labels = labels
         # self.num_workers = int(os.cpu_count() / 4)
-        self.num_workers = 16
+        self.num_workers = num_workers
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -131,7 +150,7 @@ class MatrixDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True,
+            #pin_memory=True,
         )
 
     def val_dataloader(self):
@@ -139,7 +158,7 @@ class MatrixDataModule(pl.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,
+            #pin_memory=True,
         )
 
     def test_dataloader(self):
@@ -147,5 +166,5 @@ class MatrixDataModule(pl.LightningDataModule):
             self.test_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            pin_memory=True,
+            #pin_memory=True,
         )
