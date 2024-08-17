@@ -85,6 +85,7 @@ class MatrixDataModule(pl.LightningDataModule):
         batch_size=None,
         target_shape=None,
         labels=None,
+        num_workers=None,
     ):
         super().__init__()
         self.train_data = train_data
@@ -93,8 +94,7 @@ class MatrixDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.target_shape = target_shape
         self.labels = labels
-        # self.num_workers = int(os.cpu_count() / 4)
-        self.num_workers = 16
+        self.num_workers = num_workers
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
