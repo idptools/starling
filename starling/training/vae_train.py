@@ -94,11 +94,13 @@ def train_vae():
 
     # Set up PyTorch Lightning Trainer
     trainer = pl.Trainer(
+        accelerator="auto",
         devices=config["device"]["cuda"],
+        num_nodes=config["device"]["num_nodes"],
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor, save_last_checkpoint],
         gradient_clip_val=1.0,
-        precision="16-mixed",
+        precision="bf16-mixed",
         logger=wandb_logger,
     )
 
