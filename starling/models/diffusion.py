@@ -75,7 +75,7 @@ class DiffusionModel(pl.LightningModule):
         schedule_fn_kwargs: Union[dict, None] = None,
         labels: str = "learned-embeddings",
         set_lr: float = 1e-4,
-        config_scheduler: str = "CosineAnnealingLR",
+        config_scheduler: str = "LinearWarmupCosineAnnealingLR",
     ) -> None:
         """
         Denoising-diffusion model framework for latent space diffusion models. This
@@ -660,7 +660,8 @@ class DiffusionModel(pl.LightningModule):
             }
         elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
             # REALLY SLOW AND DOESNT WORK IN DISTRIBUTED TRAINING FOR SOME REASON?!
-            warmup_steps = 500
+            # or ... no? debugging
+            warmup_steps = 1000
             num_epochs = self.trainer.max_epochs
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
@@ -681,6 +682,7 @@ class DiffusionModel(pl.LightningModule):
                 "monitor": self.monitor,
                 "interval": "step",
             }
+
         else:
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
