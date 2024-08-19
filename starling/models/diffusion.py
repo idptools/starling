@@ -661,7 +661,7 @@ class DiffusionModel(pl.LightningModule):
         elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
             # REALLY SLOW AND DOESNT WORK IN DISTRIBUTED TRAINING FOR SOME REASON?!
             # or ... no? debugging
-            warmup_steps = 1000
+            warmup_steps = 500
             num_epochs = self.trainer.max_epochs
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
