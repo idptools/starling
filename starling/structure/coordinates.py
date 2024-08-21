@@ -3,6 +3,7 @@ import mdtraj as md
 import torch.optim as optim
 import numpy as np
 from scipy.spatial import distance_matrix
+from sparrow.data.amino_acids import AA_ONE_TO_THREE
 
 def compute_pairwise_distances(coords):
     """Function to compute the pairwise distances in 3D space.
@@ -162,7 +163,9 @@ def create_ca_topology_from_coords(sequence, coords):
     # Add residues and CA atoms to the topology
     for i, res in enumerate(sequence):
         # Add a residue
-        residue = topology.add_residue(res, chain)
+        res_three_letter = AA_ONE_TO_THREE[res]
+        residue = topology.add_residue(res_three_letter, chain)
+        #residue = topology.add_residue(res, chain)
 
         # Add a CA atom to the residue
         ca_atom = topology.add_atom('CA', md.element.carbon, residue)
