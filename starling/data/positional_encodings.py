@@ -5,110 +5,141 @@ from torch import nn
 #! Make sure the non-learnable position encodings are properly implemented
 
 
-# Non-learnable position encodings
 class PositionalEncoding1D(nn.Module):
-    def __init__(self, max_seq_len, embedding_size):
+    def __init__(self, max_seq_len, embedding_size, rotary=False):
         """
         Positional encoding for 1D data. The positional encoding is added to the input tensor
         to provide information about the position of the elements in the input data. The positional
-        encoding is computed using sine and cosine functions.
+        encoding is computed using sine and cosine functions or rotary embeddings.
 
         Parameters
         ----------
-        max_seq_len : _type_
+        max_seq_len : int
             Max sequence length of the input data.
-        embedding_size : _type_
+        embedding_size : int
             The number of features of the input data.
+        rotary : bool
+            Whether to use rotary embeddings instead of sine-cosine positional encodings.
         """
         super(PositionalEncoding1D, self).__init__()
         self.max_seq_len = max_seq_len
         self.embedding_size = embedding_size
-        self.positional_encoding = self._generate_positional_encoding()
+        self.rotary = rotary
+
+        if not self.rotary:
+            self.positional_encoding = self._generate_positional_encoding()
 
     def _generate_positional_encoding(self):
-        # Initialize the positional encoding tensor with 0s
         pe = torch.zeros(self.max_seq_len, self.embedding_size)
-
-        # Get the position tensor (0, 1, 2, ..., max_seq_len - 1)
         position = torch.arange(0, self.max_seq_len, dtype=torch.float32).unsqueeze(1)
-
-        # Compute divisor term for the positional encodings
         div_term = torch.exp(
             torch.arange(0, self.embedding_size, 2, dtype=torch.float32)
             * (-torch.log(torch.tensor(10000.0)) / self.embedding_size)
         )
-
-        # Assigns sine values to even indices in the last dimension
         pe[:, 0::2] = torch.sin(position * div_term)
-
-        # Assigns cosine values to odd indices in the last dimension
         pe[:, 1::2] = torch.cos(position * div_term)
-
-        # Add batch dimension
-        pe = pe.unsqueeze(0)
-
-        return pe
+        return pe.unsqueeze(0)  # Add batch dimension
 
     def forward(self, x):
-        if self.positional_encoding.device != x.device:
-            self.positional_encoding = self.positional_encoding.to(x.device)
+        if self.rotary:
+            # Use rotary embeddings
+            return self.apply_rotary_embeddings(x)
+        else:
+            if self.positional_encoding.device != x.device:
+                self.positional_encoding = self.positional_encoding.to(x.device)
+            return x + self.positional_encoding
 
-        # Add positional encoding to the input tensor
-        return x + self.positional_encoding
+    def apply_rotary_embeddings(self, x):
+        # Reshape input to (batch_size, seq_len, embedding_size)
+        batch_size, seq_len, embedding_size = x.shape
+        theta = torch.exp(
+            torch.arange(0, embedding_size, 2, device=x.device, dtype=torch.float32)
+            * (-torch.log(torch.tensor(10000.0)) / embedding_size)
+        )
+        position_ids = torch.arange(0, seq_len, device=x.device).unsqueeze(1)
+        angle_rates = position_ids * theta
+        sin = torch.sin(angle_rates)
+        cos = torch.cos(angle_rates)
+        x1, x2 = x[..., 0::2], x[..., 1::2]
+        x = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+        return x
 
 
 class PositionalEncoding2D(nn.Module):
-    def __init__(self, embed_dim: int):
+    def __init__(self, embed_dim: int, rotary=False):
         """
         Positional encoding for 2D data. The positional encoding is added to the input tensor
         to provide information about the position of the elements in the input data. The positional
-        encoding is computed using sine and cosine functions.
+        encoding is computed using sine and cosine functions or rotary embeddings.
 
         Parameters
         ----------
         embed_dim : int
             The number of features of the input data.
+        rotary : bool
+            Whether to use rotary embeddings instead of sine-cosine positional encodings.
         """
         super(PositionalEncoding2D, self).__init__()
-
         self.embed_dim = embed_dim
+        self.rotary = rotary
 
     def forward(self, x):
-        b, c, h, w = x.shape
-        pe = self.generate_pe(h, w, x.device)
-        return x + pe
+        if self.rotary:
+            # Use rotary embeddings
+            return self.apply_rotary_embeddings(x)
+        else:
+            b, c, h, w = x.shape
+            pe = self.generate_pe(h, w, x.device)
+            return x + pe
 
     def generate_pe(self, height, width, device):
-        # Initialize the positional encoding tensor with 0s
         pe = torch.zeros(self.embed_dim, height, width, device=device)
-
-        # Get the position tensors for height and width of the 2D data
         y_position = torch.arange(
             0, height, dtype=torch.float32, device=device
         ).unsqueeze(1)
         x_position = torch.arange(
             0, width, dtype=torch.float32, device=device
         ).unsqueeze(0)
+        div_term = (
+            torch.exp(
+                torch.arange(0, self.embed_dim, 2, dtype=torch.float32, device=device)
+                * (-torch.log(torch.tensor(10000.0, device=device)) / self.embed_dim)
+            )
+            .unsqueeze(1)
+            .unsqueeze(1)
+        )
+        pe[0::2, :, :] = torch.sin(x_position.unsqueeze(0) * div_term)
+        pe[1::2, :, :] = torch.sin(y_position.unsqueeze(0) * div_term)
+        return pe.unsqueeze(0)  # Add batch dimension
 
-        # Compute divisor term for the positional encodings
-        div_term = torch.exp(
-            torch.arange(0, self.embed_dim, 2, dtype=torch.float32, device=device)
-            * (-torch.log(torch.tensor(10000.0, device=device)) / self.embed_dim)
+    def apply_rotary_embeddings(self, x):
+        # Apply rotary embeddings across the height and width
+        batch_size, channels, height, width = x.shape
+        assert (
+            channels % 2 == 0
+        ), "Embedding dimension must be even for rotary embeddings."
+        half_dim = channels // 2
+
+        theta = torch.exp(
+            torch.arange(0, half_dim, device=x.device, dtype=torch.float32)
+            * (-torch.log(torch.tensor(10000.0)) / half_dim)
         )
 
-        # Reshape div_term to match (embed_dim/2, height, width) for broadcasting
-        div_term = div_term.unsqueeze(1).unsqueeze(1)  # Shape (embed_dim/2, 1, 1)
+        y_position_ids = torch.arange(0, height, device=x.device).unsqueeze(1)
+        x_position_ids = torch.arange(0, width, device=x.device).unsqueeze(1)
 
-        # Compute the positional encodings for height and width
-        pe_x = torch.sin(x_position.unsqueeze(0) * div_term)
-        pe_y = torch.sin(y_position.unsqueeze(0) * div_term)
+        y_angle_rates = y_position_ids * theta
+        x_angle_rates = x_position_ids * theta
 
-        # Assign to the positional encoding tensor (even indices for x, odd indices for y)
-        pe[0::2, :, :] = pe_x
-        pe[1::2, :, :] = pe_y
+        y_sin = torch.sin(y_angle_rates).unsqueeze(-1)
+        y_cos = torch.cos(y_angle_rates).unsqueeze(-1)
 
-        # Return and add batch dimension
-        return pe.unsqueeze(0)
+        x_sin = torch.sin(x_angle_rates).unsqueeze(-2)
+        x_cos = torch.cos(x_angle_rates).unsqueeze(-2)
+
+        x1, x2 = x[..., :half_dim], x[..., half_dim:]
+        x_rotary = torch.cat([x1 * x_cos - x2 * x_sin, x1 * x_sin + x2 * x_cos], dim=-1)
+        return x_rotary
 
 
 # Learnable positional encodings
