@@ -128,25 +128,42 @@ class PositionalEncoding2D(nn.Module):
         ), "Embedding dimension must be even for rotary embeddings."
         half_dim = channels // 2
 
+        # Create the theta for both dimensions
         theta = torch.exp(
             torch.arange(0, half_dim, device=x.device, dtype=torch.float32)
             * (-torch.log(torch.tensor(10000.0)) / half_dim)
         )
 
+        # Create position encodings for height and width
         y_position_ids = torch.arange(0, height, device=x.device).unsqueeze(1)
         x_position_ids = torch.arange(0, width, device=x.device).unsqueeze(1)
 
-        y_angle_rates = y_position_ids * theta
-        x_angle_rates = x_position_ids * theta
+        # Calculate angle rates for each dimension
+        y_angle_rates = y_position_ids * theta  # (height, half_dim)
+        x_angle_rates = x_position_ids * theta  # (width, half_dim)
 
-        y_sin = torch.sin(y_angle_rates).unsqueeze(-1)
-        y_cos = torch.cos(y_angle_rates).unsqueeze(-1)
+        # Sine and cosine terms for each dimension
+        y_sin, y_cos = torch.sin(y_angle_rates), torch.cos(y_angle_rates)
+        x_sin, x_cos = torch.sin(x_angle_rates), torch.cos(x_angle_rates)
 
-        x_sin = torch.sin(x_angle_rates).unsqueeze(-2)
-        x_cos = torch.cos(x_angle_rates).unsqueeze(-2)
+        # Reshape sin and cos for broadcasting
+        y_sin = y_sin.view(1, half_dim, height, 1)  # (1, half_dim, height, 1)
+        y_cos = y_cos.view(1, half_dim, height, 1)  # (1, half_dim, height, 1)
+        x_sin = x_sin.view(1, half_dim, 1, width)  # (1, half_dim, 1, width)
+        x_cos = x_cos.view(1, half_dim, 1, width)  # (1, half_dim, 1, width)
 
-        x1, x2 = x[..., :half_dim], x[..., half_dim:]
-        x_rotary = torch.cat([x1 * x_cos - x2 * x_sin, x1 * x_sin + x2 * x_cos], dim=-1)
+        # Split channels into two halves
+        x1, x2 = x[:, :half_dim, :, :], x[:, half_dim:, :, :]
+
+        # Apply rotary embeddings separately for height and width
+        x_rotary = torch.cat(
+            [
+                x1 * y_cos * x_cos - x2 * y_sin * x_sin,
+                x1 * y_sin * x_cos + x2 * y_cos * x_sin,
+            ],
+            dim=1,
+        )
+
         return x_rotary
 
 
