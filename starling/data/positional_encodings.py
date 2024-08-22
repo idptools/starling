@@ -26,7 +26,9 @@ class PositionalEncoding1D(nn.Module):
         self.embedding_size = embedding_size
         self.rotary = rotary
 
-        if not self.rotary:
+        if self.rotary:
+            self.rotary_sin, self.rotary_cos = self._generate_rotary_embeddings()
+        else:
             self.positional_encoding = self._generate_positional_encoding()
 
     def _generate_positional_encoding(self):
@@ -40,29 +42,36 @@ class PositionalEncoding1D(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         return pe.unsqueeze(0)  # Add batch dimension
 
+    def _generate_rotary_embeddings(self):
+        theta = torch.exp(
+            torch.arange(0, self.embedding_size, 2, dtype=torch.float32)
+            * (-torch.log(torch.tensor(10000.0)) / self.embedding_size)
+        )
+        position_ids = torch.arange(0, self.max_seq_len).unsqueeze(1)
+        angle_rates = position_ids * theta
+        sin = torch.sin(angle_rates)
+        cos = torch.cos(angle_rates)
+
+        return sin, cos
+
     def forward(self, x):
         if self.rotary:
-            # Use rotary embeddings
-            return self.apply_rotary_embeddings(x)
+            if self.rotary_sin.device != x.device:
+                self.rotary_sin = self.rotary_sin.to(x.device)
+                self.rotary_cos = self.rotary_cos.to(x.device)
+
+            x1, x2 = x[..., 0::2], x[..., 1::2]
+            return torch.cat(
+                [
+                    x1 * self.rotary_cos - x2 * self.rotary_sin,
+                    x1 * self.rotary_sin + x2 * self.rotary_cos,
+                ],
+                dim=-1,
+            )
         else:
             if self.positional_encoding.device != x.device:
                 self.positional_encoding = self.positional_encoding.to(x.device)
             return x + self.positional_encoding
-
-    def apply_rotary_embeddings(self, x):
-        # Reshape input to (batch_size, seq_len, embedding_size)
-        batch_size, seq_len, embedding_size = x.shape
-        theta = torch.exp(
-            torch.arange(0, embedding_size, 2, device=x.device, dtype=torch.float32)
-            * (-torch.log(torch.tensor(10000.0)) / embedding_size)
-        )
-        position_ids = torch.arange(0, seq_len, device=x.device).unsqueeze(1)
-        angle_rates = position_ids * theta
-        sin = torch.sin(angle_rates)
-        cos = torch.cos(angle_rates)
-        x1, x2 = x[..., 0::2], x[..., 1::2]
-        x = torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
-        return x
 
 
 class PositionalEncoding2D(nn.Module):
