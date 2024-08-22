@@ -97,29 +97,28 @@ class PositionalEncoding2D(nn.Module):
             # Use rotary embeddings
             return self.apply_rotary_embeddings(x)
         else:
-            b, c, h, w = x.shape
-            pe = self.generate_pe(h, w, x.device)
-            return x + pe
+            return self.generate_pe(x)
 
-    def generate_pe(self, height, width, device):
-        pe = torch.zeros(self.embed_dim, height, width, device=device)
-        y_position = torch.arange(
-            0, height, dtype=torch.float32, device=device
-        ).unsqueeze(1)
-        x_position = torch.arange(
-            0, width, dtype=torch.float32, device=device
-        ).unsqueeze(0)
+    def generate_pe(self, x):
+        b, c, h, w = x.shape
+        pe = torch.zeros(self.embed_dim, h, w, device=x.device)
+        y_position = torch.arange(0, h, dtype=torch.float32, device=x.device).unsqueeze(
+            1
+        )
+        x_position = torch.arange(0, w, dtype=torch.float32, device=x.device).unsqueeze(
+            0
+        )
         div_term = (
             torch.exp(
-                torch.arange(0, self.embed_dim, 2, dtype=torch.float32, device=device)
-                * (-torch.log(torch.tensor(10000.0, device=device)) / self.embed_dim)
+                torch.arange(0, self.embed_dim, 2, dtype=torch.float32, device=x.device)
+                * (-torch.log(torch.tensor(10000.0, device=x.device)) / self.embed_dim)
             )
             .unsqueeze(1)
             .unsqueeze(1)
         )
         pe[0::2, :, :] = torch.sin(x_position.unsqueeze(0) * div_term)
         pe[1::2, :, :] = torch.sin(y_position.unsqueeze(0) * div_term)
-        return pe.unsqueeze(0)  # Add batch dimension
+        return x + pe.unsqueeze(0)  # Add batch dimension
 
     def apply_rotary_embeddings(self, x):
         # Apply rotary embeddings across the height and width
