@@ -659,9 +659,7 @@ class DiffusionModel(pl.LightningModule):
                 "interval": "epoch",
             }
         elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
-            # REALLY SLOW AND DOESNT WORK IN DISTRIBUTED TRAINING FOR SOME REASON?!
-            # or ... no? debugging
-            warmup_steps = 500
+            warmup_steps = 1000
             num_epochs = self.trainer.max_epochs
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
@@ -672,10 +670,11 @@ class DiffusionModel(pl.LightningModule):
                     return current_step / max(1, warmup_steps)
                 else:
                     # Cosine annealing phase
+                    eta_min=1e-8
                     remaining_steps = current_step - warmup_steps
                     current_epoch = remaining_steps // steps_per_epoch
-                    cosine_factor = 0.5 * (1 + torch.cos(math.pi * current_epoch / num_epochs))
-                    return cosine_factor.item()
+                    cosine_factor = 0.5 * (1 + math.cos(math.pi * current_epoch / num_epochs))
+                    return (eta_min + (1 - eta_min) * cosine_factor)
 
             lr_scheduler = {
                 "scheduler": LambdaLR(optimizer, lr_lambda=lr_lambda),
