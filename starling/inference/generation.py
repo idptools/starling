@@ -131,9 +131,7 @@ def main():
             filename, sequence = line.strip().split("\t")
 
             if args.ddim:
-                distance_maps = sampler.sample(
-                    [args.conformations, 1, 24, 24], labels=sequence
-                )
+                distance_maps = sampler.sample(args.conformations, labels=sequence)
             else:
                 distance_maps, *_ = diffusion.sample(
                     args.conformations, labels=sequence
