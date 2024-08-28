@@ -13,6 +13,7 @@ from sklearn.manifold import MDS
 from starling.models.cvae import cVAE
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
+from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
     compare_distance_matrices,
     create_ca_topology_from_coords,
@@ -96,6 +97,7 @@ def main():
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--method", type=str, default="mds")
+    parser.add_argument("--ddim", action="store_true")
 
     args = parser.parse_args()
 
@@ -121,12 +123,21 @@ def main():
         map_location=args.device,
     )
 
+    if args.ddim:
+        sampler = DDIMSampler(ddpm_model=diffusion, n_steps=args.steps)
+
     with open(args.input, "r") as f:
         for line in f:
             filename, sequence = line.strip().split("\t")
 
-            distance_maps, *_ = diffusion.sample(args.conformations, labels=sequence)
-
+            if args.ddim:
+                distance_maps = sampler.sample(
+                    [args.conformations, 1, 24, 24], labels=sequence
+                )
+            else:
+                distance_maps, *_ = diffusion.sample(
+                    args.conformations, labels=sequence
+                )
             # Initialize an empty list to store symmetrized distance maps
             sym_distance_maps = []
 
