@@ -35,16 +35,16 @@ class MatrixDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         data_path, frame = self.data.iloc[index]
-        #print("DATA_PTH: ",data_path)
-        #print("INDEX: ",index)
-        #print("FRAME: ",frame)
-        #print()
-        #print()
+        # print("DATA_PTH: ",data_path)
+        # print("INDEX: ",index)
+        # print("FRAME: ",frame)
+        # print()
+        # print()
         data = load_hdf5_compressed(
             data_path, keys_to_load=["dm", "seq"], frame=int(frame)
         )
 
-        #print("DATA: ", data)
+        # print("DATA: ", data)
 
         sample = symmetrize(data["dm"]).astype(np.float32)
 
@@ -54,28 +54,26 @@ class MatrixDataset(torch.utils.data.Dataset):
         # Add a channel dimension using unsqueeze
         sample = torch.from_numpy(sample).unsqueeze(0)
 
-        #if self.labels == "finches":
+        # if self.labels == "finches":
         #    sequence = self.get_interaction_matrix(data["seq"][()].decode())
         #    sequence = MaxPad(sequence, shape=(self.target_shape))
         #    sequence = torch.from_numpy(sequence).to(torch.float32)
 
         if self.labels == "learned-embeddings":
-            try:
+            if isinstance(data["seq"], str):
                 sequence = (
                     torch.argmax(
-                        torch.from_numpy(
-                            one_hot_encode(data["seq"].decode().ljust(384, "0"))
-                        ),
+                        torch.from_numpy(one_hot_encode(data["seq"].ljust(384, "0"))),
                         dim=-1,
                     )
                     .to(torch.int64)
                     .squeeze()
                 )
-            except AttributeError:
+            else:
                 sequence = (
                     torch.argmax(
                         torch.from_numpy(
-                            one_hot_encode(data["seq"][0].ljust(384, "0"))
+                            one_hot_encode(data["seq"][()].decode().ljust(384, "0"))
                         ),
                         dim=-1,
                     )
@@ -85,7 +83,7 @@ class MatrixDataset(torch.utils.data.Dataset):
 
         return sample, sequence
 
-    #def get_interaction_matrix(self, sequence):
+    # def get_interaction_matrix(self, sequence):
     #    mf = Mpipi_frontend()
     #    interaction_matrix = mf.intermolecular_idr_matrix(
     #        sequence, sequence, window_size=1
@@ -150,7 +148,7 @@ class MatrixDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            #pin_memory=True,
+            # pin_memory=True,
         )
 
     def val_dataloader(self):
@@ -158,7 +156,7 @@ class MatrixDataModule(pl.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            #pin_memory=True,
+            # pin_memory=True,
         )
 
     def test_dataloader(self):
@@ -166,5 +164,5 @@ class MatrixDataModule(pl.LightningDataModule):
             self.test_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            #pin_memory=True,
+            # pin_memory=True,
         )
