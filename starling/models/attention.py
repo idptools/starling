@@ -13,8 +13,8 @@ class CrossAttention(nn.Module):
         embed_dim: int,
         num_heads: int,
         context_dim: int,
+        custom,
         channel_last=False,
-        custom=True,
     ) -> None:
         """
         CrossAttention module for use in UNet models. This module is used to
@@ -98,7 +98,7 @@ class CrossAttention(nn.Module):
 
 class SelfAttention(nn.Module):
     def __init__(
-        self, embed_dim: int, num_heads: int, channels_last: bool = False, custom=True
+        self, embed_dim: int, num_heads: int, custom, channels_last: bool = False
     ) -> None:
         """
         This is a basic self-attention module. It uses linear layers to project

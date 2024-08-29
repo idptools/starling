@@ -74,7 +74,7 @@ class FeedForward(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int):
+    def __init__(self, embed_dim: int, num_heads: int, custom_attention: bool):
         """
         Transformer encoder layer. The transformer encoder layer consists of a self attention layer
         and a feed forward layer. The self attention layer is used to capture the relationships
@@ -90,7 +90,9 @@ class TransformerEncoder(nn.Module):
         """
         super().__init__()
 
-        self.self_attention = SelfAttention(embed_dim, num_heads)
+        self.self_attention = SelfAttention(
+            embed_dim, num_heads, custom=custom_attention
+        )
         self.feed_forward = FeedForward(embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -103,7 +105,7 @@ class TransformerEncoder(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, context_dim):
+    def __init__(self, embed_dim: int, num_heads: int, context_dim, custom_attention):
         """
         Transformer decoder layer. The transformer decoder layer consists of a self attention layer,
         cross attention layer and a feed forward layer. The self attention layer is used to capture the
@@ -122,8 +124,12 @@ class TransformerDecoder(nn.Module):
         """
         super().__init__()
 
-        self.self_attention = SelfAttention(embed_dim, num_heads)
-        self.cross_attention = CrossAttention(embed_dim, num_heads, context_dim)
+        self.self_attention = SelfAttention(
+            embed_dim, num_heads, custom=custom_attention
+        )
+        self.cross_attention = CrossAttention(
+            embed_dim, num_heads, context_dim, custom=custom_attention
+        )
         self.feed_forward = FeedForward(embed_dim)
 
     def forward(self, x: torch.Tensor, context=None) -> torch.Tensor:
@@ -139,7 +145,9 @@ class TransformerDecoder(nn.Module):
 
 
 class SpatialTransformer(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, context_dim: int):
+    def __init__(
+        self, embed_dim: int, num_heads: int, context_dim: int, custom_attention: bool
+    ):
         """
         Spatial transformer network. The spatial transformer network consists of a transformer encoder
         and a transformer decoder. The transformer encoder is used to process the features of the
@@ -160,13 +168,17 @@ class SpatialTransformer(nn.Module):
 
         # Add positional encodings to the context (protein sequence data)
         self.context_positional_encodings = PositionalEncoding1D(384, context_dim)
-        self.context_encoder = TransformerEncoder(context_dim, num_heads)
+        self.context_encoder = TransformerEncoder(
+            context_dim, num_heads, custom_attention=custom_attention
+        )
 
         # Add positional encodings to the latent space representation of images (e.i. distance maps)
         self.image_positional_encodings = PositionalEncoding2D(embed_dim)
         self.group_norm = nn.GroupNorm(num_groups=32, num_channels=embed_dim)
         self.conv_in = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
-        self.transformer_block = TransformerDecoder(embed_dim, num_heads, context_dim)
+        self.transformer_block = TransformerDecoder(
+            embed_dim, num_heads, context_dim, custom_attention=custom_attention
+        )
         self.conv_out = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
 
     def forward(self, x: torch.Tensor, context=None) -> torch.Tensor:

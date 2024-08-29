@@ -142,6 +142,7 @@ class CrossAttentionResnetLayer(nn.Module):
         attention_heads: int,
         timestep_dim: int,
         label_dim: int,
+        custom_attention: bool,
     ):
         """
         A combination of ResNet blocks followed by spatial transformer blocks. The ResNet block
@@ -177,7 +178,9 @@ class CrossAttentionResnetLayer(nn.Module):
                 ResBlockEncBasic(self.in_channels, out_channels, 1, norm, timestep_dim)
             )
             self.transformer.append(
-                SpatialTransformer(out_channels, attention_heads, label_dim),
+                SpatialTransformer(
+                    out_channels, attention_heads, label_dim, custom_attention
+                ),
             )
 
             self.in_channels = out_channels
@@ -219,6 +222,7 @@ class UNetConditional(nn.Module):
         middle_blocks: int = 2,
         labels_dim: int = 512,
         sinusoidal_pos_emb_theta: int = 10000,
+        custom_attention: bool = True,
     ):
         """
         A U-Net architecture that uses ResNet blocks with spatial transformer blocks to process the input
@@ -282,6 +286,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         self.encoder_layer1 = CrossAttentionResnetLayer(
@@ -292,6 +297,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         self.downsample1 = Downsample(all_in_channels[0], all_in_channels[1], norm)
@@ -304,6 +310,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         self.downsample2 = Downsample(all_in_channels[1], all_in_channels[2], norm)
@@ -316,6 +323,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         self.downsample3 = Downsample(all_in_channels[2], all_in_channels[3], norm)
@@ -330,6 +338,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         # Decoder part of UNet
@@ -352,6 +361,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         self.upconv2 = ResizeConv2d(
@@ -372,6 +382,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         self.upconv3 = ResizeConv2d(
@@ -392,6 +403,7 @@ class UNetConditional(nn.Module):
             8,
             self.time_dim,
             self.labels_dim,
+            custom_attention,
         )
 
         self.conv_out = nn.Conv2d(all_in_channels[0], out_channels, kernel_size=1)
