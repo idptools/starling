@@ -32,6 +32,12 @@ def train_model():
     )
 
     parser.add_argument(
+        "--num_nodes",
+        type=int,
+        help="Number of nodes to use for training",
+    )
+
+    parser.add_argument(
         "--num_workers",
         type=int,
         default=16,
