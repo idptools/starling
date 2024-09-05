@@ -98,6 +98,7 @@ def main():
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--method", type=str, default="mds")
     parser.add_argument("--ddim", action="store_true")
+    parser.add_argument("--no_struct", action="store_true")
 
     args = parser.parse_args()
 
@@ -148,88 +149,88 @@ def main():
 
             # Convert the list back to a tensor
             sym_distance_maps = torch.stack(sym_distance_maps)
-            if args.method == "gd":
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_gd(
-                                dist_map,
-                                num_iterations=10000,
-                                learning_rate=0.05,
-                                verbose=True,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
+            if not args.no_struct:
+                if args.method == "gd":
+                    coordinates = (
+                        np.array(
+                            [
+                                distance_matrix_to_3d_structure_gd(
+                                    dist_map,
+                                    num_iterations=10000,
+                                    learning_rate=0.05,
+                                    verbose=True,
+                                )
+                                for dist_map in sym_distance_maps
+                            ]
+                        )
+                        / CONVERT_ANGSTROM_TO_NM
                     )
-                    / CONVERT_ANGSTROM_TO_NM
-                )
-            elif args.method == "mds":
-                # SCALE CORDINATES TO NM
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure(
-                                dist_map,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
+                elif args.method == "mds":
+                    # SCALE CORDINATES TO NM
+                    coordinates = (
+                        np.array(
+                            [
+                                distance_matrix_to_3d_structure(
+                                    dist_map,
+                                )
+                                for dist_map in sym_distance_maps
+                            ]
+                        )
+                        / CONVERT_ANGSTROM_TO_NM
                     )
-                    / CONVERT_ANGSTROM_TO_NM
-                )
-            else:
-                raise NotImplementedError("Method not implemented")
+                else:
+                    raise NotImplementedError("Method not implemented")
 
-            computed_distance_matrix_gd = []
-            difference_matrix_gd = []
+                computed_distance_matrix_gd = []
+                difference_matrix_gd = []
 
-            for sym, coord in zip(sym_distance_maps, coordinates):
-                computed_dm, difference_dm = compare_distance_matrices(
-                    sym.cpu(), coord.squeeze() * CONVERT_ANGSTROM_TO_NM
-                )
-                computed_distance_matrix_gd.append(computed_dm)
-                difference_matrix_gd.append(difference_dm)
+                for sym, coord in zip(sym_distance_maps, coordinates):
+                    computed_dm, difference_dm = compare_distance_matrices(
+                        sym.cpu(), coord.squeeze() * CONVERT_ANGSTROM_TO_NM
+                    )
+                    computed_distance_matrix_gd.append(computed_dm)
+                    difference_matrix_gd.append(difference_dm)
 
-            # computed_distance_matrix_gd, difference_matrix_gd = (
-            #     compare_distance_matrices(
-            #         sym_distance_maps[0].cpu(),
-            #         coordinates[0].squeeze() * CONVERT_ANGSTROM_TO_NM,
-            #     )
-            # )
+                # computed_distance_matrix_gd, difference_matrix_gd = (
+                #     compare_distance_matrices(
+                #         sym_distance_maps[0].cpu(),
+                #         coordinates[0].squeeze() * CONVERT_ANGSTROM_TO_NM,
+                #     )
+                # )
 
-            # original_distance_matrix = sym_distance_maps[0].cpu()
-            # plot_matrices(
-            #     original_distance_matrix,
-            #     computed_distance_matrix_gd,
-            #     difference_matrix_gd.cpu(),
-            #     "distance_matrices.png",
-            # )
+                # original_distance_matrix = sym_distance_maps[0].cpu()
+                # plot_matrices(
+                #     original_distance_matrix,
+                #     computed_distance_matrix_gd,
+                #     difference_matrix_gd.cpu(),
+                #     "distance_matrices.png",
+                # )
 
-            # print(
-            #     f"Min: {original_distance_matrix.min()}, Max: {original_distance_matrix.max()}"
-            # )
-            # print(f"NaN values: {torch.isnan(original_distance_matrix).any()}")
-            # print(f"Inf values: {torch.isinf(original_distance_matrix).any()}")
-            # print(
-            #     f"Symmetric: {torch.allclose(original_distance_matrix, original_distance_matrix.T)}"
-            # )
+                # print(
+                #     f"Min: {original_distance_matrix.min()}, Max: {original_distance_matrix.max()}"
+                # )
+                # print(f"NaN values: {torch.isnan(original_distance_matrix).any()}")
+                # print(f"Inf values: {torch.isinf(original_distance_matrix).any()}")
+                # print(
+                #     f"Symmetric: {torch.allclose(original_distance_matrix, original_distance_matrix.T)}"
+                # )
 
-            print("\nOriginal Distance Matrix")
-            print(sym_distance_maps[0].cpu())
+                print("\nOriginal Distance Matrix")
+                print(sym_distance_maps[0].cpu())
 
-            print("\nComputed Distance Matrix (Gradient Descent):")
-            print(computed_distance_matrix_gd)
+                print("\nComputed Distance Matrix (Gradient Descent):")
+                print(computed_distance_matrix_gd)
 
-            print("\nDifference Matrix (Gradient Descent):")
-            print(difference_matrix_gd)
+                print("\nDifference Matrix (Gradient Descent):")
+                print(difference_matrix_gd)
 
-            traj = create_ca_topology_from_coords(sequence, coordinates)
-            traj.save(f"{filename}.xtc")
-            traj.save(f"{filename}.pdb")
-
+                traj = create_ca_topology_from_coords(sequence, coordinates)
+                traj.save(f"{filename}.xtc")
+                traj.save(f"{filename}.pdb")
+                np.save(f"{filename}_3D_struct_dm.npy", computed_distance_matrix_gd)
             np.save(
                 f"{filename}_original_dm.npy", sym_distance_maps.detach().cpu().numpy()
             )
-            np.save(f"{filename}_3D_struct_dm.npy", computed_distance_matrix_gd)
 
 
 if __name__ == "__main__":
