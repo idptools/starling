@@ -26,6 +26,13 @@ def train_vae():
     )
 
     parser.add_argument(
+        "--num_nodes",
+        type=int,
+        default=1,
+        help="Number of nodes to use for training",
+    )
+
+    parser.add_argument(
         "--num_workers",
         type=int,
         default=16,
@@ -96,7 +103,7 @@ def train_vae():
     trainer = pl.Trainer(
         accelerator="auto",
         devices=config["device"]["cuda"],
-        num_nodes=config["device"]["num_nodes"],
+        num_nodes=args.num_nodes,
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor, save_last_checkpoint],
         gradient_clip_val=1.0,
