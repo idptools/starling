@@ -94,6 +94,8 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("--conformations", type=int, default=100)
     parser.add_argument("--input", type=str)
+    parser.add_argument("--encoder", type=str, default=None)
+    parser.add_argument("--ddpm", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--method", type=str, default="mds")
@@ -103,8 +105,8 @@ def main():
     args = parser.parse_args()
 
     UNet_model = UNetConditional(
-        in_channels=1,
-        out_channels=1,
+        in_channels=2,
+        out_channels=2,
         base=64,
         norm="group",
         blocks=[2, 2, 2],
@@ -112,17 +114,30 @@ def main():
         labels_dim=384,
     )
 
-    encoder_model = cVAE.load_from_checkpoint(
-        "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
-        map_location=args.device,
-    )
+    if args.encoder is not None:
+        encoder_model = cVAE.load_from_checkpoint(
+            args.encoder, map_location=args.device
+        )
+    else:
+        encoder_model = cVAE.load_from_checkpoint(
+            "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
+            map_location=args.device,
+        )
 
-    diffusion = DiffusionModel.load_from_checkpoint(
-        "/home/bnovak/projects/test_diffusion/diffusion_testing_my_UNet_attention/model-kernel-epoch=09-epoch_val_loss=0.05.ckpt",
-        model=UNet_model,
-        encoder_model=encoder_model,
-        map_location=args.device,
-    )
+    if args.ddpm is not None:
+        diffusion = DiffusionModel.load_from_checkpoint(
+            args.ddpm,
+            model=UNet_model,
+            encoder_model=encoder_model,
+            map_location=args.device,
+        )
+    else:
+        diffusion = DiffusionModel.load_from_checkpoint(
+            "/home/bnovak/projects/test_diffusion/diffusion_testing_my_UNet_attention/model-kernel-epoch=09-epoch_val_loss=0.05.ckpt",
+            model=UNet_model,
+            encoder_model=encoder_model,
+            map_location=args.device,
+        )
 
     if args.ddim:
         sampler = DDIMSampler(ddpm_model=diffusion, n_steps=args.steps)
