@@ -12,7 +12,7 @@ from starling.data.data_wrangler import (
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, tsv_file: str, target_shape: int) -> None:
+    def __init__(self, tsv_file: str) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
         tsv_file : str
@@ -23,7 +23,6 @@ class MatrixDataset(torch.utils.data.Dataset):
             padded
         """
         self.data = read_tsv_file(tsv_file)
-        self.target_shape = (target_shape, target_shape)
 
     def __len__(self):
         return len(self.data)
@@ -31,17 +30,12 @@ class MatrixDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         data_path, frame = self.data.iloc[index]
 
-        sample = load_hdf5_compressed(data_path, keys_to_load=["dm"], frame=int(frame))
-
-        sample = symmetrize(sample["dm"]).astype(np.float32)
-
-        # Resize the input distance map with padding
-        sample = MaxPad(sample, shape=(self.target_shape))
+        distance_map = load_hdf5_compressed(data_path, keys_to_load=["dm"], frame=int(frame))
 
         # Add a channel dimension using unsqueeze
-        sample = torch.from_numpy(sample).unsqueeze(0)
+        distance_map = torch.from_numpy(distance_map).unsqueeze(0)
 
-        return sample
+        return distance_map
 
 
 # Step 2: Create a data module
@@ -52,7 +46,6 @@ class MatrixDataModule(pl.LightningDataModule):
         val_data=None,
         test_data=None,
         batch_size=None,
-        target_shape=None,
         num_workers=None,
     ):
         super().__init__()
@@ -60,7 +53,6 @@ class MatrixDataModule(pl.LightningDataModule):
         self.val_data = val_data
         self.test_data = test_data
         self.batch_size = batch_size
-        self.target_shape = target_shape
         self.num_workers = num_workers  # Set this to 16
 
     def prepare_data(self):
@@ -71,21 +63,17 @@ class MatrixDataModule(pl.LightningDataModule):
         if stage == "fit":
             self.train_dataset = MatrixDataset(
                 self.train_data,
-                target_shape=self.target_shape,
             )
             self.val_dataset = MatrixDataset(
                 self.val_data,
-                target_shape=self.target_shape,
             )
         if stage == "test":
             self.test_dataset = MatrixDataset(
                 self.test_data,
-                target_shape=self.target_shape,
             )
         if stage == "predict":
             self.predict_dataset = MatrixDataset(
                 self.predict_data,
-                target_shape=self.target_shape,
             )
 
     def train_dataloader(self):
