@@ -73,15 +73,13 @@ class MatrixDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         data_path, frame = self.data.iloc[index]
         data = load_hdf5_compressed(data_path, keys_to_load=["dm", "seq"], frame=int(frame))
-        sample = symmetrize(data["dm"]).astype(np.float32)
-        sample = MaxPad(sample, shape=self.target_shape)
-        sample = torch.from_numpy(sample).unsqueeze(0)
+        distance_map = data["dm"].astype(np.float32)
+        distance_map = torch.from_numpy(distance_map).unsqueeze(0)
+
+        sequence = data["seq"]
+        sequence = torch.from_numpy(sequence)
     
-        seq = data["seq"][()].decode() if not isinstance(data["seq"], str) else data["seq"]
-        seq = seq.ljust(384, "0")
-        sequence = sequence_to_indices(seq,self.aa_to_int)
-    
-        return sample, sequence
+        return distance_map, sequence
 
     # def get_interaction_matrix(self, sequence):
     #    mf = Mpipi_frontend()
