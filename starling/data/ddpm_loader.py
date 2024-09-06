@@ -6,11 +6,8 @@ import torch
 from IPython import embed
 
 from starling.data.data_wrangler import (
-    MaxPad,
     load_hdf5_compressed,
-    one_hot_encode,
     read_tsv_file,
-    symmetrize,
 )
 
 def sequence_to_indices(sequence, aa_to_int):
@@ -29,7 +26,7 @@ def sequence_to_indices(sequence, aa_to_int):
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, tsv_file: str, target_shape: int, labels: str) -> None:
+    def __init__(self, tsv_file: str, labels: str) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
         tsv_file : str
@@ -41,7 +38,6 @@ class MatrixDataset(torch.utils.data.Dataset):
         labels : str
         """
         self.data = read_tsv_file(tsv_file)
-        self.target_shape = (target_shape, target_shape)
         self.labels = labels
         self.aa_to_int = {
             "0": 0,
@@ -97,7 +93,6 @@ class MatrixDataModule(pl.LightningDataModule):
         val_data=None,
         test_data=None,
         batch_size=None,
-        target_shape=None,
         labels=None,
         num_workers=None,
     ):
@@ -106,7 +101,6 @@ class MatrixDataModule(pl.LightningDataModule):
         self.val_data = val_data
         self.test_data = test_data
         self.batch_size = batch_size
-        self.target_shape = target_shape
         self.labels = labels
         # self.num_workers = int(os.cpu_count() / 4)
         self.num_workers = num_workers
@@ -119,24 +113,20 @@ class MatrixDataModule(pl.LightningDataModule):
         if stage == "fit":
             self.train_dataset = MatrixDataset(
                 self.train_data,
-                target_shape=self.target_shape,
                 labels=self.labels,
             )
             self.val_dataset = MatrixDataset(
                 self.val_data,
-                target_shape=self.target_shape,
                 labels=self.labels,
             )
         if stage == "test":
             self.test_dataset = MatrixDataset(
                 self.test_data,
-                target_shape=self.target_shape,
                 labels=self.labels,
             )
         if stage == "predict":
             self.predict_dataset = MatrixDataset(
                 self.predict_data,
-                target_shape=self.target_shape,
                 labels=self.labels,
             )
 
