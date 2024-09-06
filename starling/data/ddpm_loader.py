@@ -13,6 +13,20 @@ from starling.data.data_wrangler import (
     symmetrize,
 )
 
+def sequence_to_indices(sequence, aa_to_int):
+    """
+    Converts a single sequence to integer indices based on a mapping.
+    
+    Parameters:
+    - sequence (str): A single sequence string.
+    - aa_to_int (dict): A dictionary mapping amino acids to integers.
+    
+    Returns:
+    - torch.Tensor: Tensor of integer indices.
+    """
+    int_sequence = [aa_to_int[aa] for aa in sequence]
+    return torch.tensor(int_sequence, dtype=torch.int64)
+
 
 class MatrixDataset(torch.utils.data.Dataset):
     def __init__(self, tsv_file: str, target_shape: int, labels: str) -> None:
@@ -29,58 +43,44 @@ class MatrixDataset(torch.utils.data.Dataset):
         self.data = read_tsv_file(tsv_file)
         self.target_shape = (target_shape, target_shape)
         self.labels = labels
+        self.aa_to_int = {
+            "0": 0,
+            "A": 1,
+            "C": 2,
+            "D": 3,
+            "E": 4,
+            "F": 5,
+            "G": 6,
+            "H": 7,
+            "I": 8,
+            "K": 9,
+            "L": 10,
+            "M": 11,
+            "N": 12,
+            "P": 13,
+            "Q": 14,
+            "R": 15,
+            "S": 16,
+            "T": 17,
+            "V": 18,
+            "W": 19,
+            "Y": 20,
+        }
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
         data_path, frame = self.data.iloc[index]
-        # print("DATA_PTH: ",data_path)
-        # print("INDEX: ",index)
-        # print("FRAME: ",frame)
-        # print()
-        # print()
-        data = load_hdf5_compressed(
-            data_path, keys_to_load=["dm", "seq"], frame=int(frame)
-        )
-
-        # print("DATA: ", data)
-
+        data = load_hdf5_compressed(data_path, keys_to_load=["dm", "seq"], frame=int(frame))
         sample = symmetrize(data["dm"]).astype(np.float32)
-
-        # Resize the input distance map with padding
-        sample = MaxPad(sample, shape=(self.target_shape))
-
-        # Add a channel dimension using unsqueeze
+        sample = MaxPad(sample, shape=self.target_shape)
         sample = torch.from_numpy(sample).unsqueeze(0)
-
-        # if self.labels == "finches":
-        #    sequence = self.get_interaction_matrix(data["seq"][()].decode())
-        #    sequence = MaxPad(sequence, shape=(self.target_shape))
-        #    sequence = torch.from_numpy(sequence).to(torch.float32)
-
-        if self.labels == "learned-embeddings":
-            if isinstance(data["seq"], str):
-                sequence = (
-                    torch.argmax(
-                        torch.from_numpy(one_hot_encode(data["seq"].ljust(384, "0"))),
-                        dim=-1,
-                    )
-                    .to(torch.int64)
-                    .squeeze()
-                )
-            else:
-                sequence = (
-                    torch.argmax(
-                        torch.from_numpy(
-                            one_hot_encode(data["seq"][()].decode().ljust(384, "0"))
-                        ),
-                        dim=-1,
-                    )
-                    .to(torch.int64)
-                    .squeeze()
-                )
-
+    
+        seq = data["seq"][()].decode() if not isinstance(data["seq"], str) else data["seq"]
+        seq = seq.ljust(384, "0")
+        sequence = sequence_to_indices(seq,self.aa_to_int)
+    
         return sample, sequence
 
     # def get_interaction_matrix(self, sequence):
@@ -148,7 +148,9 @@ class MatrixDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            # pin_memory=True,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=5,
         )
 
     def val_dataloader(self):
@@ -156,7 +158,9 @@ class MatrixDataModule(pl.LightningDataModule):
             self.val_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            # pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=5,
+            pin_memory=True,
         )
 
     def test_dataloader(self):
@@ -164,5 +168,5 @@ class MatrixDataModule(pl.LightningDataModule):
             self.test_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
-            # pin_memory=True,
+            pin_memory=True,
         )
