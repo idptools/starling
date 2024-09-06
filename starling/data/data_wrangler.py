@@ -101,65 +101,68 @@ def MaxPad(original_array: np.array, shape: tuple) -> np.array:
 #     return data_dict
 
 
-# def load_hdf5_compressed(file_path, frame, keys_to_load=None):
+def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
+    """
+    Loads data from an HDF5 file, optionally for a specific frame.
+
+    Parameters:
+        - file_path (str): Path to the HDF5 file.
+        - frame (int, optional): Specific frame to load from datasets. If None, loads the entire dataset.
+        - keys_to_load (list, optional): List of keys to load. If None, loads all keys.
+
+    Returns:
+        - dict: Dictionary containing loaded data with keys as dataset names and values as dataset contents.
+    """
+    data = {}
+    with h5py.File(file_path, "r") as f:
+        keys = keys_to_load if keys_to_load else list(f.keys())
+        for key in keys:
+            if frame is not None and key == "dm":
+                data[key] = f[key][frame]
+            else:
+                data[key] = f[key][...]
+    return data
+
+
+# def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
 #     """
 #     Loads data from an HDF5 file.
 
 #     Parameters:
 #         - file_path (str): Path to the HDF5 file.
+#         - frame (int): Frame index to load if applicable. If None, loads all frames.
 #         - keys_to_load (list): List of keys to load. If None, loads all keys.
+
 #     Returns:
 #         - dict: Dictionary containing loaded data.
 #     """
+#     data = {}
 #     with h5py.File(file_path, "r") as f:
 #         keys = keys_to_load if keys_to_load else f.keys()
 #         for key in keys:
-#             if key == "dm":
-#                 dm = f[key][frame]
-#             else:
-#                 sequence = f[key][...][()].decode()
-#     return dm, sequence
-
-
-def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
-    """
-    Loads data from an HDF5 file.
-
-    Parameters:
-        - file_path (str): Path to the HDF5 file.
-        - frame (int): Frame index to load if applicable. If None, loads all frames.
-        - keys_to_load (list): List of keys to load. If None, loads all keys.
-
-    Returns:
-        - dict: Dictionary containing loaded data.
-    """
-    data = {}
-    with h5py.File(file_path, "r") as f:
-        keys = keys_to_load if keys_to_load else f.keys()
-        for key in keys:
-            if isinstance(f[key], h5py.Dataset):
-                if len(f[key].shape) > 0:
-                    if key == "dm" and frame is not None:
-                        # Index the "dm" key with the specified frame
-                        data[key] = f[key][frame]
-                    elif key == "seq":
-                        # Index the "seq" key at index 0
-                        data[key] = f[key][0]
-                    else:
-                        # Load the entire dataset for other keys
-                        data[key] = f[key][...]
-                else:
-                    # Handle datasets with no dimensions (scalar or 1D)
-                    data[key] = f[key][...]
+#             if isinstance(f[key], h5py.Dataset):
+#                 if len(f[key].shape) > 0:
+#                     if key == "dm" and frame is not None:
+#                         # Index the "dm" key with the specified frame
+#                         data[key] = f[key][frame]
+#                     elif key == "seq":
+#                         # Index the "seq" key at index 0
+#                         data[key] = f[key][0]
+#                     else:
+#                         # Load the entire dataset for other keys
+#                         data[key] = f[key][...]
+#                 else:
+#                     # Handle datasets with no dimensions (scalar or 1D)
+#                     data[key] = f[key][...]
                 
-                # Handle string conversion if needed
-                if f[key].dtype.kind == "S":  # Check if the data type is a string
-                    data[key] = data[key].astype(str)  # Convert bytes to string
-            else:
-                # Load non-dataset objects if they exist
-                data[key] = f[key][...]
+#                 # Handle string conversion if needed
+#                 if f[key].dtype.kind == "S":  # Check if the data type is a string
+#                     data[key] = data[key].astype(str)  # Convert bytes to string
+#             else:
+#                 # Load non-dataset objects if they exist
+#                 data[key] = f[key][...]
     
-    return data
+#     return data
 
 
 # def read_tsv_file(tsv_file: str) -> List:
