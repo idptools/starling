@@ -30,7 +30,9 @@ class MatrixDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         data_path, frame = self.data.iloc[index]
 
-        distance_map = load_hdf5_compressed(data_path, keys_to_load=["dm"], frame=int(frame))
+        distance_map = load_hdf5_compressed(
+            data_path, keys_to_load=["dm"], frame=int(frame)
+        )["dm"]
 
         # Add a channel dimension using unsqueeze
         distance_map = torch.from_numpy(distance_map).unsqueeze(0)
