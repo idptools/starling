@@ -85,6 +85,8 @@ class MatrixDataModule(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=5,
         )
 
     def val_dataloader(self):
@@ -93,6 +95,8 @@ class MatrixDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=5,
         )
 
     def test_dataloader(self):
@@ -100,5 +104,7 @@ class MatrixDataModule(pl.LightningDataModule):
             self.test_dataset,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            persistent_workers=True,
+            prefetch_factor=5,
             pin_memory=True,
         )

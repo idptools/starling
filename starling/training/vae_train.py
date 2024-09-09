@@ -49,7 +49,7 @@ def train_vae():
         monitor="epoch_val_loss",  # Monitor validation loss for saving the best model
         dirpath=f"{config['training']['output_path']}/",  # Directory to save checkpoints
         filename="model-kernel-{epoch:02d}-{epoch_val_loss:.2f}",  # File name format for saved models
-        save_top_k=1,
+        save_top_k=-1,
         mode="min",  # Minimize the monitored metric (val_loss)
     )
 
@@ -77,7 +77,6 @@ def train_vae():
     # Set up data loaders
     dataset = MatrixDataModule(
         **config["data"],
-        target_shape=config["model"]["dimension"],
         num_workers=args.num_workers,
     )
 
