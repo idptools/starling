@@ -120,7 +120,7 @@ class PNDMSampler(nn.Module):
             # imgs = [noise]
             seq_next = [-1] + list(steps[:-1])
 
-            for i, j in zip(reversed(steps), reversed(seq_next)):
+            for i, j in tqdm(zip(reversed(steps), reversed(seq_next))):
                 t = (torch.ones(num_conformations) * i).to(device)
                 t_next = (torch.ones(num_conformations) * j).to(device)
 
