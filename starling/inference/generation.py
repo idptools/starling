@@ -14,6 +14,7 @@ from starling.models.cvae import cVAE
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
 from starling.samplers.ddim_sampler import DDIMSampler
+from starling.samplers.pndm_sampler import PNDMSampler
 from starling.structure.coordinates import (
     compare_distance_matrices,
     create_ca_topology_from_coords,
@@ -100,6 +101,7 @@ def main():
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--method", type=str, default="mds")
     parser.add_argument("--ddim", action="store_true")
+    parser.add_argument("--pndm", action="store_true")
     parser.add_argument("--no_struct", action="store_true")
 
     args = parser.parse_args()
@@ -141,12 +143,14 @@ def main():
 
     if args.ddim:
         sampler = DDIMSampler(ddpm_model=diffusion, n_steps=args.steps)
+    if args.pndm:
+        sampler = PNDMSampler(ddpm_model=diffusion, n_steps=args.steps)
 
     with open(args.input, "r") as f:
         for line in f:
             filename, sequence = line.strip().split("\t")
 
-            if args.ddim:
+            if args.ddim or args.pndm:
                 distance_maps = sampler.sample(args.conformations, labels=sequence)
             else:
                 distance_maps, *_ = diffusion.sample(
