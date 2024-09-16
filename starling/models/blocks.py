@@ -1,10 +1,9 @@
 import torch
 import torch.nn.functional as F
-from einops import rearrange, reduce, repeat
+from einops import rearrange
 from IPython import embed
 from torch import nn
 
-from starling.models.attention import CrossAttention
 from starling.models.normalization import RMSNorm
 
 
@@ -63,19 +62,48 @@ class MinPool2d(nn.Module):
         return -1 * unpool
 
 
+#! Fix how the activation function is passed in (should be torch.nn.Module not str)
 class ResizeConv2d(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        norm,
-        activation,
-        padding,
-        size=None,
-        scale_factor=None,
-        mode="nearest",
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        norm: torch.nn.Module,
+        activation: str,
+        padding: int,
+        size: int = None,
+        scale_factor: int = None,
+        mode: str = "nearest",
     ):
+        """
+        Instead of ConvTranspose2d, this module uses F.interpolate to upsample the input
+        tensor and then applies a convolutional layer. This is useful when the output of
+        the upsampled tensor is not the same as the input tensor. This module can be used
+        in the decoder part of the network. This type of upsampling is known to fix checkerboard
+        artifacts that are common in ConvTranspose2d (https://distill.pub/2016/deconv-checkerboard/).
+
+        Parameters
+        ----------
+        in_channels : int
+            The number of input channels
+        out_channels : int
+            The number of output channels
+        kernel_size : int
+            The size of the kernel for the convolutional layer
+        norm : torch.nn.Module
+            The normalization layer to use. Pass in the class of the normalization layer (example nn.InstanceNorm2d)
+        activation : str
+            The activation function to use. Pass in the class of the activation function (example nn.ReLU)
+        padding : int
+            The padding to use for the convolutional layer
+        size : int, optional
+            The spatial size of the output tensor. If None, the scale_factor is used, by default None
+        scale_factor : int, optional
+            The scale factor to use for the upsampling, by default None
+        mode : str, optional
+            The mode to use for the upsampling, by default "nearest"
+        """
         super().__init__()
         self.size = size
         self.scale_factor = scale_factor
@@ -214,7 +242,7 @@ class ResBlockEncBasic(nn.Module):
         if timestep is not None:
             timestep = self.time_mlp(timestep)
             timestep = rearrange(timestep, "b c -> b c 1 1")
-            # See the following link for explaination of scale, shift for timestep/class conditioning
+            # See the following link for explanation of scale, shift for timestep/class conditioning
             # https://distill.pub/2018/feature-wise-transformations/
             scale, shift = timestep.chunk(2, dim=1)
             data = data * (scale + 1) + shift

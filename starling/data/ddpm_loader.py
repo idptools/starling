@@ -10,14 +10,15 @@ from starling.data.data_wrangler import (
     read_tsv_file,
 )
 
+
 def sequence_to_indices(sequence, aa_to_int):
     """
     Converts a single sequence to integer indices based on a mapping.
-    
+
     Parameters:
     - sequence (str): A single sequence string.
     - aa_to_int (dict): A dictionary mapping amino acids to integers.
-    
+
     Returns:
     - torch.Tensor: Tensor of integer indices.
     """
@@ -32,10 +33,8 @@ class MatrixDataset(torch.utils.data.Dataset):
         tsv_file : str
             A path to a tsv file containing the paths to distance maps as a first column
             and index of a distance map to load as a second column
-        target_shape : int
-            The desired shape of the distance maps. The distance map will be
-            padded
         labels : str
+            Which labels to use for the dataset, learnable or fixed (finches interaction matrix).
         """
         self.data = read_tsv_file(tsv_file)
         self.labels = labels
@@ -68,21 +67,16 @@ class MatrixDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         data_path, frame = self.data.iloc[index]
-        data = load_hdf5_compressed(data_path, keys_to_load=["dm", "seq"], frame=int(frame))
+        data = load_hdf5_compressed(
+            data_path, keys_to_load=["dm", "seq"], frame=int(frame)
+        )
         distance_map = data["dm"].astype(np.float32)
         distance_map = torch.from_numpy(distance_map).unsqueeze(0)
 
         sequence = data["seq"]
         sequence = torch.from_numpy(sequence)
-    
-        return distance_map, sequence
 
-    # def get_interaction_matrix(self, sequence):
-    #    mf = Mpipi_frontend()
-    #    interaction_matrix = mf.intermolecular_idr_matrix(
-    #        sequence, sequence, window_size=1
-    #    )
-    #    return interaction_matrix[0][0]
+        return distance_map, sequence
 
 
 # Step 2: Create a data module

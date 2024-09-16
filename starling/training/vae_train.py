@@ -12,7 +12,7 @@ from pytorch_lightning.loggers import WandbLogger
 
 from starling.data.argument_parser import get_vae_params
 from starling.data.VAE_loader import MatrixDataModule
-from starling.models.cvae import cVAE
+from starling.models.vae import VAE
 
 
 def train_vae():
@@ -82,7 +82,7 @@ def train_vae():
 
     dataset.setup(stage="fit")
 
-    vae = cVAE(**config["model"])
+    vae = VAE(**config["model"])
 
     # Make the directories to save the model and logs
     os.makedirs(config["training"]["output_path"], exist_ok=True)

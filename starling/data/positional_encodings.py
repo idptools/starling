@@ -2,8 +2,6 @@ import torch
 from IPython import embed
 from torch import nn
 
-#! Make sure the non-learnable position encodings are properly implemented
-
 
 # Non-learnable position encodings
 class PositionalEncoding1D(nn.Module):

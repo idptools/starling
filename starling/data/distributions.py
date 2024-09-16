@@ -3,19 +3,45 @@ import torch
 
 
 class DiagonalGaussianDistribution(object):
-    def __init__(self, parameters, deterministic=False):
+    def __init__(self, parameters: torch.Tensor, deterministic: bool = False):
+        """
+        Diagonal Gaussian distribution that can be used for sampling from given certain parameters.
+
+        Parameters
+        ----------
+        parameters : torch.Tensor
+            Parameters of the distribution.
+        deterministic : bool, optional
+            Whether to sample deterministically, by default False
+        """
+
         self.parameters = parameters
+        # Split the parameters into mean and logvar
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
+
+        # Clamp the logvar to prevent numerical instability
         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
         self.deterministic = deterministic
+
+        # Compute the standard deviation and variance
         self.std = torch.exp(0.5 * self.logvar)
         self.var = torch.exp(self.logvar)
+
+        # If deterministic sampling, set the variance to zero
         if self.deterministic:
             self.var = self.std = torch.zeros_like(self.mean).to(
                 device=self.parameters.device
             )
 
-    def sample(self):
+    def sample(self) -> torch.Tensor:
+        """
+        Sample from the parameterized distribution.
+
+        Returns
+        -------
+        torch.Tensor
+            The sampled value.
+        """
         x = self.mean + self.std * torch.randn(self.mean.shape).to(
             device=self.parameters.device
         )
@@ -49,5 +75,13 @@ class DiagonalGaussianDistribution(object):
             dim=dims,
         )
 
-    def mode(self):
+    def mode(self) -> torch.Tensor:
+        """
+        Return the mode of the distribution.
+
+        Returns
+        -------
+        torch.Tensor
+            Mode of the distribution.
+        """
         return self.mean

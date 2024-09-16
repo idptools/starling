@@ -28,7 +28,7 @@ class PrintLayer(nn.Module):
 torch.set_float32_matmul_precision("high")
 
 
-class cVAE(pl.LightningModule):
+class VAE(pl.LightningModule):
     def __init__(
         self,
         model_type: str,

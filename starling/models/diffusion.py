@@ -1,3 +1,4 @@
+import math
 from typing import List, Union
 
 import pytorch_lightning as pl
@@ -6,19 +7,15 @@ import torch.nn as nn
 from IPython import embed
 from torch.cuda.amp import autocast
 from torch.functional import F
-import math
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
-    _LRScheduler,
     CosineAnnealingWarmRestarts,
-    OneCycleLR,
     LambdaLR,
-    SequentialLR,
+    OneCycleLR,
 )
-
 from tqdm import tqdm
 
-from starling.data.data_wrangler import MaxPad, one_hot_encode, symmetrize
+from starling.data.data_wrangler import one_hot_encode
 from starling.data.schedulers import (
     cosine_beta_schedule,
     linear_beta_schedule,
@@ -29,6 +26,7 @@ from starling.data.schedulers import (
 # and https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/classifier_free_guidance.py#L720
 
 torch.set_float32_matmul_precision("high")
+
 
 # Helper function
 def extract(
@@ -186,7 +184,6 @@ class DiffusionModel(pl.LightningModule):
         self.sampling_timesteps = timesteps
 
         self.monitor = "epoch_val_loss"
-
 
         if self.labels == "learned-embeddings":
             self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
@@ -625,7 +622,6 @@ class DiffusionModel(pl.LightningModule):
             weight_decay=0.01,
             amsgrad=False,
         )
-        
 
         if self.config_scheduler == "CosineAnnealingWarmRestarts":
             lr_scheduler = {
@@ -670,11 +666,13 @@ class DiffusionModel(pl.LightningModule):
                     return current_step / max(1, warmup_steps)
                 else:
                     # Cosine annealing phase
-                    eta_min=1e-8
+                    eta_min = 1e-8
                     remaining_steps = current_step - warmup_steps
                     current_epoch = remaining_steps // steps_per_epoch
-                    cosine_factor = 0.5 * (1 + math.cos(math.pi * current_epoch / num_epochs))
-                    return (eta_min + (1 - eta_min) * cosine_factor)
+                    cosine_factor = 0.5 * (
+                        1 + math.cos(math.pi * current_epoch / num_epochs)
+                    )
+                    return eta_min + (1 - eta_min) * cosine_factor
 
             lr_scheduler = {
                 "scheduler": LambdaLR(optimizer, lr_lambda=lr_lambda),
@@ -686,6 +684,7 @@ class DiffusionModel(pl.LightningModule):
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
         return [optimizer], [lr_scheduler]
+
 
 def reduce_sampling_steps(T, K):
     # Calculate the spacing between each sample

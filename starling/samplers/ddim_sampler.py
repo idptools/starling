@@ -44,7 +44,7 @@ class DDIMSampler(nn.Module):
         """
         super(DDIMSampler, self).__init__()
         self.ddpm_model = ddpm_model
-        self.n_steps = 1000  # self.ddpm_model.n_steps
+        self.n_steps = self.ddpm_model.num_timesteps
         self.ddim_discretize = ddim_discretize
         self.ddim_eta = ddim_eta
 

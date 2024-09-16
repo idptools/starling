@@ -10,9 +10,9 @@ from IPython import embed
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
 
-from starling.models.cvae import cVAE
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
+from starling.models.vae import VAE
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
     compare_distance_matrices,
@@ -115,11 +115,9 @@ def main():
     )
 
     if args.encoder is not None:
-        encoder_model = cVAE.load_from_checkpoint(
-            args.encoder, map_location=args.device
-        )
+        encoder_model = VAE.load_from_checkpoint(args.encoder, map_location=args.device)
     else:
-        encoder_model = cVAE.load_from_checkpoint(
+        encoder_model = VAE.load_from_checkpoint(
             "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
             map_location=args.device,
         )

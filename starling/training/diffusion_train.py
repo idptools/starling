@@ -1,6 +1,7 @@
 import argparse
-import os
 import glob
+import os
+
 import pytorch_lightning as pl
 import wandb
 import yaml
@@ -12,14 +13,15 @@ from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 from starling.data.argument_parser import get_params
 from starling.data.ddpm_loader import MatrixDataModule
-from starling.models.cvae import cVAE
-
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
+from starling.models.vae import VAE
+
 
 @rank_zero_only
 def wandb_init(project: str = "starling-vista-diffusion"):
     wandb.init(project=project)
+
 
 def train_model():
     parser = argparse.ArgumentParser()
@@ -79,9 +81,9 @@ def train_model():
         ckpt_path = None
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
-    
+
     target_shape = config["diffusion"].pop("target_shape")
-    
+
     # Set up data loaders
     dataset = MatrixDataModule(
         **config["data"],
@@ -95,11 +97,11 @@ def train_model():
     UNet_model = UNetConditional(**config["unet"])
 
     map_location = "cuda:0"
-    encoder_model = cVAE.load_from_checkpoint(
-         encoder_model_path, map_location=map_location
+    encoder_model = VAE.load_from_checkpoint(
+        encoder_model_path, map_location=map_location
     )
-    
-    #TODO
+
+    # TODO
     # SHOULD CHANGE TO DYNAMICALLY AUTOMATICALLY GET LATEN_DIM IN DIFFUSION.PY
     diffusion_model = DiffusionModel(
         model=UNet_model,
@@ -131,7 +133,7 @@ def train_model():
         precision="bf16-mixed",
         logger=wandb_logger,
     )
-    
+
     # Start training
     trainer.fit(diffusion_model, dataset)
 
