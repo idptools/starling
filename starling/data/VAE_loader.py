@@ -1,14 +1,8 @@
-import numpy as np
 import pytorch_lightning as pl
 import torch
 from IPython import embed
 
-from starling.data.data_wrangler import (
-    MaxPad,
-    load_hdf5_compressed,
-    read_tsv_file,
-    symmetrize,
-)
+from starling.data.data_wrangler import load_hdf5_compressed, read_tsv_file
 
 
 class MatrixDataset(torch.utils.data.Dataset):
@@ -18,9 +12,6 @@ class MatrixDataset(torch.utils.data.Dataset):
         tsv_file : str
             A path to a tsv file containing the paths to distance maps as a first column
             and index of a distance map to load as a second column
-        target_shape : int
-            The desired shape of the distance maps. The distance map will be
-            padded
         """
         self.data = read_tsv_file(tsv_file)
 
