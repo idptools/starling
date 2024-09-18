@@ -1,5 +1,6 @@
 import os
 
+import hdf5plugin
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -73,7 +74,7 @@ class MatrixDataset(torch.utils.data.Dataset):
         distance_map = data["dm"].astype(np.float32)
         distance_map = torch.from_numpy(distance_map).unsqueeze(0)
 
-        sequence = data["seq"]
+        sequence = data["seq"].astype(np.int64)
         sequence = torch.from_numpy(sequence)
 
         return distance_map, sequence
