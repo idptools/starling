@@ -1,3 +1,4 @@
+import copy
 import math
 from typing import List, Union
 
@@ -21,6 +22,7 @@ from starling.data.schedulers import (
     linear_beta_schedule,
     sigmoid_beta_schedule,
 )
+from starling.models.ema import EMA
 
 # Adapted from https://github.com/Camaltra/this-is-not-real-aerial-imagery/blob/main/src/ai/diffusion_process.py
 # and https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/classifier_free_guidance.py#L720
@@ -74,6 +76,9 @@ class DiffusionModel(pl.LightningModule):
         labels: str = "learned-embeddings",
         set_lr: float = 1e-4,
         config_scheduler: str = "LinearWarmupCosineAnnealingLR",
+        ema_decay: float = 0.999,
+        step_start_ema: int = 2000,
+        ema_update_every: int = 10,
     ) -> None:
         """
         Denoising-diffusion model framework for latent space diffusion models. This
@@ -188,9 +193,24 @@ class DiffusionModel(pl.LightningModule):
         if self.labels == "learned-embeddings":
             self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
 
+        self.ema_decay = ema_decay
+        self.ema_update_every = ema_update_every
+        self.step_start_ema = 2000
+        self.ema = EMA(ema_decay)
+        self.ema_model = copy.deepcopy(self.model)
+        self.ema_model.requires_grad_(False)
+
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        if self.global_step % self.ema_update_every == 0:
+            self.ema.step_ema(self.ema_model, self.model, self.step_start_ema)
+
     @torch.inference_mode()
     def p_sample(
-        self, x: torch.Tensor, timestamp: int, labels: torch.Tensor
+        self,
+        x: torch.Tensor,
+        timestamp: int,
+        labels: torch.Tensor,
+        model: nn.Module = None,
     ) -> torch.Tensor:
         """
         One denoising step of the diffusion model. This function is
@@ -210,6 +230,7 @@ class DiffusionModel(pl.LightningModule):
         torch.Tensor
             Returns the denoised tensor (t-1)
         """
+        model = model or self.model
         b, *_, device = *x.shape, x.device
 
         # Batch the timestep to the same size as the input tensor x
@@ -218,7 +239,7 @@ class DiffusionModel(pl.LightningModule):
         )
 
         # Run the model to predict the noise at the current timestamp
-        preds = self.model(x, batched_timestamps, labels)
+        preds = model(x, batched_timestamps, labels)
 
         # Extract the necessary values from the buffers to calculate the predicted mean
         betas_t = extract(self.betas, batched_timestamps, x.shape)
@@ -251,6 +272,7 @@ class DiffusionModel(pl.LightningModule):
         labels: torch.Tensor,
         steps: int = None,
         return_all_timesteps: bool = False,
+        model: nn.Module = None,
     ) -> torch.Tensor:
         """
         Sampling loop for the diffusion model. It loops over the timesteps
@@ -274,7 +296,7 @@ class DiffusionModel(pl.LightningModule):
             Returns the fully denoised tensor, in this case a latent space
             that can be decoded using a pre-trained VAE
         """
-
+        model = model or self.model
         batch, device = shape[0], self.device
 
         all_latents = []
@@ -299,7 +321,7 @@ class DiffusionModel(pl.LightningModule):
             if return_all_timesteps:
                 all_latents.append(latents)
 
-            latents = self.p_sample(latents, t, labels)
+            latents = self.p_sample(latents, t, labels, model=model)
 
         # Scale the latents back to the original scale
         latents = (1 / self.latent_space_scaling_factor) * latents
@@ -319,6 +341,7 @@ class DiffusionModel(pl.LightningModule):
         labels: str,
         steps: int = None,
         return_all_timesteps: bool = False,
+        use_ema: bool = True,
     ) -> torch.Tensor:
         """
         Sample from the trained diffusion model
@@ -360,9 +383,15 @@ class DiffusionModel(pl.LightningModule):
         # Repeat the labels to match the number of samples that will be drawn from the model (batch size)
         labels = labels.repeat(batch_size, 1, 1)
 
+        model = self.ema_model if use_ema else self.model
+
         # Sample the denoising-diffusion model to generate data (in our case, latent space)
         latents = self.p_sample_loop(
-            shape, labels, steps=steps, return_all_timesteps=return_all_timesteps
+            shape,
+            labels,
+            steps=steps,
+            return_all_timesteps=return_all_timesteps,
+            model=model,
         )
 
         # Decode the latent space with the VAE to generate the distance map
