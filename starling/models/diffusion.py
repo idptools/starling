@@ -68,7 +68,6 @@ class DiffusionModel(pl.LightningModule):
         model: nn.Module,
         encoder_model: nn.Module,
         image_size: int,
-        # in_channels: int,
         *,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
@@ -79,6 +78,7 @@ class DiffusionModel(pl.LightningModule):
         ema_decay: float = 0.999,
         step_start_ema: int = 2000,
         ema_update_every: int = 10,
+        use_ema: bool = False,
     ) -> None:
         """
         Denoising-diffusion model framework for latent space diffusion models. This
@@ -193,12 +193,13 @@ class DiffusionModel(pl.LightningModule):
         if self.labels == "learned-embeddings":
             self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
 
-        self.ema_decay = ema_decay
-        self.ema_update_every = ema_update_every
-        self.step_start_ema = 2000
-        self.ema = EMA(ema_decay)
-        self.ema_model = copy.deepcopy(self.model)
-        self.ema_model.requires_grad_(False)
+        if use_ema:
+            self.ema_decay = ema_decay
+            self.ema_update_every = ema_update_every
+            self.step_start_ema = step_start_ema
+            self.ema = EMA(ema_decay)
+            self.ema_model = copy.deepcopy(self.model)
+            self.ema_model.requires_grad_(False)
 
     def on_train_batch_end(self, outputs, batch, batch_idx):
         if self.global_step % self.ema_update_every == 0:

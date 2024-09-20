@@ -36,6 +36,7 @@ def train_model():
     parser.add_argument(
         "--num_nodes",
         type=int,
+        default=1,
         help="Number of nodes to use for training",
     )
 
@@ -49,6 +50,11 @@ def train_model():
     args = parser.parse_args()
 
     config = get_params(config_file=args.config_file)
+
+    # Make the directories to save the model and logs
+    os.makedirs(config["training"]["output_path"], exist_ok=True)
+    with open(f"{config['training']['output_path']}/config.yaml", "w") as f:
+        yaml.dump(config, f)
 
     wandb_init(config["training"]["project_name"])
 
@@ -82,12 +88,9 @@ def train_model():
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
 
-    target_shape = config["diffusion"].pop("target_shape")
-
     # Set up data loaders
     dataset = MatrixDataModule(
         **config["data"],
-        target_shape=target_shape,
         labels=config["diffusion"]["labels"],
         num_workers=args.num_workers,
     )
@@ -109,12 +112,6 @@ def train_model():
         **config["diffusion"],
     )
 
-    # Make the directories to save the model and logs
-    os.makedirs(config["training"]["output_path"], exist_ok=True)
-
-    with open(f"{config['training']['output_path']}/config.yaml", "w") as f:
-        yaml.dump(config, f)
-
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
         f.write(str(UNet_model))
 
@@ -126,7 +123,7 @@ def train_model():
     trainer = pl.Trainer(
         accelerator="auto",
         devices=config["device"]["cuda"],
-        num_nodes=config["device"]["num_nodes"],
+        num_nodes=args.num_nodes,
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor, save_last_checkpoint],
         gradient_clip_val=1.0,

@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class EMA:
-    def __init__(self, beta):
+    def __init__(self, beta: float = 0.999):
         self.beta = beta
         self.step = 0
 
@@ -11,13 +11,14 @@ class EMA:
         for current_params, ma_params in zip(
             current_model.parameters(), ma_model.parameters()
         ):
-            old_weight, up_weight = ma_params.data, current_params.data
-            ma_params.data = self.update_average(old_weight, up_weight)
+            ema_model_weights, current_weighs = ma_params.data, current_params.data
+            ma_params.data = self.update_average(ema_model_weights, current_weighs)
 
-    def update_average(self, old, new):
-        if old is None:
-            return new
-        return old * self.beta + (1 - self.beta) * new
+    def update_average(self, ema_model_params, current_model_params):
+        if ema_model_params is None:
+            return current_model_params
+
+        return ema_model_params * self.beta + (1 - self.beta) * current_model_params
 
     def step_ema(self, ema_model, model, step_start_ema=2000):
         if self.step < step_start_ema:
