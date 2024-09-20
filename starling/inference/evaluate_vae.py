@@ -100,7 +100,7 @@ def main():
     parser.add_argument("--vae", type=str, required=True)
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--batch", type=int, default=100)
-    parser.add_argument("--outfile", type=str, default="summary_stats.csv")
+    parser.add_argument("--outfile", type=str, default="summary_stats_vae.csv")
     args = parser.parse_args()
 
     # Load the VAE model
