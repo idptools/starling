@@ -171,7 +171,7 @@ def main():
     results_df.loc["Overall Mean"] = mean_values
     results_df.loc["Overall Max"] = max_values
 
-    results_df.to_csv(args.outfile, index=False)
+    results_df.to_csv(args.outfile, index=True)
 
     summary = results_df.tail(2).reset_index(drop=False)
 
