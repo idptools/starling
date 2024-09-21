@@ -66,7 +66,6 @@ class DiffusionModel(pl.LightningModule):
         model: nn.Module,
         encoder_model: nn.Module,
         image_size: int,
-        # in_channels: int,
         *,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
