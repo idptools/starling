@@ -100,7 +100,10 @@ class DDIMSampler(nn.Module):
             .squeeze()
             .to(self.ddpm_model.device)
         )
+
         labels = self.ddpm_model.sequence2labels(labels)
+
+        labels = labels.unsqueeze(0)
 
         return labels
 
@@ -137,7 +140,7 @@ class DDIMSampler(nn.Module):
         x = torch.randn(
             [
                 num_conformations,
-                self.ddpm_model.channels,
+                self.ddpm_model.in_channels,
                 self.ddpm_model.image_size,
                 self.ddpm_model.image_size,
             ],
@@ -213,6 +216,7 @@ class DDIMSampler(nn.Module):
         """
 
         # Predict the amount of noise in the latent based on the timestep and labels
+
         predicted_noise = self.ddpm_model.model(x, t, c)
 
         # Calculate the previous latent and the predicted latent
