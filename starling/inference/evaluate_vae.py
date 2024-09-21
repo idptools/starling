@@ -1,3 +1,4 @@
+import multiprocessing as mp
 from argparse import ArgumentParser
 from collections import OrderedDict
 
@@ -7,14 +8,48 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-
-# from finches.forcefields.mPiPi import harmonic, mPiPi_model
-# from finches.frontend.mpipi_frontend import Mpipi_frontend
+from finches.forcefields.mpipi import Mpipi_model, harmonic
+from finches.frontend.mpipi_frontend import Mpipi_frontend
 from IPython import embed
 from tabulate import tabulate
 from tqdm import tqdm
 
 from starling.models.vae import VAE
+
+
+def int_to_seq(int_seq):
+    """
+    Convert an integer sequence to a string sequence.
+    """
+    aa_to_int = {
+        "0": 0,
+        "A": 1,
+        "C": 2,
+        "D": 3,
+        "E": 4,
+        "F": 5,
+        "G": 6,
+        "H": 7,
+        "I": 8,
+        "K": 9,
+        "L": 10,
+        "M": 11,
+        "N": 12,
+        "P": 13,
+        "Q": 14,
+        "R": 15,
+        "S": 16,
+        "T": 17,
+        "V": 18,
+        "W": 19,
+        "Y": 20,
+    }
+    reversed_dict = {v: k for k, v in aa_to_int.items()}
+    seq = ""
+    for i in int_seq:
+        if i != 0:
+            seq += str(reversed_dict[i])
+    return seq
 
 
 def symmetrize(dm):
@@ -24,6 +59,25 @@ def symmetrize(dm):
     dm = np.array([np.triu(m, k=1) + np.triu(m, k=1).T for m in dm])
 
     return dm
+
+
+def finches_potential_energy(data):
+    mpipi = Mpipi_model()
+    interaction_energy = 0
+    dm = data[0]
+    seq = data[1]
+    bonds = np.diagonal(dm, offset=1)
+    harmonic_energy = harmonic(bonds).sum()
+    sequence = list(seq)
+    for num, residue in enumerate(sequence):
+        for next_residue in range(2, len(sequence[num:])):
+            residue_interaction = mpipi.compute_full_Mpipi(
+                residue,
+                sequence[num + next_residue],
+                dm[num, num + next_residue],
+            )
+            interaction_energy += residue_interaction
+    return interaction_energy, harmonic_energy, interaction_energy + harmonic_energy
 
 
 def load_hdf5_compressed(file_path, keys_to_load=None):
@@ -103,6 +157,11 @@ def main():
     parser.add_argument("--outfile", type=str, default="summary_stats_vae.csv")
     args = parser.parse_args()
 
+    # Get the number of cores
+    num_cores = mp.cpu_count()
+    # Create a pool of workers
+    pool = mp.Pool(num_cores)
+
     # Load the VAE model
     vae = VAE.load_from_checkpoint(args.vae, map_location=args.device)
 
@@ -115,6 +174,9 @@ def main():
     for path in tqdm(paths):
         sequence_stats = OrderedDict()
         data = load_hdf5_compressed(paths[path], keys_to_load=["dm", "seq"])
+
+        # Get the data
+        data["seq"] = int_to_seq(data["seq"])
         ground_truth_dm = prepare_data(data["dm"])
 
         num_batches = ground_truth_dm.shape[0] // args.batch
@@ -151,6 +213,25 @@ def main():
             torch.from_numpy(recon_dm), torch.from_numpy(data["dm"]), mask
         )
 
+        # Calculate potential energy
+        recon_energy_data = zip(
+            recon_dm, [data["seq"] for _ in range(recon_dm.shape[0])]
+        )
+        ground_truth_energy_data = zip(
+            data["dm"], [data["seq"] for _ in range(recon_dm.shape[0])]
+        )
+
+        # Run the calculations in parallel
+        recon_results = pool.map(finches_potential_energy, recon_energy_data)
+        ground_truth_results = pool.map(
+            finches_potential_energy, ground_truth_energy_data
+        )
+
+        recon_interaction_energy, recon_harmonic_energy, _ = zip(*recon_results)
+        ground_truth_interaction_energy, ground_truth_harmonic_energy, _ = zip(
+            *ground_truth_results
+        )
+
         sequence_stats["mse"] = round(all_mse.mean(), 4)
         sequence_stats["std_mse"] = round(all_mse.std(), 4)
         sequence_stats["max_mse"] = round(all_mse.max(), 4)
@@ -158,6 +239,15 @@ def main():
         sequence_stats["bond_mse"] = round(bonds_mse.mean(), 4)
         sequence_stats["std_bond_mse"] = round(bonds_mse.std(), 4)
         sequence_stats["max_bond_mse"] = round(bonds_mse.max(), 4)
+
+        # Positive difference means the model is generating distance maps that are less stable
+        difference = list(recon_interaction_energy) - np.array(
+            ground_truth_interaction_energy
+        )
+
+        sequence_stats["Potential_energy_abe"] = round(difference.mean(), 4)
+        sequence_stats["Max_potential_energy_abe"] = round(difference.max(), 4)
+
         sequence_stats["Sequence Length"] = mask[0].diagonal(offset=1).sum() + 1
 
         results[path] = sequence_stats
