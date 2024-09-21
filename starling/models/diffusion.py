@@ -357,8 +357,7 @@ class DiffusionModel(pl.LightningModule):
                 )
                 labels = self.sequence2labels(labels)
 
-        # Repeat the labels to match the number of samples that will be drawn from the model (batch size)
-        labels = labels.repeat(batch_size, 1, 1)
+        labels = labels.unsqueeze(0)
 
         # Sample the denoising-diffusion model to generate data (in our case, latent space)
         latents = self.p_sample_loop(
