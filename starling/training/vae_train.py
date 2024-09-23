@@ -44,6 +44,13 @@ def train_vae():
     # Reads in default and user defined configuration arguments
     config = get_vae_params(config_file=args.config_file)
 
+
+    # Make the directories to save the model and logs
+    os.makedirs(config["training"]["output_path"], exist_ok=True)
+
+    with open(f"{config['training']['output_path']}/config.yaml", "w") as f:
+        yaml.dump(config, f)
+
     # Set up model checkpoint saving
     checkpoint_callback = ModelCheckpoint(
         monitor="epoch_val_loss",  # Monitor validation loss for saving the best model
@@ -83,12 +90,6 @@ def train_vae():
     dataset.setup(stage="fit")
 
     vae = VAE(**config["model"])
-
-    # Make the directories to save the model and logs
-    os.makedirs(config["training"]["output_path"], exist_ok=True)
-
-    with open(f"{config['training']['output_path']}/config.yaml", "w") as f:
-        yaml.dump(config, f)
 
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
         f.write(str(vae))
