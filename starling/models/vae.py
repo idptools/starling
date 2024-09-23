@@ -9,7 +9,9 @@ from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
     OneCycleLR,
+    LambdaLR,
 )
+import math
 
 from starling.data.distributions import DiagonalGaussianDistribution
 from starling.models import vae_components
@@ -42,6 +44,7 @@ class VAE(pl.LightningModule):
         set_lr: float,
         norm: str = "instance",
         base: int = 64,
+        optimizer: str = "SGD",
     ) -> None:
         """
         The variational autoencoder (VAE) model that is used to learn the latent space of
@@ -87,6 +90,8 @@ class VAE(pl.LightningModule):
             The normalization layer to use in the ResNet architecture, by default "instance"
         base : int, optional
             The base (starting) number of channels to use in the ResNet architecture, by default 64
+        optimizer: str, optional
+            The optimizer to use in the ResNet architecture, by default "SGD"
         """
         super().__init__()
 
@@ -103,6 +108,8 @@ class VAE(pl.LightningModule):
                 "decoder": vae_components.Resnet34_Decoder,
             },
         }
+
+        self.optimizer = optimizer
 
         # Input dimensions
         self.dimension = dimension
@@ -576,13 +583,24 @@ class VAE(pl.LightningModule):
                     "weight_decay": 0.0,  # Exclude weight decay for log_std
                 }
             )
+        
+        if self.optimizer == "SGD":
+            optimizer = torch.optim.SGD(
+                optimizer_params,
+                lr=self.set_lr,
+                momentum=0.875,
+                nesterov=True,
+            )
+        elif self.optimizer == "AdamW":
+            optimizer = torch.optim.AdamW(
+                optimizer_params,
+                lr=self.set_lr,
+                betas=(0.9, 0.999),
+                eps=1e-08,
+            )
+        else: 
+            raise NotImplementedError("Optimizer has not been implemented")
 
-        optimizer = torch.optim.SGD(
-            optimizer_params,
-            lr=self.set_lr,
-            momentum=0.875,
-            nesterov=True,
-        )
 
         if self.config_scheduler == "CosineAnnealingWarmRestarts":
             lr_scheduler = {
@@ -600,6 +618,31 @@ class VAE(pl.LightningModule):
                     max_lr=0.01,
                     total_steps=self.trainer.estimated_stepping_batches,
                 ),
+                "monitor": self.monitor,
+                "interval": "step",
+            }
+        elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
+            warmup_steps = 5000
+            num_epochs = self.trainer.max_epochs
+            total_steps = self.trainer.estimated_stepping_batches
+            steps_per_epoch = total_steps // num_epochs
+
+            def lr_lambda(current_step):
+                if current_step < warmup_steps:
+                    # Linear warmup phase
+                    return current_step / max(1, warmup_steps)
+                else:
+                    # Cosine annealing phase
+                    eta_min = 1e-5
+                    remaining_steps = current_step - warmup_steps
+                    current_epoch = remaining_steps // steps_per_epoch
+                    cosine_factor = 0.5 * (
+                        1 + math.cos(math.pi * current_epoch / num_epochs)
+                    )
+                    return eta_min + (1 - eta_min) * cosine_factor
+
+            lr_scheduler = {
+                "scheduler": LambdaLR(optimizer, lr_lambda=lr_lambda),
                 "monitor": self.monitor,
                 "interval": "step",
             }
