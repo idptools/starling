@@ -1,11 +1,14 @@
+import os
 from argparse import ArgumentParser
 from collections import OrderedDict
 from pathlib import Path
 
 import h5py
 import hdf5plugin
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import sparrow
 import torch
 import torch.nn.functional as F
@@ -147,6 +150,138 @@ def prepare_data(data):
     return dm
 
 
+def hellinger_distance(p, q):
+    return np.sqrt(np.sum((np.sqrt(p) - np.sqrt(q)) ** 2)) / np.sqrt(2)
+
+
+def hellingers_summary(
+    gt_dms, recon_dms, save_path="hellinger_heatmap.png", plot_histogram=False
+):
+    """
+    Compute Hellinger distances between corresponding residue pairs in ground truth and reconstructed distance maps.
+
+    Parameters
+    ----------
+    gt_dms : np.ndarray
+        Ground truth distance maps of shape (num_gt_conformers, padded_length, padded_length)
+        where padded_length is the padded number of residues in the sequence
+    recon_dms : np.ndarray
+        Reconstructed distance maps of shape (num_recon_conformers, actual_length, actual_length)
+        where actual_length is the actual number of residues in the sequence
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape (actual_length, actual_length) containing Hellinger distances for each residue pair
+    """
+    actual_length = recon_dms.shape[1]
+
+    # Trim ground truth maps to match the size of reconstructed maps
+    gt_dms_trimmed = gt_dms[:, :actual_length, :actual_length]
+
+    assert (
+        gt_dms_trimmed.shape[1:] == recon_dms.shape[1:]
+    ), "Inconsistent shapes between trimmed ground truth and reconstructed distance maps"
+
+    colors = ["#4c72b0", "#dd8452"]
+
+    n_bins = 25
+    # Initialize the result array
+    hellinger_distances = np.zeros((actual_length, actual_length))
+    gt_histograms = []
+    recon_histograms = []
+    for i in range(actual_length):
+        for j in range(actual_length):
+            global_min = min(gt_dms_trimmed[:, i, j].min(), recon_dms[:, i, j].min())
+
+            global_max = max(gt_dms_trimmed[:, i, j].max(), recon_dms[:, i, j].max())
+
+            bin_width = (global_max - global_min) / n_bins
+
+            gt_values = gt_dms_trimmed[:, i, j]
+            recon_values = recon_dms[:, i, j]
+
+            hist_gt, _ = np.histogram(
+                gt_values,
+                bins=n_bins,
+                range=(global_min, global_max),
+                density=True,
+            )
+
+            hist_gt *= bin_width
+            gt_histograms.append(hist_gt)
+            hist_recon, _ = np.histogram(
+                recon_values,
+                bins=n_bins,
+                range=(global_min, global_max),
+                density=True,
+            )
+            hist_recon *= bin_width
+            recon_histograms.append(hist_recon)
+            os.makedirs("plots", exist_ok=True)
+            if plot_histogram:
+                # Plot histogram for ground truth values (gt_values)
+                plt.hist(
+                    gt_values,
+                    bins=n_bins,
+                    range=(global_min, global_max),
+                    density=True,
+                    alpha=0.6,  # Slightly increase the opacity
+                    color=colors[0],  # Use custom color
+                    edgecolor="black",  # Add edge color for visibility
+                    label="Ground Truth",  # Label for legend
+                    linewidth=1.2,  # Line width for the edges
+                )
+
+                # Plot histogram for reconstructed values (recon_values)
+                plt.hist(
+                    recon_values,
+                    bins=n_bins,
+                    range=(global_min, global_max),
+                    density=True,
+                    alpha=0.6,
+                    color=colors[1],
+                    edgecolor="black",
+                    label="Reconstruction",
+                    linewidth=1.2,
+                )
+
+                # Add labels, title, and legend
+                plt.xlabel("Value", fontsize=14)
+                plt.ylabel("Density", fontsize=14)
+                plt.title(f"Residue Histogram for {i}-{j}", fontsize=16)
+                plt.legend(fontsize=12)
+
+                # Adjust ticks and add gridlines for better readability
+                plt.xticks(fontsize=12)
+                plt.yticks(fontsize=12)
+                plt.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.7)
+
+                # Save the plot with high DPI and tight layout
+                plt.savefig(
+                    f"plots/residue_{i}_{j}_histogram.png", dpi=300, bbox_inches="tight"
+                )
+
+                # Close the figure to free memory
+                plt.close()
+
+            # Compute Hellinger distance
+            hellinger_distances[i, j] = hellinger_distance(hist_gt, hist_recon)
+
+    # Create and save the heatmap
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(hellinger_distances, cmap="viridis", annot=False, cbar=True)
+    plt.title(
+        "Hellinger Distances between Ground Truth and Reconstructed Distance Maps"
+    )
+    plt.xlabel("Residue Index")
+    plt.ylabel("Residue Index")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    return hellinger_distances
+
+
 def main():
     parser = ArgumentParser()
     parser.add_argument("--input", type=str, required=True)
@@ -229,6 +364,12 @@ def main():
             )
         starling_dm = np.concatenate(starling_dm, axis=0)
 
+        hellinger_distances = hellingers_summary(
+            mpipi_dm, starling_dm, save_path=f"plots/hellinger_heatmap_{path}.png"
+        )
+
+        upper_triangle_bond_offset = np.triu(hellinger_distances, k=1).mean()
+
         albatross_prediction = sparrow.Protein(sequence).predictor.end_to_end_distance()
         starling_prediction = starling_dm.mean(axis=0)[0, -1]
 
@@ -250,6 +391,7 @@ def main():
         sequence_stats["Mpipi"] = mpipi_prediction
         sequence_stats["Average_dm_abe"] = dm_difference_mean
         sequence_stats["Max_dm_abe"] = dm_difference_max
+        sequence_stats["Mean_hellinger_distance"] = round(upper_triangle_bond_offset, 4)
 
         results[path] = sequence_stats
 
