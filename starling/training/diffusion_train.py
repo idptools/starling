@@ -5,10 +5,8 @@ import os
 import pytorch_lightning as pl
 import wandb
 import yaml
-from IPython import embed
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 from starling.data.argument_parser import get_params

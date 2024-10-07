@@ -1,12 +1,10 @@
 import argparse
-import datetime
 import glob
 import os
 
 import pytorch_lightning as pl
 import wandb
 import yaml
-from IPython import embed
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
@@ -43,7 +41,6 @@ def train_vae():
 
     # Reads in default and user defined configuration arguments
     config = get_vae_params(config_file=args.config_file)
-
 
     # Make the directories to save the model and logs
     os.makedirs(config["training"]["output_path"], exist_ok=True)
