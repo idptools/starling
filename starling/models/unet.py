@@ -2,7 +2,6 @@ import math
 from typing import List
 
 import torch
-from IPython import embed
 from torch import nn
 
 from starling.models.blocks import ResBlockEncBasic, ResizeConv2d

@@ -1,7 +1,5 @@
 from typing import List
 
-import torch.nn.functional as F
-from IPython import embed
 from torch import nn
 
 from starling.models.blocks import (

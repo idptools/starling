@@ -1,17 +1,16 @@
+import math
 from typing import List, Tuple
 
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from IPython import embed
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
-    OneCycleLR,
     LambdaLR,
+    OneCycleLR,
 )
-import math
 
 from starling.data.distributions import DiagonalGaussianDistribution
 from starling.models import vae_components
@@ -583,7 +582,7 @@ class VAE(pl.LightningModule):
                     "weight_decay": 0.0,  # Exclude weight decay for log_std
                 }
             )
-        
+
         if self.optimizer == "SGD":
             optimizer = torch.optim.SGD(
                 optimizer_params,
@@ -598,9 +597,8 @@ class VAE(pl.LightningModule):
                 betas=(0.9, 0.999),
                 eps=1e-08,
             )
-        else: 
+        else:
             raise NotImplementedError("Optimizer has not been implemented")
-
 
         if self.config_scheduler == "CosineAnnealingWarmRestarts":
             lr_scheduler = {

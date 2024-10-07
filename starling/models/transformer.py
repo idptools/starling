@@ -1,6 +1,5 @@
 import torch
 from einops import rearrange
-from IPython import embed
 from torch import nn
 
 from starling.data.positional_encodings import (

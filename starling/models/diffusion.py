@@ -4,7 +4,6 @@ from typing import List, Union
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from IPython import embed
 from torch.cuda.amp import autocast
 from torch.functional import F
 from torch.optim.lr_scheduler import (
