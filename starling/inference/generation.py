@@ -1,12 +1,8 @@
-import time
 from argparse import ArgumentParser
 
 import matplotlib.pyplot as plt
-import mdtraj as md
 import numpy as np
 import torch
-import torch.optim as optim
-from IPython import embed
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
 
@@ -18,8 +14,6 @@ from starling.structure.coordinates import (
     compare_distance_matrices,
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
-    loss_function,
-    save_trajectory,
 )
 
 

@@ -9,8 +9,6 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from finches.forcefields.mpipi import Mpipi_model, harmonic
-from finches.frontend.mpipi_frontend import Mpipi_frontend
-from IPython import embed
 from tabulate import tabulate
 from tqdm import tqdm
 

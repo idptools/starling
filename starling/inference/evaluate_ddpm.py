@@ -9,10 +9,6 @@ import pandas as pd
 import sparrow
 import torch
 import torch.nn.functional as F
-
-# from finches.forcefields.mPiPi import harmonic, mPiPi_model
-# from finches.frontend.mpipi_frontend import Mpipi_frontend
-from IPython import embed
 from scipy.stats import pearsonr
 from tabulate import tabulate
 from tqdm import tqdm
