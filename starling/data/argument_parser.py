@@ -1,7 +1,4 @@
-import os
-
 import yaml
-from IPython import embed
 
 
 def get_params(config_file: str = None) -> dict:
