@@ -1,6 +1,5 @@
 import pytorch_lightning as pl
 import torch
-from IPython import embed
 
 from starling.data.data_wrangler import load_hdf5_compressed, read_tsv_file
 

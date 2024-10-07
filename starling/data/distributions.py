@@ -20,6 +20,8 @@ class DiagonalGaussianDistribution(object):
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
 
         # Clamp the logvar to prevent numerical instability
+        #! Maybe switch to (-10, 10) - might help with numerical stability
+        #! or self.std = torch.sqrt(torch.nn.functional.softplus(self.logvar))
         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
         self.deterministic = deterministic
 
