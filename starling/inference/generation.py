@@ -95,17 +95,18 @@ def main():
     parser.add_argument("--method", type=str, default="mds")
     parser.add_argument("--ddim", action="store_true")
     parser.add_argument("--no_struct", action="store_true")
+    parser.add_argument("--batch", type=int, default=100)
 
     args = parser.parse_args()
 
     UNet_model = UNetConditional(
-        in_channels=2,
-        out_channels=2,
+        in_channels=1,
+        out_channels=1,
         base=64,
         norm="group",
         blocks=[2, 2, 2],
         middle_blocks=2,
-        labels_dim=384,
+        labels_dim=512,
     )
 
     if args.encoder is not None:
@@ -131,19 +132,44 @@ def main():
             map_location=args.device,
         )
 
+    # Construct a sampler
     if args.ddim:
         sampler = DDIMSampler(ddpm_model=diffusion, n_steps=args.steps)
+    else:
+        sampler = diffusion
 
     with open(args.input, "r") as f:
         for line in f:
             filename, sequence = line.strip().split("\t")
+                
+            num_batches = args.conformations // args.batch
+            remaining_samples = args.conformations % args.batch
 
-            if args.ddim:
-                distance_maps = sampler.sample(args.conformations, labels=sequence)
-            else:
-                distance_maps, *_ = diffusion.sample(
+            starling_dm = []
+
+            for batch in range(num_batches):
+                distance_maps, *_ = sampler.sample(
                     args.conformations, labels=sequence
                 )
+                starling_dm.append(
+                    [
+                        symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                        for dm in distance_map
+                    ]
+                )
+
+            if remaining_samples > 0:
+                distance_maps, *_ = sampler.sample(
+                    remaining_samples, labels=sequence
+                )
+                starling_dm.append(
+                    [
+                        symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                        for dm in distance_map
+                    ]
+                )
+            distance_maps = np.concatenate(starling_dm, axis=0)
+            
             # Initialize an empty list to store symmetrized distance maps
             sym_distance_maps = []
 
