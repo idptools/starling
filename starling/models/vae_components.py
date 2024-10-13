@@ -27,6 +27,7 @@ class ResNet_Encoder(nn.Module):
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
+            "group": nn.GroupNorm,
         }
 
         # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
@@ -39,7 +40,9 @@ class ResNet_Encoder(nn.Module):
                 stride=2,
                 padding=3,
             ),
-            normalization[norm](base),
+            normalization[norm](out_channels)
+            if norm != "group"
+            else normalization[norm](32, out_channels),
         )
 
         self.in_channels = base
