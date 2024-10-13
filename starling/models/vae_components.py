@@ -40,9 +40,9 @@ class ResNet_Encoder(nn.Module):
                 stride=2,
                 padding=3,
             ),
-            normalization[norm](out_channels)
+            normalization[norm](base)
             if norm != "group"
-            else normalization[norm](32, out_channels),
+            else normalization[norm](32, base),
         )
 
         self.in_channels = base
