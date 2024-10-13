@@ -1,3 +1,4 @@
+import hdf5plugin
 import pytorch_lightning as pl
 import torch
 
