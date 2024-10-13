@@ -279,6 +279,7 @@ class ResBlockDecBasic(nn.Module):
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
+            "group": nn.GroupNorm,
         }
 
         # First convolution which doesn't change the shape of the tensor
@@ -291,7 +292,9 @@ class ResBlockDecBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            normalization[norm](in_channels),
+            normalization[norm](out_channels)
+            if norm != "group"
+            else normalization[norm](32, out_channels),
             nn.ReLU(inplace=True),
         )
 
@@ -326,7 +329,9 @@ class ResBlockDecBasic(nn.Module):
                     padding=padding,
                     kernel_size=kernel_size,
                 ),
-                normalization[norm](out_channels),
+                normalization[norm](out_channels)
+                if norm != "group"
+                else normalization[norm](32, out_channels),
             )
             self.shortcut = nn.Sequential()
 
