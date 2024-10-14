@@ -292,9 +292,9 @@ class ResBlockDecBasic(nn.Module):
                 padding=padding,
                 kernel_size=kernel_size,
             ),
-            normalization[norm](out_channels)
+            normalization[norm](in_channels)
             if norm != "group"
-            else normalization[norm](32, out_channels),
+            else normalization[norm](32, in_channels),
             nn.ReLU(inplace=True),
         )
 
