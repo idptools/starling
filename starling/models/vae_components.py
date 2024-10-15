@@ -6,7 +6,6 @@ from starling.models.blocks import (
     LayerNorm,
     ResBlockDecBasic,
     ResBlockEncBasic,
-    ResizeConv2d,
 )
 
 
@@ -36,13 +35,13 @@ class ResNet_Encoder(nn.Module):
             nn.Conv2d(
                 in_channels=in_channels,
                 out_channels=base,
-                kernel_size=7,
-                stride=2,
-                padding=3,
-            ),
-            normalization[norm](base)
-            if norm != "group"
-            else normalization[norm](32, base),
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            )
+            # normalization[norm](base)
+            # if norm != "group"
+            # else normalization[norm](32, base),
         )
 
         self.in_channels = base
@@ -51,7 +50,7 @@ class ResNet_Encoder(nn.Module):
 
         # Setting up the layers for the encoder
         self.layer1 = self._make_layer(
-            self.block_type, layer_in_channels[0], num_blocks[0], stride=1
+            self.block_type, layer_in_channels[0], num_blocks[0], stride=2
         )
         self.layer2 = self._make_layer(
             self.block_type, layer_in_channels[1], num_blocks[1], stride=2
@@ -61,6 +60,14 @@ class ResNet_Encoder(nn.Module):
         )
         self.layer4 = self._make_layer(
             self.block_type, layer_in_channels[3], num_blocks[3], stride=2
+        )
+
+        self.mid_block1 = self._make_layer(
+            self.block_type, layer_in_channels[3], 2, stride=1
+        )
+
+        self.mid_block2 = self._make_layer(
+            self.block_type, layer_in_channels[3], 2, stride=1
         )
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
@@ -102,6 +109,12 @@ class ResNet_Encoder(nn.Module):
         for block in self.layer4:
             data = block(data)
 
+        for mid_block in self.mid_block1:
+            data = mid_block(data)
+
+        for mid_block in self.mid_block2:
+            data = mid_block(data)
+
         return data
 
 
@@ -129,6 +142,14 @@ class ResNet_Decoder(nn.Module):
             layer_in_channels = [base * (4**i) for i in range(len(num_blocks))]
             self.in_channels = layer_in_channels[-1]
 
+        self.mid_block1 = self._make_layer(
+            self.block_type, self.in_channels, 2, stride=1
+        )
+
+        self.mid_block2 = self._make_layer(
+            self.block_type, self.in_channels, 2, stride=1
+        )
+
         # Setting up the layers for the decoder
 
         self.layer1 = self._make_layer(
@@ -144,20 +165,18 @@ class ResNet_Decoder(nn.Module):
             self.block_type,
             layer_in_channels[-4],
             num_blocks[3],
-            stride=1,
+            stride=2,
             last_layer=True,
         )
 
         in_channels_post_resnets = layer_in_channels[-4]
 
-        self.output_layer = ResizeConv2d(
+        # ! Should I put ReLU here?
+        self.output_layer = nn.Conv2d(
             in_channels=in_channels_post_resnets,
             out_channels=out_channels,
-            kernel_size=7,
-            padding=3,
-            norm=None,
-            activation="relu",
-            scale_factor=2,
+            kernel_size=3,
+            padding=1,
         )
 
     def _make_layer(self, block, out_channels, blocks, stride=1, last_layer=False):
@@ -172,7 +191,7 @@ class ResNet_Decoder(nn.Module):
                     norm=self.norm,
                 )
             )
-        if stride > 1 and block == ResBlockDecBasic:
+        if stride > 1 and block == ResBlockDecBasic and not last_layer:
             out_channels = int(out_channels / 2)
         layers.append(
             block(
@@ -187,6 +206,12 @@ class ResNet_Decoder(nn.Module):
         return layers
 
     def forward(self, data):
+        for mid_block in self.mid_block1:
+            data = mid_block(data)
+
+        for mid_block in self.mid_block2:
+            data = mid_block(data)
+
         for block in self.layer1:
             data = block(data)
 
