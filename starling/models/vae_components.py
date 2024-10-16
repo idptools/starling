@@ -82,8 +82,8 @@ class ResNet_Encoder(nn.Module):
         )
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
-        layers = nn.ModuleList()
-        # layers = []
+        # layers = nn.ModuleList()
+        layers = []
         layers.append(
             block(
                 self.in_channels,
@@ -102,37 +102,39 @@ class ResNet_Encoder(nn.Module):
                     norm=self.norm,
                 )
             )
-        return layers
-        # return nn.Sequential(*layers)
+        # return layers
+        return nn.Sequential(*layers)
 
     def forward(self, data):
+        # First convolutional layer (384x384)
         data = self.first_conv(data)
 
-        # Compress the spatial dimensions
-        for block in self.layer1:
-            data = block(data)
+        # Compress the spatial dimensions (384 -> 192)
+        data = self.layer1(data)
 
-        for block in self.layer2:
-            data = block(data)
+        # Compress the spatial dimensions (192 -> 96)
+        data = self.layer2(data)
 
-        for block in self.layer3:
-            data = block(data)
+        # Compress the spatial dimensions (96 -> 48)
+        data = self.layer3(data)
 
+        # Attention layer (48x48)
         data = data + self.layer3_attention(data)
 
-        for block in self.layer4:
-            data = block(data)
+        # Compress the spatial dimensions (48 -> 24)
+        data = self.layer4(data)
 
+        # Attention layer (24x24)
         data = data + self.layer4_attention(data)
 
-        # Middle blocks at the most compressed layer + attention
-        for mid_block in self.mid_block1:
-            data = mid_block(data)
+        # First mid block (24x24)
+        data = self.mid_block1(data)
 
+        # Attention layer (24x24)
         data = data + self.mid_attention1(data)
 
-        for mid_block in self.mid_block2:
-            data = mid_block(data)
+        # Second mid block (24x24)
+        data = self.mid_block2(data)
 
         return data
 
@@ -179,6 +181,12 @@ class ResNet_Decoder(nn.Module):
             self.block_type, self.in_channels, 2, stride=1
         )
 
+        # Attention layer
+        self.mid_attention2 = nn.Sequential(
+            PositionalEncoding2D(self.in_channels),
+            SelfAttention(self.in_channels, 8, custom=False),
+        )
+
         # Spatial upsampling layers
 
         self.layer1 = self._make_layer(
@@ -193,12 +201,6 @@ class ResNet_Decoder(nn.Module):
 
         self.layer2 = self._make_layer(
             self.block_type, layer_in_channels[-2], num_blocks[1], stride=2
-        )
-
-        # Attention layer
-        self.layer2_attention = nn.Sequential(
-            PositionalEncoding2D(layer_in_channels[-3]),
-            SelfAttention(layer_in_channels[-3], 8, custom=False),
         )
 
         self.layer3 = self._make_layer(
@@ -223,7 +225,8 @@ class ResNet_Decoder(nn.Module):
         )
 
     def _make_layer(self, block, out_channels, blocks, stride=1, last_layer=False):
-        layers = nn.ModuleList()
+        # layers = nn.ModuleList()
+        layers = []
         self.in_channels = out_channels * block.contraction
         for _ in range(1, blocks):
             layers.append(
@@ -246,37 +249,40 @@ class ResNet_Decoder(nn.Module):
             )
         )
 
-        return layers
+        # return layers
+        return nn.Sequential(*layers)
 
     def forward(self, data):
-        for mid_block in self.mid_block1:
-            data = mid_block(data)
+        # First mid block (24x24)
+        data = self.mid_block1(data)
 
-        # Attention layer
+        # Attention layer (24x24)
         data = data + self.mid_attention1(data)
 
-        for mid_block in self.mid_block2:
-            data = mid_block(data)
+        # Second mid block (24x24)
+        data = self.mid_block2(data)
 
-        for block in self.layer1:
-            data = block(data)
+        # Attention layer (24x24)
+        data = data + self.mid_attention2(data)
 
-        # Attention layer
+        # Spatial upsampling (24 -> 48)
+        data = self.layer1(data)
+
+        # Attention layer (48x48)
         data = data + self.layer1_attention(data)
 
-        for block in self.layer2:
-            data = block(data)
+        # Spatial upsampling (48 -> 96)
+        data = self.layer2(data)
 
-        # Attention layer
-        data = data + self.layer2_attention(data)
+        # Spatial upsampling (96 -> 192)
+        data = self.layer3(data)
 
-        for block in self.layer3:
-            data = block(data)
+        # Spatial upsampling (192 -> 384)
+        data = self.layer4(data)
 
-        for block in self.layer4:
-            data = block(data)
-
+        # Final output layer (384x384)
         data = self.output_layer(data)
+
         return data
 
 
