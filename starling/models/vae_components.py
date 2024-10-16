@@ -2,6 +2,8 @@ from typing import List
 
 from torch import nn
 
+from starling.data.positional_encodings import PositionalEncoding2D
+from starling.models.attention import SelfAttention
 from starling.models.blocks import (
     LayerNorm,
     ResBlockDecBasic,
@@ -22,33 +24,21 @@ class ResNet_Encoder(nn.Module):
 
         self.block_type = block_type
         self.norm = norm
-        normalization = {
-            "batch": nn.BatchNorm2d,
-            "instance": nn.InstanceNorm2d,
-            "layer": LayerNorm,
-            "group": nn.GroupNorm,
-        }
 
-        # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
-        # with kernel=7 and stride=2 AvgPool2d reduces spatial dimensions by / 2
-        self.first_conv = nn.Sequential(
-            nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=base,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            )
-            # normalization[norm](base)
-            # if norm != "group"
-            # else normalization[norm](32, base),
+        # First convolutional layer
+        self.first_conv = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=base,
+            kernel_size=3,
+            stride=1,
+            padding=1,
         )
 
         self.in_channels = base
 
         layer_in_channels = [base * (2**i) for i in range(len(num_blocks))]
 
-        # Setting up the layers for the encoder
+        # Setting up the spatial downsampling layers
         self.layer1 = self._make_layer(
             self.block_type, layer_in_channels[0], num_blocks[0], stride=2
         )
@@ -58,14 +48,35 @@ class ResNet_Encoder(nn.Module):
         self.layer3 = self._make_layer(
             self.block_type, layer_in_channels[2], num_blocks[2], stride=2
         )
+
+        self.layer3_attention = nn.Sequential(
+            PositionalEncoding2D(layer_in_channels[2]),
+            SelfAttention(layer_in_channels[2], 8, custom=False),
+        )
+
         self.layer4 = self._make_layer(
             self.block_type, layer_in_channels[3], num_blocks[3], stride=2
         )
 
+        self.layer4_attention = nn.Sequential(
+            PositionalEncoding2D(layer_in_channels[3]),
+            SelfAttention(layer_in_channels[3], 8, custom=False),
+        )
+
+        # Setting up middle blocks at the most compressed layer
+
+        # Middle convolutional blocks
         self.mid_block1 = self._make_layer(
             self.block_type, layer_in_channels[3], 2, stride=1
         )
 
+        # Attention layer
+        self.mid_attention1 = nn.Sequential(
+            PositionalEncoding2D(layer_in_channels[3]),
+            SelfAttention(layer_in_channels[3], 8, custom=False),
+        )
+
+        # Middle convolutional blocks
         self.mid_block2 = self._make_layer(
             self.block_type, layer_in_channels[3], 2, stride=1
         )
@@ -97,6 +108,7 @@ class ResNet_Encoder(nn.Module):
     def forward(self, data):
         data = self.first_conv(data)
 
+        # Compress the spatial dimensions
         for block in self.layer1:
             data = block(data)
 
@@ -106,11 +118,18 @@ class ResNet_Encoder(nn.Module):
         for block in self.layer3:
             data = block(data)
 
+        data = data + self.layer3_attention(data)
+
         for block in self.layer4:
             data = block(data)
 
+        data = data + self.layer4_attention(data)
+
+        # Middle blocks at the most compressed layer + attention
         for mid_block in self.mid_block1:
             data = mid_block(data)
+
+        data = data + self.mid_attention1(data)
 
         for mid_block in self.mid_block2:
             data = mid_block(data)
@@ -142,22 +161,46 @@ class ResNet_Decoder(nn.Module):
             layer_in_channels = [base * (4**i) for i in range(len(num_blocks))]
             self.in_channels = layer_in_channels[-1]
 
+        # Setting up middle blocks at the most compressed layer
+
+        # Middle convolutional blocks
         self.mid_block1 = self._make_layer(
             self.block_type, self.in_channels, 2, stride=1
         )
 
+        # Attention layer
+        self.mid_attention1 = nn.Sequential(
+            PositionalEncoding2D(self.in_channels),
+            SelfAttention(self.in_channels, 8, custom=False),
+        )
+
+        # Middle convolutional blocks
         self.mid_block2 = self._make_layer(
             self.block_type, self.in_channels, 2, stride=1
         )
 
-        # Setting up the layers for the decoder
+        # Spatial upsampling layers
 
         self.layer1 = self._make_layer(
             self.block_type, layer_in_channels[-1], num_blocks[0], stride=2
         )
+
+        # Attention layer
+        self.layer1_attention = nn.Sequential(
+            PositionalEncoding2D(layer_in_channels[-2]),
+            SelfAttention(layer_in_channels[-2], 8, custom=False),
+        )
+
         self.layer2 = self._make_layer(
             self.block_type, layer_in_channels[-2], num_blocks[1], stride=2
         )
+
+        # Attention layer
+        self.layer2_attention = nn.Sequential(
+            PositionalEncoding2D(layer_in_channels[-3]),
+            SelfAttention(layer_in_channels[-3], 8, custom=False),
+        )
+
         self.layer3 = self._make_layer(
             self.block_type, layer_in_channels[-3], num_blocks[2], stride=2
         )
@@ -171,7 +214,7 @@ class ResNet_Decoder(nn.Module):
 
         in_channels_post_resnets = layer_in_channels[-4]
 
-        # ! Should I put ReLU here?
+        # Final output layer
         self.output_layer = nn.Conv2d(
             in_channels=in_channels_post_resnets,
             out_channels=out_channels,
@@ -209,14 +252,23 @@ class ResNet_Decoder(nn.Module):
         for mid_block in self.mid_block1:
             data = mid_block(data)
 
+        # Attention layer
+        data = data + self.mid_attention1(data)
+
         for mid_block in self.mid_block2:
             data = mid_block(data)
 
         for block in self.layer1:
             data = block(data)
 
+        # Attention layer
+        data = data + self.layer1_attention(data)
+
         for block in self.layer2:
             data = block(data)
+
+        # Attention layer
+        data = data + self.layer2_attention(data)
 
         for block in self.layer3:
             data = block(data)
