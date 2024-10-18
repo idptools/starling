@@ -467,12 +467,20 @@ class VAE(pl.LightningModule):
 
         data_reconstructed, moments = self.forward(data=data)
 
-        loss = self.vae_loss(
-            data_reconstructed=data_reconstructed,
-            data=data,
-            mu=moments.mean,
-            logvar=moments.logvar,
-        )
+        try:
+            loss = self.vae_loss(
+                data_reconstructed=data_reconstructed,
+                data=data,
+                mu=moments.mean,
+                logvar=moments.logvar,
+            )
+        except ValueError:
+            torch.save(moments.mean, "moments_mean.pt")
+            torch.save(moments.logvar, "moments_logvar.pt")
+
+            torch.save(data_reconstructed, "data_reconstructed.pt")
+            torch.save(moments.std, "moments_std.pt")
+            torch.save(moments.sample(), "moments_sample.pt")
 
         self.total_train_step_losses += loss["loss"].item()
         self.recon_step_losses += loss["recon"].item()
