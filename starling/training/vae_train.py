@@ -104,7 +104,7 @@ def train_vae():
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor, save_last_checkpoint],
         gradient_clip_val=1.0,
-        precision="bf16-mixed",
+        precision="32",
         logger=wandb_logger,
     )
 
