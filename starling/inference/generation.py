@@ -1,25 +1,19 @@
-import time
 from argparse import ArgumentParser
 
 import matplotlib.pyplot as plt
-import mdtraj as md
 import numpy as np
 import torch
-import torch.optim as optim
-from IPython import embed
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
 
-from starling.models.cvae import cVAE
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
+from starling.models.cvae import cVAE
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
     compare_distance_matrices,
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
-    loss_function,
-    save_trajectory,
 )
 
 
@@ -80,7 +74,7 @@ def symmetrize_distance_map(dist_map):
     # Set diagonal values to zero
     sym_dist_map.fill_diagonal_(0)
 
-    return sym_dist_map
+    return sym_dist_map.cpu()
 
 
 def compare_distance_matrices(original_distance_matrix, coords):
@@ -94,10 +88,14 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("--conformations", type=int, default=100)
     parser.add_argument("--input", type=str)
+    parser.add_argument("--encoder", type=str, default=None)
+    parser.add_argument("--ddpm", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--method", type=str, default="mds")
     parser.add_argument("--ddim", action="store_true")
+    parser.add_argument("--no_struct", action="store_true")
+    parser.add_argument("--batch", type=int, default=100)
 
     args = parser.parse_args()
 
@@ -111,125 +109,160 @@ def main():
         labels_dim=384,
     )
 
-    encoder_model = cVAE.load_from_checkpoint(
-        "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
-        map_location=args.device,
-    )
+    if args.encoder is not None:
+        encoder_model = cVAE.load_from_checkpoint(args.encoder, map_location=args.device)
+    else:
+        encoder_model = cVAE.load_from_checkpoint(
+            "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
+            map_location=args.device,
+        )
 
-    diffusion = DiffusionModel.load_from_checkpoint(
-        "/home/bnovak/projects/test_diffusion/diffusion_testing_my_UNet_attention/model-kernel-epoch=09-epoch_val_loss=0.05.ckpt",
-        model=UNet_model,
-        encoder_model=encoder_model,
-        map_location=args.device,
-    )
+    if args.ddpm is not None:
+        diffusion = DiffusionModel.load_from_checkpoint(
+            args.ddpm,
+            model=UNet_model,
+            encoder_model=encoder_model,
+            map_location=args.device,
+        )
+    else:
+        diffusion = DiffusionModel.load_from_checkpoint(
+            "/home/bnovak/projects/test_diffusion/diffusion_testing_my_UNet_attention/model-kernel-epoch=09-epoch_val_loss=0.05.ckpt",
+            model=UNet_model,
+            encoder_model=encoder_model,
+            map_location=args.device,
+        )
 
+    # Construct a sampler
     if args.ddim:
         sampler = DDIMSampler(ddpm_model=diffusion, n_steps=args.steps)
+    else:
+        sampler = diffusion
 
     with open(args.input, "r") as f:
         for line in f:
             filename, sequence = line.strip().split("\t")
 
-            if args.ddim:
-                distance_maps = sampler.sample(args.conformations, labels=sequence)
-            else:
-                distance_maps, *_ = diffusion.sample(
-                    args.conformations, labels=sequence
+            num_batches = args.conformations // args.batch
+            remaining_samples = args.conformations % args.batch
+
+            starling_dm = []
+
+            for batch in range(num_batches):
+                distance_maps = sampler.sample(args.batch, labels=sequence)
+                starling_dm.append(
+                    [
+                        symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                        for dm in distance_maps
+                    ]
                 )
+
+            if remaining_samples > 0:
+                distance_maps, *_ = sampler.sample(remaining_samples, labels=sequence)
+                starling_dm.append(
+                    [
+                        symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                        for dm in distance_maps
+                    ]
+                )
+            sym_distance_maps = torch.cat(
+                [torch.stack(batch) for batch in starling_dm], dim=0
+            )
+
             # Initialize an empty list to store symmetrized distance maps
-            sym_distance_maps = []
+            # sym_distance_maps = []
 
-            # Iterate over each distance map
-            for dist_map in distance_maps:
-                sym_dist_map = symmetrize_distance_map(
-                    dist_map[:, : len(sequence), : len(sequence)]
-                )
-                sym_distance_maps.append(sym_dist_map)
-
-            # Convert the list back to a tensor
-            sym_distance_maps = torch.stack(sym_distance_maps)
-            if args.method == "gd":
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_gd(
-                                dist_map,
-                                num_iterations=10000,
-                                learning_rate=0.05,
-                                verbose=True,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
-                    )
-                    / CONVERT_ANGSTROM_TO_NM
-                )
-            elif args.method == "mds":
-                # SCALE CORDINATES TO NM
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure(
-                                dist_map,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
-                    )
-                    / CONVERT_ANGSTROM_TO_NM
-                )
-            else:
-                raise NotImplementedError("Method not implemented")
-
-            computed_distance_matrix_gd = []
-            difference_matrix_gd = []
-
-            for sym, coord in zip(sym_distance_maps, coordinates):
-                computed_dm, difference_dm = compare_distance_matrices(
-                    sym.cpu(), coord.squeeze() * CONVERT_ANGSTROM_TO_NM
-                )
-                computed_distance_matrix_gd.append(computed_dm)
-                difference_matrix_gd.append(difference_dm)
-
-            # computed_distance_matrix_gd, difference_matrix_gd = (
-            #     compare_distance_matrices(
-            #         sym_distance_maps[0].cpu(),
-            #         coordinates[0].squeeze() * CONVERT_ANGSTROM_TO_NM,
+            # # Iterate over each distance map
+            # for dist_map in distance_maps:
+            #     sym_dist_map = symmetrize_distance_map(
+            #         dist_map[:, : len(sequence), : len(sequence)]
             #     )
-            # )
+            #     sym_distance_maps.append(sym_dist_map)
 
-            # original_distance_matrix = sym_distance_maps[0].cpu()
-            # plot_matrices(
-            #     original_distance_matrix,
-            #     computed_distance_matrix_gd,
-            #     difference_matrix_gd.cpu(),
-            #     "distance_matrices.png",
-            # )
+            # # Convert the list back to a tensor
+            # sym_distance_maps = torch.stack(sym_distance_maps)
 
-            # print(
-            #     f"Min: {original_distance_matrix.min()}, Max: {original_distance_matrix.max()}"
-            # )
-            # print(f"NaN values: {torch.isnan(original_distance_matrix).any()}")
-            # print(f"Inf values: {torch.isinf(original_distance_matrix).any()}")
-            # print(
-            #     f"Symmetric: {torch.allclose(original_distance_matrix, original_distance_matrix.T)}"
-            # )
+            if not args.no_struct:
+                if args.method == "gd":
+                    coordinates = (
+                        np.array(
+                            [
+                                distance_matrix_to_3d_structure_gd(
+                                    dist_map,
+                                    num_iterations=10000,
+                                    learning_rate=0.05,
+                                    verbose=True,
+                                )
+                                for dist_map in sym_distance_maps
+                            ]
+                        )
+                        / CONVERT_ANGSTROM_TO_NM
+                    )
+                elif args.method == "mds":
+                    # SCALE CORDINATES TO NM
+                    coordinates = (
+                        np.array(
+                            [
+                                distance_matrix_to_3d_structure(
+                                    dist_map,
+                                )
+                                for dist_map in sym_distance_maps
+                            ]
+                        )
+                        / CONVERT_ANGSTROM_TO_NM
+                    )
+                else:
+                    raise NotImplementedError("Method not implemented")
 
-            print("\nOriginal Distance Matrix")
-            print(sym_distance_maps[0].cpu())
+                computed_distance_matrix_gd = []
+                difference_matrix_gd = []
 
-            print("\nComputed Distance Matrix (Gradient Descent):")
-            print(computed_distance_matrix_gd)
+                for sym, coord in zip(sym_distance_maps, coordinates):
+                    computed_dm, difference_dm = compare_distance_matrices(
+                        sym.cpu(), coord.squeeze() * CONVERT_ANGSTROM_TO_NM
+                    )
+                    computed_distance_matrix_gd.append(computed_dm)
+                    difference_matrix_gd.append(difference_dm)
 
-            print("\nDifference Matrix (Gradient Descent):")
-            print(difference_matrix_gd)
+                # computed_distance_matrix_gd, difference_matrix_gd = (
+                #     compare_distance_matrices(
+                #         sym_distance_maps[0].cpu(),
+                #         coordinates[0].squeeze() * CONVERT_ANGSTROM_TO_NM,
+                #     )
+                # )
 
-            traj = create_ca_topology_from_coords(sequence, coordinates)
-            traj.save(f"{filename}.xtc")
-            traj.save(f"{filename}.pdb")
+                # original_distance_matrix = sym_distance_maps[0].cpu()
+                # plot_matrices(
+                #     original_distance_matrix,
+                #     computed_distance_matrix_gd,
+                #     difference_matrix_gd.cpu(),
+                #     "distance_matrices.png",
+                # )
 
+                # print(
+                #     f"Min: {original_distance_matrix.min()}, Max: {original_distance_matrix.max()}"
+                # )
+                # print(f"NaN values: {torch.isnan(original_distance_matrix).any()}")
+                # print(f"Inf values: {torch.isinf(original_distance_matrix).any()}")
+                # print(
+                #     f"Symmetric: {torch.allclose(original_distance_matrix, original_distance_matrix.T)}"
+                # )
+
+                print("\nOriginal Distance Matrix")
+                print(sym_distance_maps[0].cpu())
+
+                print("\nComputed Distance Matrix (Gradient Descent):")
+                print(computed_distance_matrix_gd)
+
+                print("\nDifference Matrix (Gradient Descent):")
+                print(difference_matrix_gd)
+
+                traj = create_ca_topology_from_coords(sequence, coordinates)
+                traj.save(f"{filename}.xtc")
+                traj.save(f"{filename}.pdb")
+                np.save(f"{filename}_3D_struct_dm.npy", computed_distance_matrix_gd)
             np.save(
                 f"{filename}_original_dm.npy", sym_distance_maps.detach().cpu().numpy()
             )
-            np.save(f"{filename}_3D_struct_dm.npy", computed_distance_matrix_gd)
 
 
 if __name__ == "__main__":
