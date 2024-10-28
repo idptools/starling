@@ -193,15 +193,18 @@ def main():
             )
 
         if remaining_samples > 0:
-            recon_dm.append(
-                reconstruct(
-                    vae,
-                    ground_truth_dm[
-                        (batch + 1) * args.batch : (batch + 1) * args.batch
-                        + remaining_samples
-                    ].to(args.device),
-                )
+            dm = reconstruct(
+                vae,
+                ground_truth_dm[
+                    (batch + 1) * args.batch : (batch + 1) * args.batch
+                    + remaining_samples
+                ].to(args.device),
             )
+
+            if len(np.shape(dm)) == 2:
+                dm = np.expand_dims(dm, axis=0)
+
+            recon_dm.append(dm)
 
         recon_dm = np.concatenate(recon_dm, axis=0)
 
