@@ -5,6 +5,43 @@ import hdf5plugin
 import numpy as np
 import pandas as pd
 
+aa_to_int = {
+    "0": 0,
+    "A": 1,
+    "C": 2,
+    "D": 3,
+    "E": 4,
+    "F": 5,
+    "G": 6,
+    "H": 7,
+    "I": 8,
+    "K": 9,
+    "L": 10,
+    "M": 11,
+    "N": 12,
+    "P": 13,
+    "Q": 14,
+    "R": 15,
+    "S": 16,
+    "T": 17,
+    "V": 18,
+    "W": 19,
+    "Y": 20,
+}
+
+
+def int_to_aa(sequence):
+    int_to_aa = {v: k for k, v in aa_to_int.items()}
+
+    # Decode the sequence of integers to an amino acid string
+    decoded_sequence = []
+    for i in sequence:
+        if i == 0:  # Stop if the integer is 0
+            break
+        decoded_sequence.append(int_to_aa[i])
+
+    return "".join(decoded_sequence)
+
 
 def one_hot_encode(sequences):
     """
