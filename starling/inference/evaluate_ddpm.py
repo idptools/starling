@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
-from starling.models.vae import VAE
+from starling.models.cvae import cVAE
 from starling.samplers.ddim_sampler import DDIMSampler
 
 
@@ -292,7 +292,7 @@ def main():
     args = parser.parse_args()
 
     # Load the VAE model
-    vae = VAE.load_from_checkpoint(args.vae, map_location=args.device)
+    vae = cVAE.load_from_checkpoint(args.vae, map_location=args.device)
 
     # Load the UNet model
     UNet_model = UNetConditional(
