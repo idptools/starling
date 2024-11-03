@@ -8,6 +8,30 @@ STARLING
 
 Construction of intrinsically disordered proteins ensembles through multiscale generative models
 
+### Installation
+
+1. Install FINCHES
+```bash
+conda install numpy pytorch scipy cython matplotlib jupyter  -c pytorch
+conda install mdtraj
+pip install metapredict
+```
+2. Install additional dependencies 
+```bash
+pip install ipython pytorch-lightning scikit-learn einops esm tqdm PyYAML h5py pandas pytest
+```
+3. Install SPARROW
+```bash
+pip install git+https://git@github.com/idptools/sparrow.git
+```
+4. Install STARLING
+```bash
+git clone git@github.com:idptools/starling.git
+cd starling
+pip install -e .
+```
+
+
 ### Copyright
 
 Copyright (c) 2024, Borna Novak
