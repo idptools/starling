@@ -74,7 +74,7 @@ def symmetrize_distance_map(dist_map):
     # Set diagonal values to zero
     sym_dist_map.fill_diagonal_(0)
 
-    return sym_dist_map
+    return sym_dist_map.cpu()
 
 
 def compare_distance_matrices(original_distance_matrix, coords):
@@ -106,7 +106,7 @@ def main():
         norm="group",
         blocks=[2, 2, 2],
         middle_blocks=2,
-        labels_dim=512,
+        labels_dim=384,
     )
 
     if args.encoder is not None:
@@ -141,47 +141,46 @@ def main():
     with open(args.input, "r") as f:
         for line in f:
             filename, sequence = line.strip().split("\t")
-                
+
             num_batches = args.conformations // args.batch
             remaining_samples = args.conformations % args.batch
 
             starling_dm = []
 
             for batch in range(num_batches):
-                distance_maps, *_ = sampler.sample(
-                    args.conformations, labels=sequence
-                )
+                distance_maps = sampler.sample(args.batch, labels=sequence)
                 starling_dm.append(
                     [
                         symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                        for dm in distance_map
+                        for dm in distance_maps
                     ]
                 )
 
             if remaining_samples > 0:
-                distance_maps, *_ = sampler.sample(
-                    remaining_samples, labels=sequence
-                )
+                distance_maps, *_ = sampler.sample(remaining_samples, labels=sequence)
                 starling_dm.append(
                     [
                         symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                        for dm in distance_map
+                        for dm in distance_maps
                     ]
                 )
-            distance_maps = np.concatenate(starling_dm, axis=0)
-            
+            sym_distance_maps = torch.cat(
+                [torch.stack(batch) for batch in starling_dm], dim=0
+            )
+
             # Initialize an empty list to store symmetrized distance maps
-            sym_distance_maps = []
+            # sym_distance_maps = []
 
-            # Iterate over each distance map
-            for dist_map in distance_maps:
-                sym_dist_map = symmetrize_distance_map(
-                    dist_map[:, : len(sequence), : len(sequence)]
-                )
-                sym_distance_maps.append(sym_dist_map)
+            # # Iterate over each distance map
+            # for dist_map in distance_maps:
+            #     sym_dist_map = symmetrize_distance_map(
+            #         dist_map[:, : len(sequence), : len(sequence)]
+            #     )
+            #     sym_distance_maps.append(sym_dist_map)
 
-            # Convert the list back to a tensor
-            sym_distance_maps = torch.stack(sym_distance_maps)
+            # # Convert the list back to a tensor
+            # sym_distance_maps = torch.stack(sym_distance_maps)
+
             if not args.no_struct:
                 if args.method == "gd":
                     coordinates = (
