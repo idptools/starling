@@ -19,11 +19,13 @@ class ResNet_Encoder(nn.Module):
         norm,
         base=64,
         block_type=ResBlockEncBasic,
+        attention=False,
     ) -> None:
         super().__init__()
 
         self.block_type = block_type
         self.norm = norm
+        self.attention = attention
 
         # First convolutional layer
         self.first_conv = nn.Conv2d(
@@ -49,19 +51,21 @@ class ResNet_Encoder(nn.Module):
             self.block_type, layer_in_channels[2], num_blocks[2], stride=2
         )
 
-        self.layer3_attention = nn.Sequential(
-            PositionalEncoding2D(layer_in_channels[2]),
-            SelfAttention(layer_in_channels[2], 8, custom=False),
-        )
+        if self.attention:
+            self.layer3_attention = nn.Sequential(
+                PositionalEncoding2D(layer_in_channels[2]),
+                SelfAttention(layer_in_channels[2], 8, custom=False),
+            )
 
         self.layer4 = self._make_layer(
             self.block_type, layer_in_channels[3], num_blocks[3], stride=2
         )
 
-        self.layer4_attention = nn.Sequential(
-            PositionalEncoding2D(layer_in_channels[3]),
-            SelfAttention(layer_in_channels[3], 8, custom=False),
-        )
+        if self.attention:
+            self.layer4_attention = nn.Sequential(
+                PositionalEncoding2D(layer_in_channels[3]),
+                SelfAttention(layer_in_channels[3], 8, custom=False),
+            )
 
         # Setting up middle blocks at the most compressed layer
 
@@ -70,11 +74,12 @@ class ResNet_Encoder(nn.Module):
             self.block_type, layer_in_channels[3], 2, stride=1
         )
 
-        # Attention layer
-        self.mid_attention1 = nn.Sequential(
-            PositionalEncoding2D(layer_in_channels[3]),
-            SelfAttention(layer_in_channels[3], 8, custom=False),
-        )
+        if self.attention:
+            # Attention layer
+            self.mid_attention1 = nn.Sequential(
+                PositionalEncoding2D(layer_in_channels[3]),
+                SelfAttention(layer_in_channels[3], 8, custom=False),
+            )
 
         # Middle convolutional blocks
         self.mid_block2 = self._make_layer(
@@ -118,20 +123,23 @@ class ResNet_Encoder(nn.Module):
         # Compress the spatial dimensions (96 -> 48)
         data = self.layer3(data)
 
-        # Attention layer (48x48)
-        data = data + self.layer3_attention(data)
+        if self.attention:
+            # Attention layer (48x48)
+            data = data + self.layer3_attention(data)
 
         # Compress the spatial dimensions (48 -> 24)
         data = self.layer4(data)
 
-        # Attention layer (24x24)
-        data = data + self.layer4_attention(data)
+        if self.attention:
+            # Attention layer (24x24)
+            data = data + self.layer4_attention(data)
 
         # First mid block (24x24)
         data = self.mid_block1(data)
 
-        # Attention layer (24x24)
-        data = data + self.mid_attention1(data)
+        if self.attention:
+            # Attention layer (24x24)
+            data = data + self.mid_attention1(data)
 
         # Second mid block (24x24)
         data = self.mid_block2(data)
@@ -148,10 +156,12 @@ class ResNet_Decoder(nn.Module):
         norm: str,
         block_type=ResBlockDecBasic,
         base=64,
+        attention=False,
     ) -> None:
         super().__init__()
 
         self.norm = norm
+        self.attention = attention
 
         # Calculate the input channels from the encoder, assuming
         # symmetric encoder and decoder setup
@@ -169,23 +179,24 @@ class ResNet_Decoder(nn.Module):
         self.mid_block1 = self._make_layer(
             self.block_type, self.in_channels, 2, stride=1
         )
-
-        # Attention layer
-        self.mid_attention1 = nn.Sequential(
-            PositionalEncoding2D(self.in_channels),
-            SelfAttention(self.in_channels, 8, custom=False),
-        )
+        if self.attention:
+            # Attention layer
+            self.mid_attention1 = nn.Sequential(
+                PositionalEncoding2D(self.in_channels),
+                SelfAttention(self.in_channels, 8, custom=False),
+            )
 
         # Middle convolutional blocks
         self.mid_block2 = self._make_layer(
             self.block_type, self.in_channels, 2, stride=1
         )
 
-        # Attention layer
-        self.mid_attention2 = nn.Sequential(
-            PositionalEncoding2D(self.in_channels),
-            SelfAttention(self.in_channels, 8, custom=False),
-        )
+        if self.attention:
+            # Attention layer
+            self.mid_attention2 = nn.Sequential(
+                PositionalEncoding2D(self.in_channels),
+                SelfAttention(self.in_channels, 8, custom=False),
+            )
 
         # Spatial upsampling layers
 
@@ -193,11 +204,12 @@ class ResNet_Decoder(nn.Module):
             self.block_type, layer_in_channels[-1], num_blocks[0], stride=2
         )
 
-        # Attention layer
-        self.layer1_attention = nn.Sequential(
-            PositionalEncoding2D(layer_in_channels[-2]),
-            SelfAttention(layer_in_channels[-2], 8, custom=False),
-        )
+        if self.attention:
+            # Attention layer
+            self.layer1_attention = nn.Sequential(
+                PositionalEncoding2D(layer_in_channels[-2]),
+                SelfAttention(layer_in_channels[-2], 8, custom=False),
+            )
 
         self.layer2 = self._make_layer(
             self.block_type, layer_in_channels[-2], num_blocks[1], stride=2
@@ -256,20 +268,23 @@ class ResNet_Decoder(nn.Module):
         # First mid block (24x24)
         data = self.mid_block1(data)
 
-        # Attention layer (24x24)
-        data = data + self.mid_attention1(data)
+        if self.attention:
+            # Attention layer (24x24)
+            data = data + self.mid_attention1(data)
 
         # Second mid block (24x24)
         data = self.mid_block2(data)
 
-        # Attention layer (24x24)
-        data = data + self.mid_attention2(data)
+        if self.attention:
+            # Attention layer (24x24)
+            data = data + self.mid_attention2(data)
 
         # Spatial upsampling (24 -> 48)
         data = self.layer1(data)
 
-        # Attention layer (48x48)
-        data = data + self.layer1_attention(data)
+        if self.attention:
+            # Attention layer (48x48)
+            data = data + self.layer1_attention(data)
 
         # Spatial upsampling (48 -> 96)
         data = self.layer2(data)
