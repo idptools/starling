@@ -327,9 +327,9 @@ def generate(user_input, conformations=200,
     ---------------
     user_input : str, list, dict
         This can be one of a few different options:
-            str: A .fasta file
-            str: A seq.in file formatted as a .tsv with name\tseq
-            str: A .tsv file formatted as name\tseq. Same as
+            str: A path to a .fasta file as a str.
+            str: A path to a seq.in file formatted as a .tsv with name\tseq
+            str: A path to a .tsv file formatted as name\tseq. Same as
                 seq.in except a different file extension. Borna used a seq.in
                 in his tutorial, so I'm rolling with it.
             str: A sequence as a string
