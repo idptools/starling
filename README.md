@@ -20,7 +20,7 @@ pip install git+https://git@github.com/idptools/finches.git
 ```
 2. Install additional dependencies 
 ```bash
-pip install ipython pytorch-lightning scikit-learn einops esm tqdm PyYAML h5py pandas pytest
+pip install ipython pytorch-lightning scikit-learn einops esm tqdm PyYAML h5py pandas pytest protfasta hdf5plugin
 ```
 3. Install SPARROW
 ```bash

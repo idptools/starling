@@ -4,7 +4,7 @@ from typing import List, Union
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from torch.functional import F
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
@@ -368,7 +368,7 @@ class DiffusionModel(pl.LightningModule):
         return distance_map, latents, labels
 
     # Remove mixed precision from this function, I've experienced numerical instability here
-    @autocast(enabled=False)
+    @autocast(device_type='cuda', enabled=False)
     def q_sample(
         self, x_start: torch.Tensor, t: int, noise: torch.Tensor = None
     ) -> torch.Tensor:
