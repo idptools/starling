@@ -124,9 +124,6 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, kwargs):
         **kwargs,
     )
 
-    # Initialize MDS with 3 components (for 3D)
-    mds = MDS(n_components=3, dissimilarity="precomputed", n_jobs=n_jobs, **kwargs)
-
     # Fit the MDS model to the distance matrix
     coords = mds.fit_transform(distance_matrix.cpu())
 
