@@ -14,43 +14,6 @@ from starling import utilities
 from starling.inference import generation
 
 
-
-def symmetrize_distance_map(dist_map):
-    """
-    Symmetrize a distance map by replacing the lower triangle with the upper triangle values.
-
-    Parameters
-    ----------
-    dist_map : torch.Tensor
-        A 2D tensor representing the distance map.
-
-    Returns
-    -------
-    torch.Tensor
-        A symmetrized distance map.
-
-    """
-    
-    # Ensure the distance map is 2D
-    dist_map = dist_map.squeeze(0) if dist_map.dim() == 3 else dist_map
-
-    # Create a copy of the distance map to modify
-    sym_dist_map = dist_map.clone()
-
-    # Replace the lower triangle with the upper triangle values
-    mask_upper_triangle = torch.triu(torch.ones_like(dist_map), diagonal=1).bool()
-    mask_lower_triangle = ~mask_upper_triangle
-
-    # Set lower triangle values to be the same as the upper triangle
-    sym_dist_map[mask_lower_triangle] = dist_map.T[mask_lower_triangle]
-
-    # Set diagonal values to zero
-    sym_dist_map.fill_diagonal_(0)
-
-    return sym_dist_map.cpu()
-
-
-
 def handle_input(user_input, 
                 invalid_sequence_action='convert',
                 seq_index_start=1):
