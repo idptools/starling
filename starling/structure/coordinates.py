@@ -4,6 +4,7 @@ import torch.optim as optim
 import numpy as np
 from scipy.spatial import distance_matrix
 from sparrow.data.amino_acids import AA_ONE_TO_THREE
+from sklearn.manifold import MDS
 
 def compute_pairwise_distances(coords):
     """Function to compute the pairwise distances in 3D space.
@@ -84,6 +85,31 @@ def create_incremental_coordinates(n_points, distance, device):
         coordinates[i] = new_coordinate
 
     return torch.nn.Parameter(coordinates)
+
+
+def distance_matrix_to_3d_structure_mds(distance_matrix):
+    """
+    Generate 3D coordinates from a distance matrix using 
+    multidimensional scaling (MDS).
+
+    Parameters
+    ----------
+    distance_matrix : torch.Tensor
+        A 2D tensor representing the distance matrix.
+
+    Returns
+    -------
+    torch.Tensor
+        A 3D tensor representing the coordinates of the atoms.
+    """
+
+    # Initialize MDS with 3 components (for 3D)
+    mds = MDS(n_components=3, dissimilarity="precomputed", random_state=42)
+
+    # Fit the MDS model to the distance matrix
+    coords = mds.fit_transform(distance_matrix.cpu())
+
+    return coords
 
 
 def distance_matrix_to_3d_structure_gd(original_distance_matrix,

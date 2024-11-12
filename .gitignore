@@ -6,4 +6,7 @@ lightning_logs/
 wandb/
 
 
+# added to avoid local version clashes on buil
+starling/_version.py
+
 for_presentation/
