@@ -48,6 +48,7 @@ def main():
         return_structures=args.return_structures,
         batch_size=args.batch_size,
         output_directory=args.output_directory,
+        return_data=False,
         verbose=args.verbose,
         show_progress_bar=args.progress_bar,
     )

@@ -11,16 +11,8 @@ from scipy.spatial import distance_matrix
 from starling import configs
 from starling import utilities
 
-from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNetConditional
-from starling.models.vae import VAE
-from starling.samplers.ddim_sampler import DDIMSampler
-from starling.structure.coordinates import (
-    compare_distance_matrices,
-    create_ca_topology_from_coords,
-    distance_matrix_to_3d_structure_gd,
-    distance_matrix_to_3d_structure_mds,
-)
+from starling.inference import generation
+
 
 
 def symmetrize_distance_map(dist_map):
@@ -279,6 +271,7 @@ def generate(user_input,
              return_structures=False,
              batch_size=configs.DEFAULT_BATCH_SIZE, 
              output_directory=None,
+             return_data=True,
              verbose=False,
              show_progress_bar=True):
     '''
@@ -344,6 +337,11 @@ def generate(user_input,
         and the structures are save with the file names
         <sequence_name>_STARLING.xtc and <sequence_name>_STARLING.pdb.
 
+    return_data : bool
+        If True, will return the distance maps and structures (if generated)
+        as a dictionary. If False, will return None (so you need to set the
+        output_dictionary, or the analysis will be lost!). Default is True
+
     verbose : bool
         Whether to print verbose output. Default is False.
 
@@ -363,8 +361,6 @@ def generate(user_input,
         If output_directory is not none, the output will save to 
         the specified path.
     '''
-    # set CONVERT_ANGSTROM_TO_NM
-    CONVERT_ANGSTROM_TO_NM = 10
 
     # fix home ref for encoder and ddpm
     encoder = utilities.fix_ref_to_home(encoder)
@@ -427,143 +423,19 @@ def generate(user_input,
     # check device, get back torch.device
     device = check_device(device)
 
-    # set unet model 
-    UNet_model = UNetConditional(
-        in_channels=1,
-        out_channels=1,
-        base=64,
-        norm="group",
-        blocks=[2, 2, 2],
-        middle_blocks=2,
-        labels_dim=384,
-    )
-
-    # load encoder model
-    encoder_model = VAE.load_from_checkpoint(
-        encoder,
-        map_location=device)
-
-    # load diffusion model
-    diffusion = DiffusionModel.load_from_checkpoint(
-        ddpm,
-        model=UNet_model,
-        encoder_model=encoder_model,
-        map_location=device)
-
-    # Construct a sampler
-    if ddim:
-        sampler = DDIMSampler(ddpm_model=diffusion, n_steps=steps)
-    else:
-        sampler = diffusion
-
-    # get num_batchs and remaining samples
-    num_batches = conformations // batch_size
-    remaining_samples = conformations % batch_size
-
-    # dictionary to hold distance maps and structures if applicable. 
-    output_dict = {}
-
-    # see if a progress bar is wanted. If it is, set it up. 
-    if show_progress_bar:
-        pbar = tqdm(total=len(sequence_dict))
-
-    # iterate over sequence_dict
-    for num, seq_name in enumerate(sequence_dict):
-        # list to hold distance maps
-        starling_dm=[]
-    
-        # get sequence
-        sequence=sequence_dict[seq_name]
-    
-        # iterate over batches
-        for batch in range(num_batches):
-            distance_maps=sampler.sample(batch_size, labels=sequence)
-            starling_dm.append(
-                [
-                    symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                    for dm in distance_maps
-                ]
-            )
-
-        # iterate over remaining samples
-        if remaining_samples > 0:
-            distance_maps, *_ = sampler.sample(remaining_samples, labels=sequence)
-            starling_dm.append(
-                [
-                    symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                    for dm in distance_maps
-                ]
-            )
-        
-        # concatenate symmetrized distance maps.
-        sym_distance_maps = torch.cat(
-                [torch.stack(batch) for batch in starling_dm], dim=0
-                )
-
-        # if return_structures is True, generate 3D structure
-        if return_structures:
-            if method=='gd':
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_gd(
-                                dist_map,
-                                num_iterations=10000,
-                                learning_rate=0.05,
-                                verbose=True,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
-                    )
-                    / CONVERT_ANGSTROM_TO_NM
-                ) 
-            elif method=='mds':
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_mds(
-                                dist_map,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
-                    )
-                    / CONVERT_ANGSTROM_TO_NM
-                )
-            else:
-                raise NotImplementedError("Method not implemented! We shouldn't have gotten this far.")
-
-            # make traj
-            traj = create_ca_topology_from_coords(sequence, coordinates)
-
-        # if we are saving things, save the things so we don't destroy memory usage
-        if output_directory is not None:
-            if verbose and num==0:
-                print(f"Saving results to: {os.path.abspath(output_directory)}")
-            if return_structures:
-                # if we have structures, save the structures. 
-                traj.save(os.path.join(output_directory, f"{seq_name}_STARLING.xtc"))
-
-                # note save only first frame as a topology file
-                traj[0].save(os.path.join(output_directory, f"{seq_name}_STARLING.pdb"))
-            # save the distance maps
-            np.save(os.path.join(output_directory, f"{seq_name}_STARLING_DM.npy"), sym_distance_maps.detach().cpu().numpy())
-        else:
-            # if not saving, we will add the info to the directory. 
-            output_dict[seq_name] = sym_distance_maps.detach().cpu().numpy()
-            if return_structures:
-                output_dict[seq_name+'_traj'] = traj
-
-        # update progress bar if we have one. 
-        if show_progress_bar:
-            pbar.update(1)
-
-    # make sure we close the progress bar if we used one
-    if show_progress_bar:
-        pbar.close()
-
-    # if we are not saving, return the output_dict
-    if output_directory is None:
-        return output_dict
-
-
+    # run the actual inference and return the results
+    return generation.generate_backend(sequence_dict,
+                                       conformations,
+                                       encoder,
+                                       ddpm,
+                                       device,
+                                       steps,
+                                       method,
+                                       ddim,
+                                       return_structures,
+                                       batch_size,
+                                       output_directory,
+                                       return_data,
+                                       verbose,
+                                       show_progress_bar)
 
