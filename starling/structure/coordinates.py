@@ -1,9 +1,13 @@
-import torch
+import os
+
 import mdtraj as md
-import torch.optim as optim
 import numpy as np
+import torch
+import torch.optim as optim
 from scipy.spatial import distance_matrix
+from sklearn.manifold import MDS
 from sparrow.data.amino_acids import AA_ONE_TO_THREE
+
 
 def compute_pairwise_distances(coords):
     """Function to compute the pairwise distances in 3D space.
@@ -20,7 +24,8 @@ def compute_pairwise_distances(coords):
     """
     return torch.cdist(coords, coords)
 
-#def loss_function(original_distance_matrix, coords):
+
+# def loss_function(original_distance_matrix, coords):
 #    """Function to compute the loss between the original distance matrix and the computed distance matrix.
 #
 #    Parameters
@@ -55,10 +60,12 @@ def loss_function(original_distance_matrix, coords):
         The mean squared error between the original and computed distance matrices, considering only the upper triangle.
     """
     computed_distances = compute_pairwise_distances(coords)
-    
+
     # Create a mask for the upper triangle
-    upper_triangle_mask = torch.triu(torch.ones_like(original_distance_matrix), diagonal=1).bool()
-    
+    upper_triangle_mask = torch.triu(
+        torch.ones_like(original_distance_matrix), diagonal=1
+    ).bool()
+
     # Apply the mask to both the original and computed distance matrices
     masked_original = original_distance_matrix[upper_triangle_mask]
     masked_computed = computed_distances[upper_triangle_mask]
@@ -86,11 +93,50 @@ def create_incremental_coordinates(n_points, distance, device):
     return torch.nn.Parameter(coordinates)
 
 
-def distance_matrix_to_3d_structure_gd(original_distance_matrix,
-                                       num_iterations=5000,
-                                       learning_rate=1e-3,
-                                       device="cuda:0",
-                                       verbose=True):
+def distance_matrix_to_3d_structure_mds(distance_matrix, kwargs):
+    """
+    Generate 3D coordinates from a distance matrix using
+    multidimensional scaling (MDS).
+
+    Parameters
+    ----------
+    distance_matrix : torch.Tensor
+        A 2D tensor representing the distance matrix.
+    kwargs : dict
+        Keyword arguments to pass to scikit-learn's MDS algorithm.
+
+    Returns
+    -------
+    torch.Tensor
+        A 3D tensor representing the coordinates of the atoms.
+    """
+    # Set the default values for n_init and n_jobs if not provided in kwargs
+    # this matches the default values in scikit-learn's MDS
+    n_init = kwargs.pop("n_init", 4)
+    n_jobs = kwargs.pop("n_jobs", min(n_init, os.cpu_count()))
+
+    # Initialize MDS with 3 components (for 3D) and the specified parameters
+    mds = MDS(
+        n_components=3,
+        dissimilarity="precomputed",
+        n_init=n_init,
+        n_jobs=n_jobs,
+        **kwargs,
+    )
+
+    # Fit the MDS model to the distance matrix
+    coords = mds.fit_transform(distance_matrix.cpu())
+
+    return coords
+
+
+def distance_matrix_to_3d_structure_gd(
+    original_distance_matrix,
+    num_iterations=5000,
+    learning_rate=1e-3,
+    device="cuda:0",
+    verbose=True,
+):
     """Function to reconstruct a 3D structure from a distance matrix using gradient descent.
 
     Parameters
@@ -112,15 +158,20 @@ def distance_matrix_to_3d_structure_gd(original_distance_matrix,
         The reconstructed 3D coordinates.
     """
     if isinstance(original_distance_matrix, torch.Tensor):
-        original_distance_matrix = original_distance_matrix.to(device, dtype=torch.float64)
+        original_distance_matrix = original_distance_matrix.to(
+            device, dtype=torch.float64
+        )
     else:
-        original_distance_matrix = torch.tensor(original_distance_matrix, dtype=torch.float64, device=device)
+        original_distance_matrix = torch.tensor(
+            original_distance_matrix, dtype=torch.float64, device=device
+        )
 
-    coords = create_incremental_coordinates(original_distance_matrix.shape[0], 3.6, device=device)
-    #coords = torch.randn((original_distance_matrix.size(0), 3), requires_grad=True, device=device,dtype=torch.float64)
+    coords = create_incremental_coordinates(
+        original_distance_matrix.shape[0], 3.6, device=device
+    )
+    # coords = torch.randn((original_distance_matrix.size(0), 3), requires_grad=True, device=device,dtype=torch.float64)
 
-
-    #optimizer = optim.SGD([coords], lr=learning_rate, momentum=0.99, nesterov=True)
+    # optimizer = optim.SGD([coords], lr=learning_rate, momentum=0.99, nesterov=True)
     optimizer = optim.Adam([coords], lr=learning_rate)
 
     for i in range(num_iterations):
@@ -135,13 +186,14 @@ def distance_matrix_to_3d_structure_gd(original_distance_matrix,
         if i % 100 == 0 and verbose:
             print(f"Iteration {i}, Loss: {loss.item()}")
 
-
     return coords.detach().cpu().numpy()
+
 
 def compare_distance_matrices(original_distance_matrix, coords):
     computed_distance_matrix = distance_matrix(coords, coords)
     difference_matrix = np.abs(original_distance_matrix - computed_distance_matrix)
     return computed_distance_matrix, difference_matrix
+
 
 def create_ca_topology_from_coords(sequence, coords):
     """
@@ -165,10 +217,10 @@ def create_ca_topology_from_coords(sequence, coords):
         # Add a residue
         res_three_letter = AA_ONE_TO_THREE[res]
         residue = topology.add_residue(res_three_letter, chain)
-        #residue = topology.add_residue(res, chain)
+        # residue = topology.add_residue(res, chain)
 
         # Add a CA atom to the residue
-        ca_atom = topology.add_atom('CA', md.element.carbon, residue)
+        ca_atom = topology.add_atom("CA", md.element.carbon, residue)
 
         # Connect the CA atom to the previous CA atom (if not the first residue)
         if i > 0:
@@ -177,14 +229,15 @@ def create_ca_topology_from_coords(sequence, coords):
     # Ensure the coordinates are in the right shape (1, num_atoms, 3)
     print(coords.shape)
     if coords.ndim != 3:
-       coords = coords[np.newaxis, :, :]
+        coords = coords[np.newaxis, :, :]
     else:
-       print(coords.shape)
+        print(coords.shape)
 
     # Create an MDTraj trajectory object with the topology and coordinates
     traj = md.Trajectory(coords, topology)
 
     return traj
+
 
 # Function to save the MDTraj trajectory to a specified file
 def save_trajectory(traj, filename):
@@ -196,4 +249,3 @@ def save_trajectory(traj, filename):
     - filename (str): The name of the file to save the trajectory to.
     """
     traj.save(filename)
-
