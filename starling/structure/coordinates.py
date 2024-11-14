@@ -93,7 +93,7 @@ def create_incremental_coordinates(n_points, distance, device):
     return torch.nn.Parameter(coordinates)
 
 
-def distance_matrix_to_3d_structure_mds(distance_matrix, kwargs):
+def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
     """
     Generate 3D coordinates from a distance matrix using
     multidimensional scaling (MDS).
