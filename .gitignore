@@ -4,6 +4,7 @@ starling/models/__pycache__/
 *cpython*
 lightning_logs/
 wandb/
+build/
 
 
 # added to avoid local version clashes on buil
