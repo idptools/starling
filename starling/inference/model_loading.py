@@ -62,9 +62,9 @@ class ModelManager:
         encoder_model, diffusion_model
             The loaded encoder and diffusion models.
         '''
-        #if self.encoder_model is None or self.diffusion_model is None:
+        if self.encoder_model is None or self.diffusion_model is None:
             # Models haven't been loaded yet, so load them now
-        self.encoder_model, self.diffusion_model = self.load_models(encoder_path, ddpm_path, device)
+            self.encoder_model, self.diffusion_model = self.load_models(encoder_path, ddpm_path, device)
 
         # Return the already-loaded models
         return self.encoder_model, self.diffusion_model
