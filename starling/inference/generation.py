@@ -4,12 +4,8 @@ import os
 from tqdm import tqdm
 import numpy as np
 import torch
-# from scipy.spatial import distance_matrix
 
-
-from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNetConditional
-from starling.models.vae import VAE
+from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
     compare_distance_matrices,
@@ -55,11 +51,14 @@ def symmetrize_distance_map(dist_map):
 
 
 
+# initialize model_manager. This happens when this module
+# is imported to ensemble_generation, so we can use the
+# same model_manager for all calls to generate_backend.
+model_manager=ModelManager()
+
 
 def generate_backend(sequence_dict,
                      conformations,
-                     encoder,
-                     ddpm,
                      device,
                      steps,
                      method,
@@ -69,7 +68,8 @@ def generate_backend(sequence_dict,
                      output_directory,
                      return_data,
                      verbose,
-                     show_progress_bar):
+                     show_progress_bar,
+                     model_manager=model_manager):
 
     """
     Backend function for generating the distance maps using STARLING.
@@ -84,12 +84,6 @@ def generate_backend(sequence_dict,
         A dictionary with the sequence names as the key and the 
        sequences as the values. These names will be used to write
        any output files (if writing is requested).
-
-    conformations : int
-        The number of conformations to generate. 
-
-    encoder : str
-        The path to the encoder model.
 
     ddpm : str
         The path to the DDPM model
@@ -133,6 +127,16 @@ def generate_backend(sequence_dict,
     show_progress_bar : bool
         Whether to show a progress bar. Default is True.
 
+    model_manager : ModelManager
+        A ModelManager object to manage loaded models.
+        This lets us avoid loading the model iteratively
+        when calling generate multiple times in a single
+        session. Default is model_manager, which is initialized
+        outside of this function code block. To update the path
+        to the models, update the paths in config.py, which are
+        read into the ModelManager object located the 
+        model_loading.py
+
     Returns
     ---------------
     dict or None: 
@@ -150,28 +154,9 @@ def generate_backend(sequence_dict,
     # set CONVERT_ANGSTROM_TO_NM
     CONVERT_ANGSTROM_TO_NM = 10
 
-    # set unet model 
-    UNet_model = UNetConditional(
-        in_channels=1,
-        out_channels=1,
-        base=64,
-        norm="group",
-        blocks=[2, 2, 2],
-        middle_blocks=2,
-        labels_dim=384,
-    )
-
-    # load encoder model
-    encoder_model = VAE.load_from_checkpoint(
-        encoder,
-        map_location=device)
-
-    # load diffusion model
-    diffusion = DiffusionModel.load_from_checkpoint(
-        ddpm,
-        model=UNet_model,
-        encoder_model=encoder_model,
-        map_location=device)
+    # get models. This will only load once even if we call this 
+    # function multiple times. 
+    encoder_model, diffusion  = model_manager.get_models(device=device)    
 
     # Construct a sampler
     if ddim:

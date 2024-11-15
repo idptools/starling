@@ -225,8 +225,6 @@ def check_positive_int(val):
 
 def generate(user_input,
              conformations=configs.DEFAULT_NUMBER_CONFS, 
-             encoder=configs.DEFAULT_ENCODER_WEIGHTS_PATH,
-             ddpm=configs.DEFAULT_DDPM_WEIGHTS_PATH,
              device=None,
              steps=configs.DEFAULT_STEPS,
              method='mds',
@@ -255,18 +253,6 @@ def generate(user_input,
 
     conformations : int
         The number of conformations to generate. Default is 200.
-
-    encoder : str
-        The path to the encoder model. Default is None. If None, the default
-        model will be used.
-                    ** we will need to update this at some point **
-
-
-    ddpm : str
-        The path to the DDPM model. Default is None. If None, the default
-        model will be used.
-                    ** we will need to update this at some point **
-
 
     device : str
         The device to use for predictions. Default is None. If None, the
@@ -311,6 +297,12 @@ def generate(user_input,
     show_progress_bar : bool
         Whether to show a progress bar. Default is True.
 
+    Note: if you want to change the location of the networks, 
+    you need to change them in the configs.py file. Those paths get
+    read in by the ModelManager class and are not passed in as arguments
+    to this function. This lets us avoid iteratively loading the network
+    when running the generate function multiple times in a single session.
+
     Returns
     ---------------
     dict or None: 
@@ -324,11 +316,6 @@ def generate(user_input,
         If output_directory is not none, the output will save to 
         the specified path.
     '''
-
-    # fix home ref for encoder and ddpm
-    encoder = utilities.fix_ref_to_home(encoder)
-    ddpm = utilities.fix_ref_to_home(ddpm)
-
     # check user input, return a sequence dict. 
     sequence_dict = handle_input(user_input)
 
@@ -359,14 +346,6 @@ def generate(user_input,
         if not os.path.exists(output_directory):
             raise FileNotFoundError(f"Directory {output_directory} does not exist.")
 
-    # check encoder model exists
-    if not os.path.exists(encoder):
-        raise FileNotFoundError(f"Encoder model {encoder} not found.")
-
-    # check ddpm model exists
-    if not os.path.exists(ddpm):
-        raise FileNotFoundError(f"DDPM model {ddpm} not found.")
-
     # check ddim is a bool
     if not isinstance(ddim, bool):
         raise ValueError("DDIM must True or False.")
@@ -389,8 +368,6 @@ def generate(user_input,
     # run the actual inference and return the results
     return generation.generate_backend(sequence_dict,
                                        conformations,
-                                       encoder,
-                                       ddpm,
                                        device,
                                        steps,
                                        method,
