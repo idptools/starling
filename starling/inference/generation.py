@@ -1,5 +1,6 @@
 
 import os
+import time
 
 from tqdm import tqdm
 import numpy as np
@@ -14,6 +15,11 @@ from starling.structure.coordinates import (
     distance_matrix_to_3d_structure_mds,
 )
 
+
+# initialize model_manager singleton. This happens when this module
+# is imported to ensemble_generation, so we can use the
+# same model_manager for all calls to generate_backend.
+model_manager = ModelManager()
 
 def symmetrize_distance_map(dist_map):
     """
@@ -50,13 +56,6 @@ def symmetrize_distance_map(dist_map):
     return sym_dist_map.cpu()
 
 
-
-# initialize model_manager. This happens when this module
-# is imported to ensemble_generation, so we can use the
-# same model_manager for all calls to generate_backend.
-model_manager=ModelManager()
-
-
 def generate_backend(sequence_dict,
                      conformations,
                      device,
@@ -65,6 +64,8 @@ def generate_backend(sequence_dict,
                      ddim,
                      return_structures,
                      batch_size,
+                     num_cpus_mds,
+                     num_mds_init,
                      output_directory,
                      return_data,
                      verbose,
@@ -105,6 +106,11 @@ def generate_backend(sequence_dict,
 
     batch_size : int
         The batch size to use for sampling.
+
+    num_cpus_mds : int
+        The number of CPUs to use for MDS. There 
+        is no point specifying more than the default
+        number of MDS runs performed (defined in configs)
 
     output_directory : str or None
         If None, no output is saved.
@@ -177,6 +183,8 @@ def generate_backend(sequence_dict,
 
     # iterate over sequence_dict
     for num, seq_name in enumerate(sequence_dict):
+
+        start_time_prediction = time.time()
         # list to hold distance maps
         starling_dm=[]
     
@@ -208,9 +216,16 @@ def generate_backend(sequence_dict,
                 [torch.stack(batch) for batch in starling_dm], dim=0
                 )
 
+        end_time_prediction = time.time()
+
         # if return_structures is True, generate 3D structure
+        start_time_structure_generation = 0
+        end_time_structure_generation = 0
         if return_structures:
+
+            start_time_structure_generation = time.time()                
             if method=='gd':
+
                 coordinates = (
                     np.array(
                         [
@@ -224,24 +239,30 @@ def generate_backend(sequence_dict,
                         ]
                     )
                     / CONVERT_ANGSTROM_TO_NM
-                ) 
-            elif method=='mds':
+                )                 
+            elif method=='mds':                
                 coordinates = (
                     np.array(
                         [
                             distance_matrix_to_3d_structure_mds(
                                 dist_map,
+                                n_jobs=num_cpus_mds,
+                                n_init=num_mds_init,
                             )
                             for dist_map in sym_distance_maps
                         ]
                     )
                     / CONVERT_ANGSTROM_TO_NM
                 )
+                
+                
             else:
                 raise NotImplementedError("Method not implemented! We shouldn't have gotten this far.")
 
+            
             # make traj
             traj = create_ca_topology_from_coords(sequence, coordinates)
+            end_time_structure_generation = time.time()
 
         # if we are saving things, save the things so we don't destroy memory usage
         if output_directory is not None:
@@ -254,7 +275,11 @@ def generate_backend(sequence_dict,
                 # note save only first frame as a topology file
                 traj[0].save(os.path.join(output_directory, f"{seq_name}_STARLING.pdb"))
             # save the distance maps
-            np.save(os.path.join(output_directory, f"{seq_name}_STARLING_DM.npy"), sym_distance_maps.detach().cpu().numpy())
+
+            # compress the distance maps to save space
+            rounded_array = np.round(sym_distance_maps.detach().cpu().numpy(), decimals=2)
+            rounded_array = rounded_array.astype(np.float32)
+            np.save(os.path.join(output_directory, f"{seq_name}_STARLING_DM.npy"), rounded_array)
         else:
             # if not saving, we will add the info to the directory. 
             output_dict[seq_name] = sym_distance_maps.detach().cpu().numpy()
@@ -265,9 +290,25 @@ def generate_backend(sequence_dict,
         if show_progress_bar:
             pbar.update(1)
 
+        if verbose:
+            elapsed_time_structure_generation = end_time_structure_generation - start_time_structure_generation
+            elapsed_time_prediction = end_time_prediction - start_time_prediction            
+            total_time = elapsed_time_structure_generation + elapsed_time_prediction
+            n_conformers = len(sym_distance_maps)
+            print('----------------------------------------')
+            print(f'Performance statisics for {seq_name}')
+            print(f"Number of confomers                 : {n_conformers}")
+            print(f"Total time for prediction           : {round(elapsed_time_prediction,2)}s ({round(100*(elapsed_time_prediction/total_time),2)}% of time)")
+            print(f"Total time for structure generation : {round(elapsed_time_structure_generation,2)}s ({round(100*(elapsed_time_structure_generation/total_time),2)}% of time)")
+            print(f"Time per conformer                  : {total_time/n_conformers}s")
+            print('\n')
+
     # make sure we close the progress bar if we used one
     if show_progress_bar:
         pbar.close()
+
+    
+
 
     # if we are not saving, return the output_dict
     if return_data:

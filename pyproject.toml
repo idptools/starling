@@ -33,7 +33,6 @@ dependencies = [
 	'pytorch-lightning',
 	'scikit-learn',
 	'einops',
-	'esm',
 	'tqdm',
 	'PyYAML',
 	'h5py',

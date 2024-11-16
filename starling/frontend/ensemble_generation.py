@@ -15,9 +15,8 @@ from starling.inference import generation
 
 
 def handle_input(user_input, 
-                invalid_sequence_action='convert',
-                seq_index_start=1):
-    
+                 invalid_sequence_action='convert',
+                 seq_index_start=1):
     '''
     Dynamically handle the input from the user.
     This returns a dictionary with either the names from 
@@ -231,6 +230,8 @@ def generate(user_input,
              ddim=True,
              return_structures=False,
              batch_size=configs.DEFAULT_BATCH_SIZE, 
+             num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
+             num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
              output_directory=None,
              return_data=True,
              verbose=False,
@@ -273,8 +274,17 @@ def generate(user_input,
         Whether to return the 3D structure. Default is False.
 
     batch_size : int
-        The batch size to use for sampling. Default is 100.
-        100 uses ~ 20 GB memory. 
+        The batch size to use for sampling. 100 uses ~20 GB 
+        of memory. Default is 100.
+
+    num_cpus_mds : int
+        The number of CPUs to use for MDS. Default is 4
+
+    num_mds_init : int
+        Number of independent MDS jobs to execute. Default is 
+        4. Note if goes up in principle more shots of finding
+        a good solution but there is a performance hit unless
+        num_cpus_mds == num_mds_init.
 
     output_directory : str
         The path to save the output. Default is None.
@@ -319,18 +329,34 @@ def generate(user_input,
     # check user input, return a sequence dict. 
     sequence_dict = handle_input(user_input)
 
+    if verbose:
+        if len(sequence_dict) == 1:
+            print(f"[STATUS]: Generating distance maps for 1 sequence.")
+        else:
+            print(f"[STATUS]: Generating distance maps for {len(sequence_dict)} sequences.")
+
     # check various other things so we fail early. Don't
     # want to go about the entire process and then have it fail at the end.
     # check conformations
     if not check_positive_int(conformations):
         raise ValueError("Conformations must be a positive integer.")
+    
     # check steps
     if not check_positive_int(steps):
             raise ValueError("Steps must be an integer greater than 0.")
+    
     # check batch size
     if not check_positive_int(batch_size):
         raise ValueError("batch_size must be an integer greater than 0.")
     
+    # check number of cpus
+    if not check_positive_int(num_cpus_mds):
+        raise ValueError("num_cpus_mds must be an integer greater than 0.")
+    
+    # check number of independent runs of MDS
+    if not check_positive_int(num_mds_init):
+        raise ValueError("num_mds_init must be an integer greater than 0.")
+        
     # make sure batch_size is not smaller than conformations.
     # if it is, make batch_size = conformations. 
     if batch_size > conformations:
@@ -374,6 +400,8 @@ def generate(user_input,
                                        ddim,
                                        return_structures,
                                        batch_size,
+                                       num_cpus_mds,
+                                       num_mds_init,
                                        output_directory,
                                        return_data,
                                        verbose,

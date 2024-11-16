@@ -7,6 +7,10 @@ import torch.optim as optim
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
 from sparrow.data.amino_acids import AA_ONE_TO_THREE
+from starling import configs
+
+import time
+
 
 
 def compute_pairwise_distances(coords):
@@ -110,23 +114,29 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
     torch.Tensor
         A 3D tensor representing the coordinates of the atoms.
     """
+    
     # Set the default values for n_init and n_jobs if not provided in kwargs
     # this matches the default values in scikit-learn's MDS
-    n_init = kwargs.pop("n_init", 4)
-    n_jobs = kwargs.pop("n_jobs", min(n_init, os.cpu_count()))
-
+    n_init = kwargs.pop("n_init", configs.DEFAULT_MDS_NUM_INIT)
+    n_jobs = kwargs.pop("n_jobs", configs.DEFAULT_CPU_COUNT_MDS)
+    
     # Initialize MDS with 3 components (for 3D) and the specified parameters
+    # nb: normalized_stress = False explicitly as the default value changes 
+    # from False to 'auto' in scikit-learn 1.4
+
+    
     mds = MDS(
         n_components=3,
         dissimilarity="precomputed",
         n_init=n_init,
         n_jobs=n_jobs,
+        normalized_stress=False,
         **kwargs,
     )
 
     # Fit the MDS model to the distance matrix
     coords = mds.fit_transform(distance_matrix.cpu())
-
+    
     return coords
 
 

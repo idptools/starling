@@ -7,7 +7,7 @@
 
 import os
 
-def fix_ref_to_home(path):
+def fix_ref_to_home(input_path):
     '''
     Function to fix the path to the home directory. 
 
@@ -20,7 +20,23 @@ def fix_ref_to_home(path):
     ---------------
     str: The fixed path. 
     '''
-    if path.startswith('~'):
-        return os.path.expanduser(path)
-    return path
+    if input_path.startswith('~'):
+        return os.path.expanduser(input_path)
+    return input_path
+
+
+def check_file_exists(input_path):
+    '''
+    Function to check if a file exists. 
+
+    Parameters
+    ---------------
+    path : str
+        The path to check. 
+
+    Returns
+    ---------------
+    bool: True if the file exists, False otherwise. 
+    '''
+    return os.path.exists(input_path) and os.path.isfile(input_path)
 
