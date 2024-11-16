@@ -121,16 +121,15 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
     n_jobs = kwargs.pop("n_jobs", configs.DEFAULT_CPU_COUNT_MDS)
     
     # Initialize MDS with 3 components (for 3D) and the specified parameters
-    # nb: normalized_stress = False explicitly as the default value changes 
-    # from False to 'auto' in scikit-learn 1.4
-
-    
+    # nb: normalized_stress = 'auto' explicitly as this is the default 
+    # value in sci-kit learn >1.4 , but before that it was False, so this just
+    # ensures version-independent behavior in the MDS call
     mds = MDS(
         n_components=3,
         dissimilarity="precomputed",
         n_init=n_init,
         n_jobs=n_jobs,
-        normalized_stress=False,
+        normalized_stress='auto',
         **kwargs,
     )
 
@@ -237,11 +236,12 @@ def create_ca_topology_from_coords(sequence, coords):
             topology.add_bond(topology.atom(i - 1), ca_atom)
 
     # Ensure the coordinates are in the right shape (1, num_atoms, 3)
-    print(coords.shape)
     if coords.ndim != 3:
         coords = coords[np.newaxis, :, :]
-    else:
-        print(coords.shape)
+
+    # commented out for now
+    #else:
+    #    print(coords.shape)
 
     # Create an MDTraj trajectory object with the topology and coordinates
     traj = md.Trajectory(coords, topology)

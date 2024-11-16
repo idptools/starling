@@ -16,6 +16,7 @@ from starling.inference import generation
 
 def handle_input(user_input, 
                  invalid_sequence_action='convert',
+                 output_name=None,
                  seq_index_start=1):
     '''
     Dynamically handle the input from the user.
@@ -48,6 +49,11 @@ def handle_input(user_input,
             non-canonical residues, so we don't want to use the protfasta.read_fasta()
             options that allow this to happen. 
 
+    output_name : str
+        If provided and if a single amino acid sequence is passed in, this will be the key
+        in the output dictionary. If None, the key will be 'sequence_<index>'. If a dictionary
+        or list or path to a FASTA file is passed, this is ignored. Default is None.
+        
     seq_index_start: int
         If we need to number sequences in the output dictionary, this is the starting index.
         This is only needed if a sequence as a string is passed in or if a list of sequences
@@ -71,7 +77,9 @@ def handle_input(user_input,
         # return the cleaned sequence. 
         return cleaned
 
-    # Check and handle different input types
+    ### Check and handle different input types
+
+    # If input is a string...
     if isinstance(user_input, str):
         if user_input.endswith(('.fasta', '.FASTA', '.tsv', '.in')):
             # make sure user has a valid path.
@@ -97,8 +105,21 @@ def handle_input(user_input,
                             raise ValueError(f"Duplicate sequence name detected: {name}.\nPlease ensure sequences have unique names in the input file.")
             return sequence_dict
         else:
-            # otherwise only string input allowed is a sequence as a string.
-            return {f'sequence_{seq_index_start}': clean_sequence(user_input)}
+
+            # otherwise only string input allowed is a sequence as a string. Automatically create
+            # the name if output_name is None.
+            if output_name is None:                
+                return {f'sequence_{seq_index_start}': clean_sequence(user_input)}
+            
+            # if output_name is not None, use that as the key in the dictionary.
+            else:
+                try:
+                    output_name = str(output_name)
+                except Exception as e:
+                    raise ValueError('output_name must be a string our castable to a string.')
+                return {output_name: clean_sequence(user_input)}
+            
+    # if input is a list
     elif isinstance(user_input, list):
         # if a list, make sure all sequences are valid.
         sequence_dict = {}
@@ -233,11 +254,22 @@ def generate(user_input,
              num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
              num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
              output_directory=None,
+             output_name=None,
              return_data=True,
              verbose=False,
              show_progress_bar=True):
     '''
-    Main function for generating the distance maps using STARLING.
+    Main function for generating the distance maps using STARLING. Allows
+    you to pass a single sequence, a list of sequences, a dictionary, or
+    a path to a .fasta file, a .tsv file, or a seq.in file, and from that
+    generate distance maps and 3D conformational ensembles using the 
+    STARLING model. This function is the main user-facing STARLING function.
+    
+    Note: if you want to change the location of the networks, 
+    you need to change them in the configs.py file. Those paths get
+    read in by the ModelManager class and are not passed in as arguments
+    to this function. This lets us avoid iteratively loading the network
+    when running the generate function multiple times in a single session.
 
     Parameters
     ---------------
@@ -287,14 +319,35 @@ def generate(user_input,
         num_cpus_mds == num_mds_init.
 
     output_directory : str
-        The path to save the output. Default is None.
+        The path to save the output.
+
+        If set to None, no output will be saved to disk. 
+
         If not None, will save the output to the specified path.
-        This includes the distance maps and if return_structures=True,
-        the 3D structures.
+        This includes the distance maps and, if 
+        return_structures=True, the 3D structures.
+        
         The distance maps are saved as .npy files with the names
-        <sequence_name>_STARLING_DM.npy
-        and the structures are save with the file names
-        <sequence_name>_STARLING.xtc and <sequence_name>_STARLING.pdb.
+        <sequence_name>_STARLING_DM.npy and the structures are 
+        saved with the file names <sequence_name>_STARLING.xtc 
+        and <sequence_name>_STARLING.pdb.
+
+        <sequence_name> here will depend on the input provided
+        to generate. If the input is a dictionary, then the keys
+        will be used as the sequence names. If the input is a
+        list or a single sequence, the sequence will be saved
+        as 'sequence_<index>'. If a path to a FASTA file is passed
+        in, the headers from the FASTA file will be used. Note also
+        if a single sequence is passed the sequence_<index> format
+        can be overridden by setting the output_name parameter.
+
+        Default is None.
+
+    output_name : str
+        If provided and if a single amino acid sequence is passed in, 
+        this will be the key in the output dictionary. If None, the 
+        key will be 'sequence_<index>'. If a dictionary or list or path 
+        to a FASTA file is passed, this is ignored. Default is None.
 
     return_data : bool
         If True, will return the distance maps and structures (if generated)
@@ -306,12 +359,6 @@ def generate(user_input,
 
     show_progress_bar : bool
         Whether to show a progress bar. Default is True.
-
-    Note: if you want to change the location of the networks, 
-    you need to change them in the configs.py file. Those paths get
-    read in by the ModelManager class and are not passed in as arguments
-    to this function. This lets us avoid iteratively loading the network
-    when running the generate function multiple times in a single session.
 
     Returns
     ---------------
@@ -327,7 +374,7 @@ def generate(user_input,
         the specified path.
     '''
     # check user input, return a sequence dict. 
-    sequence_dict = handle_input(user_input)
+    sequence_dict = handle_input(user_input, output_name=output_name)
 
     if verbose:
         if len(sequence_dict) == 1:

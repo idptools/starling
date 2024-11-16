@@ -1,6 +1,8 @@
 
 import os
 import time
+from datetime import datetime
+
 
 from tqdm import tqdm
 import numpy as np
@@ -157,6 +159,8 @@ def generate_backend(sequence_dict,
         the specified path.
     """
 
+    overall_start_time = time.time()
+
     # set CONVERT_ANGSTROM_TO_NM
     CONVERT_ANGSTROM_TO_NM = 10
 
@@ -233,7 +237,8 @@ def generate_backend(sequence_dict,
                                 dist_map,
                                 num_iterations=10000,
                                 learning_rate=0.05,
-                                verbose=True,
+                                device=device,     
+                                verbose=False,
                             )
                             for dist_map in sym_distance_maps
                         ]
@@ -247,7 +252,7 @@ def generate_backend(sequence_dict,
                             distance_matrix_to_3d_structure_mds(
                                 dist_map,
                                 n_jobs=num_cpus_mds,
-                                n_init=num_mds_init,
+                                n_init=num_mds_init,                                                           
                             )
                             for dist_map in sym_distance_maps
                         ]
@@ -295,17 +300,41 @@ def generate_backend(sequence_dict,
             elapsed_time_prediction = end_time_prediction - start_time_prediction            
             total_time = elapsed_time_structure_generation + elapsed_time_prediction
             n_conformers = len(sym_distance_maps)
-            print('----------------------------------------')
-            print(f'Performance statistics for {seq_name}')
-            print(f"Number of conformers                 : {n_conformers}")
+
+            
+
+            print(f'\n\n##### SUMMARY OF SEQUENCE PREDICTION ({num+1}/{len(sequence_dict)}) #####')
+            print(f'Sequence name                       : {seq_name}')            
+            print(f"Sequence length                     : {len(sequence)}")
+            print(f"Number of conformers                : {n_conformers}")
             print(f"Total time for prediction           : {round(elapsed_time_prediction,2)}s ({round(100*(elapsed_time_prediction/total_time),2)}% of time)")
             print(f"Total time for structure generation : {round(elapsed_time_structure_generation,2)}s ({round(100*(elapsed_time_structure_generation/total_time),2)}% of time)")
-            print(f"Time per conformer                  : {total_time/n_conformers}s")
-            print('\n')
+            print(f"Time per conformer                  : {total_time/n_conformers}s")     
+            print('\n')  
+        else:
+            print('')     
 
     # make sure we close the progress bar if we used one
     if show_progress_bar:
         pbar.close()
+        
+    
+    if verbose:        
+        # Convert total time to hours, minutes, and seconds
+        overall_time = time.time() - overall_start_time
+        total_hours = round(overall_time // 3600,2)
+        total_minutes = round((overall_time % 3600) // 60,2)
+        total_seconds = round(overall_time % 60,2)        
+        print('-------------------------------------------------------')
+        print(f'Summary of all predictions ({len(sequence_dict)} sequences)')
+        print('-------------------------------------------------------')
+        print(f"\nTotal time (all sequences, all I/O) : {total_hours} hrs {total_minutes} mins {total_seconds} secs")
+
+        current_datetime = datetime.now()
+        formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")  # Example: "2024-11-16 14:35:26"
+
+        print('STARLING predictions completed at:', formatted_datetime)
+        print('')
 
     
 

@@ -8,6 +8,32 @@ from starling import configs
 from starling.utilities import check_file_exists
 from starling.frontend.ensemble_generation import generate, check_device
 
+def print_starling():
+    print('\n-------------------------------------------------------')
+    print(f'     STARLING (version {__version__})           ')
+    print('-------------------------------------------------------')
+    
+
+def print_info():
+
+    # local imports if needed 
+    print_starling()
+    print('Using models at the following locations:')
+    print(f'  VAE  model weights: {configs.DEFAULT_ENCODER_WEIGHTS_PATH}')
+    print(f'  DDPM model weights: {configs.DEFAULT_DDPM_WEIGHTS_PATH}')
+    print('-------------------------------------------------------')
+    print('CONFIG INFO:')
+    print( '  Default # of confs :', configs.DEFAULT_NUMBER_CONFS)
+    print( '  Default batch size :', configs.DEFAULT_BATCH_SIZE)
+    print( '  Default steps      :', configs.DEFAULT_STEPS)
+    print( '  Default # of CPUs  :', configs.DEFAULT_CPU_COUNT_MDS)
+    print( '  Default # MDS jobs :', configs.DEFAULT_MDS_NUM_INIT)
+    print(f'  Default device     : {check_device(None)}')
+    print('-------------------------------------------------------')
+    print('Need help - please raise an issue on GitHub: https://github.com/idptools/starling/issues')
+    
+    print('\n')
+
 
 
 def main():
@@ -19,9 +45,10 @@ def main():
     parser.add_argument('-c', '--conformations', type=int, default=configs.DEFAULT_NUMBER_CONFS, help=f"Number of conformations to generate (default: {configs.DEFAULT_NUMBER_CONFS})")
     parser.add_argument('-d', '--device', type=str, default=None, help="Device to use for predictions (default: None, auto-detected)")
     parser.add_argument('-s', '--steps', type=int, default=configs.DEFAULT_STEPS, help=f"Number of steps to run the DDPM model (default: {configs.DEFAULT_STEPS})")
-    parser.add_argument('-m', '--method', type=str, default='mds', help="Method to use for generating 3D structures. Options are 'gd' or 'mds'. (default: 'mds')")
+    parser.add_argument('-m', '--method', type=str, default='mds', help=f"Method to use for generating 3D structures. Options are 'gd' or 'mds'. (default: {configs.DEFAULT_STRUCTURE_GEN})")
     parser.add_argument('-b', '--batch_size', type=int, default=configs.DEFAULT_BATCH_SIZE, help=f"Batch size to use for sampling (default: {configs.DEFAULT_BATCH_SIZE})")
     parser.add_argument('-o','--output_directory', type=str, default=".", help="Directory to save output (default: '.')")
+    parser.add_argument('--outname', type=str, default=None, help="If provided and a single sequence is provided, defines the prefix ahead of .pdb/.xtc/.npy extensions (default: None)")
     parser.add_argument('-r', '--return_structures', action='store_true', default=False, help="Return the 3D structures (default: False)")
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help="Enable verbose output (default: False)")
     parser.add_argument('--num-cpus', dest='num_cpus', type=int, default=configs.DEFAULT_CPU_COUNT_MDS, help=f"Sets the max number of CPUs to use. Default: {configs.DEFAULT_CPU_COUNT_MDS}.")
@@ -39,28 +66,7 @@ def main():
     
     # first. informational args overide anything else
     if args.info:
-        
-        # local imports if needed 
-        
-        print('\n-------------------------------------------------------')
-        print(f'     STARLING (version {__version__})           ')
-        print('-------------------------------------------------------')
-        print('Using models at the following locations:')
-        print(f'  VAE  model weights: {configs.DEFAULT_ENCODER_WEIGHTS_PATH}')
-        print(f'  DDPM model weights: {configs.DEFAULT_DDPM_WEIGHTS_PATH}')
-        print('-------------------------------------------------------')
-        print('CONFIG INFO:')
-        print( '  Default # of confs :', configs.DEFAULT_NUMBER_CONFS)
-        print( '  Default batch size :', configs.DEFAULT_BATCH_SIZE)
-        print( '  Default steps      :', configs.DEFAULT_STEPS)
-        print( '  Default # of CPUs  :', configs.DEFAULT_CPU_COUNT_MDS)
-        print( '  Default # MDS jobs :', configs.MDS_NUM_INIT)
-        print(f'  Default device     : {check_device(None)}')
-        print('-------------------------------------------------------')
-        print('Need help - please raise an issue on GitHub: https://github.com/idptools/starling/issues')
-
-        print('\n')
-
+        print_info()
         sys.exit(0)
     elif args.version:
         print(__version__)
@@ -88,6 +94,8 @@ def main():
         sys.exit(1)
 
 
+    if args.verbose:
+        print_starling()
     
     # Call the generate function with parsed arguments
     generate(
@@ -102,6 +110,7 @@ def main():
         num_cpus_mds=args.num_cpus,
         num_mds_init=args.num_mds_init,
         output_directory=args.output_directory,
+        output_name=args.outname,
         return_data=False,
         verbose=args.verbose,
         show_progress_bar=args.progress_bar,
