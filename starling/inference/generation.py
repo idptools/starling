@@ -296,8 +296,8 @@ def generate_backend(sequence_dict,
             total_time = elapsed_time_structure_generation + elapsed_time_prediction
             n_conformers = len(sym_distance_maps)
             print('----------------------------------------')
-            print(f'Performance statisics for {seq_name}')
-            print(f"Number of confomers                 : {n_conformers}")
+            print(f'Performance statistics for {seq_name}')
+            print(f"Number of conformers                 : {n_conformers}")
             print(f"Total time for prediction           : {round(elapsed_time_prediction,2)}s ({round(100*(elapsed_time_prediction/total_time),2)}% of time)")
             print(f"Total time for structure generation : {round(elapsed_time_structure_generation,2)}s ({round(100*(elapsed_time_structure_generation/total_time),2)}% of time)")
             print(f"Time per conformer                  : {total_time/n_conformers}s")
