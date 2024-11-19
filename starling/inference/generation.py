@@ -1,4 +1,3 @@
-
 import os
 import time
 from datetime import datetime
@@ -8,6 +7,7 @@ from tqdm import tqdm
 import numpy as np
 import torch
 
+from starling import configs
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
@@ -161,8 +161,6 @@ def generate_backend(sequence_dict,
 
     overall_start_time = time.time()
 
-    # set CONVERT_ANGSTROM_TO_NM
-    CONVERT_ANGSTROM_TO_NM = 10
 
     # get models. This will only load once even if we call this 
     # function multiple times. 
@@ -222,6 +220,10 @@ def generate_backend(sequence_dict,
 
         end_time_prediction = time.time()
 
+        ## NB - in future plan is to remove this code and here
+        # instantiate Ensemble objects where structural predictions
+        # can then be done inside those objects inseadt of here.
+        
         # if return_structures is True, generate 3D structure
         start_time_structure_generation = 0
         end_time_structure_generation = 0
@@ -243,7 +245,7 @@ def generate_backend(sequence_dict,
                             for dist_map in sym_distance_maps
                         ]
                     )
-                    / CONVERT_ANGSTROM_TO_NM
+                    / configs.CONVERT_ANGSTROM_TO_NM
                 )                 
             elif method=='mds':                
                 coordinates = (
@@ -257,7 +259,7 @@ def generate_backend(sequence_dict,
                             for dist_map in sym_distance_maps
                         ]
                     )
-                    / CONVERT_ANGSTROM_TO_NM
+                    / configs.CONVERT_ANGSTROM_TO_NM
                 )
                 
                 
@@ -285,6 +287,12 @@ def generate_backend(sequence_dict,
             rounded_array = np.round(sym_distance_maps.detach().cpu().numpy(), decimals=2)
             rounded_array = rounded_array.astype(np.float32)
             np.save(os.path.join(output_directory, f"{seq_name}_STARLING_DM.npy"), rounded_array)
+
+            if return_data:
+                output_dict[seq_name] = sym_distance_maps.detach().cpu().numpy()
+                if return_structures:
+                    output_dict[seq_name+'_traj'] = traj
+                                
         else:
             # if not saving, we will add the info to the directory. 
             output_dict[seq_name] = sym_distance_maps.detach().cpu().numpy()
@@ -340,6 +348,7 @@ def generate_backend(sequence_dict,
 
 
     # if we are not saving, return the output_dict
+
     if return_data:
         return output_dict
 

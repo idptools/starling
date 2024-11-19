@@ -5,8 +5,8 @@ from argparse import ArgumentParser
 
 from starling. _version import __version__
 from starling import configs
-from starling.utilities import check_file_exists
-from starling.frontend.ensemble_generation import generate, check_device
+from starling.utilities import check_file_exists, check_device
+from starling.frontend.ensemble_generation import generate
 
 def print_starling():
     print('\n-------------------------------------------------------')

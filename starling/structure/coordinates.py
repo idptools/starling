@@ -12,6 +12,36 @@ from starling import configs
 import time
 
 
+def get_tensor_dtype(device):
+    """
+    Function which returns a tensor dtype based on
+    the device passed. This is to support the fact that
+    mps does not work with float64 tensors and will set
+    them to be cast to float32. This is an internal
+    function that really only ends up being relevant
+    for gradien descent reconstruction.
+    
+    Parameters
+    ---------------
+    device : torch.device
+        Device being used
+
+    returns
+    --------------------
+    torch.dtype
+        Returns the type 
+    
+    """
+    
+    # as of 2024-11 mps does not support float64
+    if str(device) == 'mps':
+        tensor_dtype = torch.float32
+    else:
+        tensor_dtype = torch.float64
+
+
+    return tensor_dtype
+
 
 def compute_pairwise_distances(coords):
     """Function to compute the pairwise distances in 3D space.
@@ -81,12 +111,15 @@ def loss_function(original_distance_matrix, coords):
 
 
 def create_incremental_coordinates(n_points, distance, device):
-    coordinates = torch.zeros((n_points, 3), dtype=torch.float64, device=device)
+    
+
+    
+    coordinates = torch.zeros((n_points, 3), dtype=get_tensor_dtype(device), device=device)
     # Start the first coordinate at (0, 0, 0)
 
     for i in range(1, n_points):
         # Generate a random direction vector
-        direction = torch.randn(3, dtype=torch.float64, device=device)
+        direction = torch.randn(3, dtype=get_tensor_dtype(device), device=device)
         direction /= torch.norm(direction)  # Normalize to get a unit vector
 
         # Calculate the new coordinate by adding the direction scaled by the distance
@@ -165,15 +198,25 @@ def distance_matrix_to_3d_structure_gd(
     -------
     numpy.ndarray
         The reconstructed 3D coordinates.
+
+
+    NB: As of Nov 2024, Apple MPS does not support float64 tensors, so we cast
+    tensors to float32 in the case of MPS being used. Note that this is actually
+    slower than using CPU, but we provide support for this in case someone wants
+    it and/or it gets faster in the future...
+
     """
+        
     if isinstance(original_distance_matrix, torch.Tensor):
         original_distance_matrix = original_distance_matrix.to(
-            device, dtype=torch.float64
+            device, dtype=get_tensor_dtype(device)
         )
+            
     else:
         original_distance_matrix = torch.tensor(
-            original_distance_matrix, dtype=torch.float64, device=device
+            original_distance_matrix, dtype=get_tensor_dtype(device), device=device
         )
+        
 
     coords = create_incremental_coordinates(
         original_distance_matrix.shape[0], 3.6, device=device

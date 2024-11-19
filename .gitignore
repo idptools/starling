@@ -5,6 +5,9 @@ starling/models/__pycache__/
 lightning_logs/
 wandb/
 build/
+dist/
+
+*~
 
 
 # added to avoid local version clashes on buil
