@@ -171,7 +171,8 @@ def generate(user_input,
              output_name=None,
              return_data=True,
              verbose=False,
-             show_progress_bar=True):
+             show_progress_bar=True,
+             show_per_step_progress_bar=True):
     '''
     Main function for generating the distance maps using STARLING. Allows
     you to pass a single sequence, a list of sequences, a dictionary, or
@@ -274,6 +275,10 @@ def generate(user_input,
     show_progress_bar : bool
         Whether to show a progress bar. Default is True.
 
+    show_per_step_progress_bar : bool, optional
+        Whether to show progress bar per step. 
+        Default is True
+
     Returns
     ---------------
     dict or None: 
@@ -349,6 +354,10 @@ def generate(user_input,
     if not isinstance(show_progress_bar, bool):
         raise ValueError("show_progress_bar must be True or False.")
 
+    # check show_per_step_progress_bar
+    if not isinstance(show_per_step_progress_bar, bool):
+        raise ValueError("show_per_step_progress_bar must be True or False.")
+
     # check device, get back torch.device
     device = utilities.check_device(device)
 
@@ -366,5 +375,6 @@ def generate(user_input,
                                        output_directory,
                                        return_data,
                                        verbose,
-                                       show_progress_bar)
+                                       show_progress_bar,
+                                       show_per_step_progress_bar)
 

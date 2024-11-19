@@ -72,6 +72,7 @@ def generate_backend(sequence_dict,
                      return_data,
                      verbose,
                      show_progress_bar,
+                     show_per_step_progress_bar=True,
                      model_manager=model_manager):
 
     """
@@ -135,6 +136,9 @@ def generate_backend(sequence_dict,
     show_progress_bar : bool
         Whether to show a progress bar. Default is True.
 
+    show_per_step_progress_bar : bool, optional
+        whether to show progress bar per step. 
+
     model_manager : ModelManager
         A ModelManager object to manage loaded models.
         This lets us avoid loading the model iteratively
@@ -195,7 +199,8 @@ def generate_backend(sequence_dict,
     
         # iterate over batches
         for batch in range(num_batches):
-            distance_maps=sampler.sample(batch_size, labels=sequence)
+            distance_maps=sampler.sample(batch_size, labels=sequence,
+                                         show_per_step_progress_bar=show_per_step_progress_bar)
             starling_dm.append(
                 [
                     symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
@@ -205,7 +210,8 @@ def generate_backend(sequence_dict,
 
         # iterate over remaining samples
         if remaining_samples > 0:
-            distance_maps, *_ = sampler.sample(remaining_samples, labels=sequence)
+            distance_maps, *_ = sampler.sample(remaining_samples, labels=sequence,
+                                               show_per_step_progress_bar=show_per_step_progress_bar)
             starling_dm.append(
                 [
                     symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
@@ -320,7 +326,8 @@ def generate_backend(sequence_dict,
             print(f"Time per conformer                  : {total_time/n_conformers}s")     
             print('\n')  
         else:
-            print('')     
+            # changed from print to pass because if not verbose, we don't need to do anything. 
+            pass
 
     # make sure we close the progress bar if we used one
     if show_progress_bar:
