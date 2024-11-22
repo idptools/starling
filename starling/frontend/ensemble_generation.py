@@ -172,7 +172,8 @@ def generate(user_input,
              return_data=True,
              verbose=False,
              show_progress_bar=True,
-             show_per_step_progress_bar=True):
+             show_per_step_progress_bar=True,
+             return_single_ensemble=False):
     '''
     Main function for generating the distance maps using STARLING. Allows
     you to pass a single sequence, a list of sequences, a dictionary, or
@@ -279,6 +280,14 @@ def generate(user_input,
         Whether to show progress bar per step. 
         Default is True
 
+    return_single_ensemble : bool
+        If True, will return a single ensemble object instead of
+        a dictionary of ensemble objects IF and only if there is
+        one sequence passed. This options is ignored if more than
+        one sequence is passed. It also defaults to off so the
+        return is always a dictionary unless you explicitly want
+        a single ensemble object. Default is False.        
+
     Returns
     ---------------
     dict or None: 
@@ -294,6 +303,11 @@ def generate(user_input,
     '''
     # check user input, return a sequence dict. 
     sequence_dict = handle_input(user_input, output_name=output_name)
+
+    # check no sequence too big
+    for k in sequence_dict:
+        if len(sequence_dict[k]) > 384:
+            raise ValueError(f"Sequence {k} is too long. Maximum sequence in STARLING is 384 residues.")
 
     if verbose:
         if len(sequence_dict) == 1:
@@ -326,7 +340,7 @@ def generate(user_input,
     # make sure batch_size is not smaller than conformations.
     # if it is, make batch_size = conformations. 
     if batch_size > conformations:
-        batch_size=conformations
+        batch_size = conformations
 
     # make method lowercase and then check method
     method=method.lower()
@@ -376,5 +390,6 @@ def generate(user_input,
                                        return_data,
                                        verbose,
                                        show_progress_bar,
-                                       show_per_step_progress_bar)
+                                       show_per_step_progress_bar,
+                                       return_single_ensemble)
 

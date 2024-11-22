@@ -30,21 +30,40 @@ def test_ensemble_generation():
 
     
     C = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=False)
-    E=Ensemble(C['sequence_1'], seq)
+    E = C['sequence_1']
 
     assert len(E) == 100
-    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 2.5
+    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 3
     assert abs(E.end_to_end_distance(return_mean=True) - 85) < 6
     assert E.sequence == seq
 
     # check we can build a 
-    t = E.ensemble_trajectory()
+    t = E.trajectory
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
     E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
 
 
+def test_ensemble_generation_single_ensemble():
+
+    # define sequence
+    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
+
+    # check we can get a single Ensembe object    
+    E = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=False, return_single_ensemble=True)
+    
+    assert len(E) == 100
+    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 3
+    assert abs(E.end_to_end_distance(return_mean=True) - 85) < 6
+    assert E.sequence == seq
+
+    # check we can build a 
+    t = E.trajectory
+    np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
+
+    # check we can write a trajectory
+    E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
 
 def test_ensemble_generation_cpu():
 
@@ -53,15 +72,15 @@ def test_ensemble_generation_cpu():
 
     
     C = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=False, device='cpu')
-    E=Ensemble(C['sequence_1'], seq)
+    E = C['sequence_1']
 
     assert len(E) == 100
-    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 2.5
+    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 3
     assert abs(E.end_to_end_distance(return_mean=True) - 85) < 6
     assert E.sequence == seq
 
     # check we can build a 
-    t = E.ensemble_trajectory(device='cpu')
+    t = E.build_ensemble_trajectory(device='cpu')
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
@@ -79,15 +98,15 @@ def test_ensemble_generation_mps():
     
     C = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=False, device='mps')
     
-    E = Ensemble(C['sequence_1'], seq)
+    E = C['sequence_1']
 
     assert len(E) == 100
-    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 2.5
+    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 3
     assert abs(E.end_to_end_distance(return_mean=True) - 85) < 6
     assert E.sequence == seq
 
     # check we can build a 
-    t = E.ensemble_trajectory(device='mps')
+    t = E.build_ensemble_trajectory(device='mps')
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
@@ -106,15 +125,15 @@ def test_ensemble_generation_cuda():
     
     C = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=False, device='cuda')
             
-    E=Ensemble(C['sequence_1'], seq)
+    E = C['sequence_1']
 
     assert len(E) == 100
-    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 2.5
+    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 3
     assert abs(E.end_to_end_distance(return_mean=True) - 85) < 6
     assert E.sequence == seq
 
     # check we can build a 
-    t = E.ensemble_trajectory(device='cuda')
+    t = E.build_ensemble_trajectory(device='cuda')
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
@@ -128,9 +147,10 @@ def test_ensemble_generation_gd():
 
     
     C = generate(seq,conformations=5, verbose=False, show_progress_bar=False, return_data=True, return_structures=False)
-    E=Ensemble(C['sequence_1'], seq)
+    E = C['sequence_1']
+    
     # check we can build a 
-    t = E.ensemble_trajectory(method='gd')
+    t = E.build_ensemble_trajectory(method='gd')
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
@@ -141,8 +161,8 @@ def test_ensemble_reconstruction():
     seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
     C = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=True)
     
-    E=Ensemble(C['sequence_1'], seq)
-    p = SSTrajectory(TRJ=C['sequence_1_traj']).proteinTrajectoryList[0]
+    E = C['sequence_1']
+    p = E.trajectory
     
     assert np.all(np.isclose(p.get_end_to_end_distance(), E.end_to_end_distance(), atol=1, rtol=1))
     

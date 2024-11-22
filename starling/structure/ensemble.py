@@ -5,6 +5,7 @@ import torch
 
 
 from soursop.sstrajectory import SSTrajectory
+from soursop.ssprotein import SSProtein
 
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
@@ -22,31 +23,86 @@ class Ensemble:
     """
 
     
-    def __init__(self, distance_maps, sequence):
+    def __init__(self, 
+                 distance_maps, 
+                 sequence, 
+                 ssprot_ensemble=None):                 
         """
         Initialize the ensemble with a list of distance maps and the sequence of the protein chain.
 
         Parameters
         ----------
-        distance_maps : list of 2D numpy arrays
-            List of distance maps, where each distance map is a 2D numpy array.
-            Note this expects symmetrized distance maps.
+        distance_maps : np.ndarray
+            3D Numpy array of shape (n_conformations, n_residues, n_residues). Note 
+            this this expects symmetrized distance maps.
 
         sequence : str
             Amino acid sequence of the protein chain.
 
+        ssprot_ensemble : soursop.ssprotein.SSProtein
+            SOURSOP SSProtein object. If provided, the ensemble will be initialized
+            using this.
+
         """
 
-        ## TO DO: Add sanity checks for distance maps and sequence
-        
-        self.distance_maps = distance_maps
+        # sanity check input
+        self.__sanity_check_init(distance_maps, sequence, ssprot_ensemble)
+
+        self.__distance_maps = distance_maps
         self.sequence = sequence
         self.number_of_conformations = len(distance_maps)
-        self.sequence_length = len(sequence)
+        self.sequence_length = len(sequence)        
 
         # initailize and then compute as needed
         self._rg_vals = []
-        self._traj = None
+
+        if ssprot_ensemble is None:
+            self.__trajectory = None
+        elif isinstance(ssprot_ensemble, SSProtein):
+            self.__trajectory = ssprot_ensemble
+        else:
+            raise TypeError('ssprot_ensemble must be a soursop.ssprotein.SSProtein object')
+
+    def __sanity_check_init(self, distance_maps, sequence, ssprot_ensemble):
+        """
+        Perform sanity checks on the distance maps and sequence.
+
+        Parameters
+        ----------
+        distance_maps : list of 2D numpy arrays
+            List of distance maps, where each distance map is a 2D numpy array.
+
+        sequence : str
+            Amino acid sequence of the protein chain.
+
+        Raises
+        ------
+        ValueError
+            If the distance maps are not a list of 2D numpy arrays or if the
+            sequence is not a string.
+
+        """
+
+        if not isinstance(distance_maps, np.ndarray):
+            raise ValueError("distance_maps must be a list of 2D numpy arrays")
+
+        if not all([isinstance(d, np.ndarray) and d.ndim == 2 for d in distance_maps]):
+            raise ValueError("distance_maps must be a list of 2D numpy arrays")
+        
+        if not all([d.shape[0] == d.shape[1] and d.shape[0] == len(sequence) for d in distance_maps]):
+            raise ValueError("distance_maps must be square matrices with the same size as the sequence")
+        
+        if not isinstance(sequence, str):
+            raise ValueError("sequence must be a string")
+        
+        VALID_AA = "ACDEFGHIKLMNPQRSTVWY"
+        if not all(char in VALID_AA for char in sequence):
+            raise ValueError("sequence must contain only valid amino acid characters ({VALID_AA})")
+        
+        if ssprot_ensemble is not None:
+            if not isinstance(ssprot_ensemble, SSProtein):
+                raise ValueError("ssprot_ensemble must be a soursop.ssprotein.SSProtein object")
+            
 
 
     def rij(self, i, j, return_mean=False):
@@ -74,8 +130,10 @@ class Ensemble:
             raise ValueError(f"Invalid residue index i: {i}")
         
         tmp =  []
-        for d in self.distance_maps:
+        for d in self.__distance_maps:
             tmp.append(d[i][j])
+
+        tmp  = np.array(tmp)
 
         if return_mean:
             return np.mean(tmp)
@@ -106,9 +164,33 @@ class Ensemble:
             return np.mean(tmp)
         else:
             return tmp
+        
+        
+    def distance_maps(self, return_mean=False):
+        """
+        Return the collection of distance maps for the ensemble.
+
+        Parameters
+        ----------
+        return_mean : bool
+            If True, returns the mean distance map will be returned.
+            Default is False.   
+
+        Returns
+        -------
+        np.array or list of np.array
+            If return_mean is set to True, returns the mean distance map,
+            otherwise returns the list of distance maps. Each distance map
+            is a 2D numpy array.
+
+        """        
+        if return_mean:
+            return np.mean(self.__distance_maps,0)
+        else:
+            return self.__distance_maps    
 
 
-    def radius_of_gyration(self, return_mean=False, force_recompute=False):
+    def radius_of_gyration(self, return_mean=False, force_recompute=False, use_slow=False):
         """
         Compute the radius of gyration of the protein chain
         for each conformation in the ensemble.
@@ -127,23 +209,19 @@ class Ensemble:
         
         Returns
         -------
-        list of float
-            List of radii of gyration for each conformation in the ensemble.
-            If return_mean is set to true returns the mean value.
+        np.array or float
+            Array of radii of gyration for each conformation in the ensemble.
+            If return_mean is set to true returns the mean value as a float
 
         """
 
-        if len(self._rg_vals) == 0 or force_recompute = True:
+        if len(self._rg_vals) == 0 or force_recompute == True:
+            for d in self.__distance_maps:
+                distances = np.sum(np.square(d))
+                rg_val = np.sqrt(distances / (2 * np.power(self.sequence_length, 2)))
+                self._rg_vals.append(rg_val)
 
-            for d in self.distance_maps:
-                distances = 0
-                for i in range(self.sequence_length):
-                    for j in range(self.sequence_length):
-                        distances = distances + np.power(d[i][j],2)
-
-
-
-                self._rg_vals.append(np.sqrt(distances/(2*np.power(self.sequence_length,2))))
+            self._rg_vals = np.array(self._rg_vals)
 
         if return_mean:
             return np.mean(self._rg_vals)
@@ -151,12 +229,13 @@ class Ensemble:
             return self._rg_vals
                         
 
-    def ensemble_trajectory(self,                               
+    def build_ensemble_trajectory(self,                               
                             method=configs.DEFAULT_STRUCTURE_GEN,
                             num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
                             num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
                             device=None,
-                            force_recompute=False):
+                            force_recompute=False,
+                            progress_bar=True):
 
         """
         Generate an ensemble of 3D structures from the distance maps using the 
@@ -183,17 +262,42 @@ class Ensemble:
             This is MPS for apple silicon and CUDA for all other devices.
             If MPS and CUDA are not available, automatically falls back to CPU.
 
+        force_recompute : bool
+            If True, forces recomputation of the ensemble trajectory, otherwise
+            uses the cached trajectory if previously computed.
+            Default is False.
+
+        progress_bar : bool
+            If True, displays a progress bar when generating the ensemble 
+            trajectory. Default is True.
+
+        Returns
+        -------
+        soursop.sstrajectory.SSTrajectory
+            The ensemble trajectory as a SOURSOP Trajectory object. Note that
+            this object
+            
+
         """
 
         # define and sanitize the device
         device = utilities.check_device(device)
 
         # if no traj yet or we're focing to recompute...
-        if self._traj is None or force_recompute:
+        if self.__trajectory is None or force_recompute:
 
-            # as of 2024-11 mps does not support float64
+            # check method before we initialize the progress bar
+            if method not in ['mds', 'gd']:
+                raise NotImplementedError("Method not implemented! We shouldn't have gotten this far.")
+
+            # initialize progress bar
+            if progress_bar == True:
+                dm_generator = tqdm(self.__distance_maps)
 
             if method=='gd':
+
+             
+                # list comprehension version 
                 coordinates = (
                     np.array(
                         [
@@ -204,11 +308,12 @@ class Ensemble:
                                 device=device,     
                                 verbose=True,
                             )
-                            for dist_map in self.distance_maps
+                            for dist_map in dm_generator
                         ]
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
-                )                 
+                )         
+                
             elif method=='mds':                
                 coordinates = (
                     np.array(
@@ -218,7 +323,7 @@ class Ensemble:
                                 n_jobs=num_cpus_mds,
                                 n_init=num_mds_init,                                                           
                             )
-                            for dist_map in self.distance_maps
+                            for dist_map in dm_generator
                         ]
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
@@ -226,12 +331,27 @@ class Ensemble:
             
             
             else:
-                raise NotImplementedError("Method not implemented! We shouldn't have gotten this far.")
+                raise Exception("Should not have gotten here. Method not implemented.")
 
             # make traj and then use that to initailize a SOURSOP Trajectory object
-            self._traj = SSTrajectory(TRJ=create_ca_topology_from_coords(self.sequence, coordinates)).proteinTrajectoryList[0]
+            self.__trajectory = SSTrajectory(TRJ=create_ca_topology_from_coords(self.sequence, coordinates)).proteinTrajectoryList[0]
 
-        return self._traj
+        return self.__trajectory
+    
+    @property
+    def trajectory(self):
+        """
+        Return the ensemble trajectory.
+
+        Returns
+        -------
+        soursop.sstrajectory.SSTrajectory
+            The ensemble trajectory as a SOURSOP Trajectory object.
+
+        """
+        if self.__trajectory is None:
+            self.build_ensemble_trajectory()
+        return self.__trajectory
 
 
     
@@ -252,7 +372,7 @@ class Ensemble:
 
         """
 
-        traj = self.ensemble_trajectory().traj
+        traj = self.trajectory.traj
 
         if pdb_trajectory:
             traj.save_pdb(filename_prefix + ".pdb")
@@ -262,10 +382,15 @@ class Ensemble:
         
         
     def __len__(self):
-        return len(self.distance_maps)
+        return len(self.__distance_maps)
 
     def __str__(self):
-        return f"Ensemble for chain of length {len(self.sequence)} with {len(self.distance_maps)} distance maps"
+        if self.__trajectory is not None:
+            marker = '[X]' 
+        else:
+            marker = '[ ]' 
+        
+        return f"ENSEMBLE | len={len(self.sequence)}, ensemble_size={len(self)}, structures={marker}"
 
     def __repr__(self):
         return self.__str__()

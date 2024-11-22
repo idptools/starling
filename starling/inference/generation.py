@@ -1,6 +1,7 @@
 import os
 import time
 from datetime import datetime
+import gc
 
 
 from tqdm import tqdm
@@ -10,12 +11,13 @@ import torch
 from starling import configs
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
-from starling.structure.coordinates import (
-    compare_distance_matrices,
+from starling.structure.coordinates import (    
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
     distance_matrix_to_3d_structure_mds,
 )
+from starling.structure.ensemble import Ensemble
+from soursop.sstrajectory import SSTrajectory
 
 
 # initialize model_manager singleton. This happens when this module
@@ -72,7 +74,8 @@ def generate_backend(sequence_dict,
                      return_data,
                      verbose,
                      show_progress_bar,
-                     show_per_step_progress_bar=True,
+                     show_per_step_progress_bar,
+                     return_single_ensemble,
                      model_manager=model_manager):
 
     """
@@ -128,7 +131,8 @@ def generate_backend(sequence_dict,
     return_data : bool
         If True, will return the distance maps and structures (if generated)
         as a dictionary regardless of the output_directory. If False, will
-        return None.
+        return None. Note the reason to set this to None is if you're 
+        predicting a large set of sequences this will save memory.
 
     verbose : bool
         Whether to print verbose output. Default is False.
@@ -139,6 +143,14 @@ def generate_backend(sequence_dict,
     show_per_step_progress_bar : bool, optional
         whether to show progress bar per step. 
 
+    return_single_ensemble : bool
+        If True, will return a single ensemble object instead of
+        a dictionary of ensemble objects IF and only if there is
+        one sequence passed. This options is ignored if more than
+        one sequence is passed. It also defaults to off so the
+        return is always a dictionary unless you explicitly want
+        a single ensemble object.
+        
     model_manager : ModelManager
         A ModelManager object to manage loaded models.
         This lets us avoid loading the model iteratively
@@ -190,17 +202,22 @@ def generate_backend(sequence_dict,
     # iterate over sequence_dict
     for num, seq_name in enumerate(sequence_dict):
 
+        ## -----------------------------------------  
+        ## Start of prediction cycle for this sequence
+
         start_time_prediction = time.time()
+        
         # list to hold distance maps
-        starling_dm=[]
+        starling_dm = []
     
         # get sequence
         sequence=sequence_dict[seq_name]
     
-        # iterate over batches
+        # iterate over batches for actual DDIM sampling
         for batch in range(num_batches):
-            distance_maps=sampler.sample(batch_size, labels=sequence,
-                                         show_per_step_progress_bar=show_per_step_progress_bar)
+            distance_maps = sampler.sample(batch_size, 
+                                           labels=sequence,
+                                           show_per_step_progress_bar=show_per_step_progress_bar)
             starling_dm.append(
                 [
                     symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
@@ -210,7 +227,8 @@ def generate_backend(sequence_dict,
 
         # iterate over remaining samples
         if remaining_samples > 0:
-            distance_maps, *_ = sampler.sample(remaining_samples, labels=sequence,
+            distance_maps = sampler.sample(remaining_samples, 
+                                               labels=sequence,
                                                show_per_step_progress_bar=show_per_step_progress_bar)
             starling_dm.append(
                 [
@@ -226,13 +244,19 @@ def generate_backend(sequence_dict,
 
         end_time_prediction = time.time()
 
-        ## NB - in future plan is to remove this code and here
-        # instantiate Ensemble objects where structural predictions
-        # can then be done inside those objects inseadt of here.
-        
+        ##
+        ## NB: We keep the ensemble reconstruction code here for now because
+        ## at this point the distance maps are still tensors, not np.arrays
+        ## so we avoid unnecessary conversions by using the tensor versions 
+        ## here.
+        ##
         # if return_structures is True, generate 3D structure
-        start_time_structure_generation = 0
-        end_time_structure_generation = 0
+
+        # set time at which we start structure generation to 0
+        start_time_structure_generation = time.time()
+
+        # we initialize this to 0 and will update as needed (or not)
+        end_time_structure_generation = time.time()
         if return_structures:
 
             start_time_structure_generation = time.time()                
@@ -273,37 +297,52 @@ def generate_backend(sequence_dict,
                 raise NotImplementedError("Method not implemented! We shouldn't have gotten this far.")
 
             
-            # make traj
-            traj = create_ca_topology_from_coords(sequence, coordinates)
+            # make traj as an sstrajectory object and extract out the ssprotein object
+            ssprotein = SSTrajectory(TRJ=create_ca_topology_from_coords(sequence, coordinates)).proteinTrajectoryList[0]
+            
             end_time_structure_generation = time.time()
-
-        # if we are saving things, save the things so we don't destroy memory usage
-        if output_directory is not None:
-            if verbose and num==0:
-                print(f"Saving results to: {os.path.abspath(output_directory)}")
-            if return_structures:
-                # if we have structures, save the structures. 
-                traj.save(os.path.join(output_directory, f"{seq_name}_STARLING.xtc"))
-
-                # note save only first frame as a topology file
-                traj[0].save(os.path.join(output_directory, f"{seq_name}_STARLING.pdb"))
-            # save the distance maps
-
-            # compress the distance maps to save space
-            rounded_array = np.round(sym_distance_maps.detach().cpu().numpy(), decimals=2)
-            rounded_array = rounded_array.astype(np.float32)
-            np.save(os.path.join(output_directory, f"{seq_name}_STARLING_DM.npy"), rounded_array)
-
-            if return_data:
-                output_dict[seq_name] = sym_distance_maps.detach().cpu().numpy()
-                if return_structures:
-                    output_dict[seq_name+'_traj'] = traj
-                                
+        
+        # if no structures are requested, set ssprotein to None
         else:
-            # if not saving, we will add the info to the directory. 
-            output_dict[seq_name] = sym_distance_maps.detach().cpu().numpy()
+            ssprotein = None
+
+        # pull the distance maps out of the tensor and convert to numpy
+        final_distance_maps = sym_distance_maps.detach().cpu().numpy()
+
+        # create ensemble object. Note if ssprotein is None this is expected
+        # and will initialize the ensemble without structures
+        E = Ensemble(final_distance_maps, sequence, ssprot_ensemble=ssprotein)
+
+        # if we are saving things, save as we progress through so we generate 
+        # structures/DMs in situ
+        if output_directory is not None:
+
+            # num == 0 just means we are on the first sequence.
+            if verbose and num == 0:
+                print(f"Saving results to: {os.path.abspath(output_directory)}")
+
+            # if we're saving structures do that first;
             if return_structures:
-                output_dict[seq_name+'_traj'] = traj
+
+                # this saves both a topology (PDB) and a trajectory (XTC) file
+                E.save_trajectory(filename_prefix=os.path.join(output_directory, seq_name+'_STARLING'))
+
+            # save distance maps            
+            np.save(os.path.join(output_directory, f"{seq_name}_STARLING_DM.npy"), final_distance_maps)
+
+
+        ## End of prediction cycle for this sequence
+        ## -----------------------------------------  
+
+        # if we are returning data, add the data to the output_dict 
+        if return_data:                
+            output_dict[seq_name] = E
+        
+        # if not, force cleanup of things to save memory
+        else:            
+            del E
+            del final_distance_maps            
+            gc.collect()
 
         # update progress bar if we have one. 
         if show_progress_bar:
@@ -314,8 +353,6 @@ def generate_backend(sequence_dict,
             elapsed_time_prediction = end_time_prediction - start_time_prediction            
             total_time = elapsed_time_structure_generation + elapsed_time_prediction
             n_conformers = len(sym_distance_maps)
-
-            
 
             print(f'\n\n##### SUMMARY OF SEQUENCE PREDICTION ({num+1}/{len(sequence_dict)}) #####')
             print(f'Sequence name                       : {seq_name}')            
@@ -346,18 +383,19 @@ def generate_backend(sequence_dict,
         print(f"\nTotal time (all sequences, all I/O) : {total_hours} hrs {total_minutes} mins {total_seconds} secs")
 
         current_datetime = datetime.now()
-        formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")  # Example: "2024-11-16 14:35:26"
+        formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")  
 
         print('STARLING predictions completed at:', formatted_datetime)
         print('')
 
+    # if we are not saving, return the output_dict if possible, otherwise just skip (don't error)
+    if return_single_ensemble:
+        if len(sequence_dict) == 1:
+            return E
+        if verbose:
+            print('Warning: return_single_ensemble is set to True but more than one sequence was passed. Returning dictionary of ensembles.')
     
-
-
-    # if we are not saving, return the output_dict
-
-    if return_data:
-        return output_dict
+    return output_dict
 
 
 
