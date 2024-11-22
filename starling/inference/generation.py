@@ -389,7 +389,7 @@ def generate_backend(sequence_dict,
         print('')
 
     # if we are not saving, return the output_dict if possible, otherwise just skip (don't error)
-    if return_single_ensemble:
+    if return_single_ensemble and return_data:
         if len(sequence_dict) == 1:
             return E
         if verbose:
