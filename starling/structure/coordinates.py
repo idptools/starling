@@ -1,4 +1,5 @@
 import os
+import time
 
 import mdtraj as md
 import numpy as np
@@ -7,10 +8,8 @@ import torch.optim as optim
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
 from sparrow.data.amino_acids import AA_ONE_TO_THREE
+
 from starling import configs
-
-import time
-
 
 
 def compute_pairwise_distances(coords):
@@ -114,14 +113,14 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
     torch.Tensor
         A 3D tensor representing the coordinates of the atoms.
     """
-    
+
     # Set the default values for n_init and n_jobs if not provided in kwargs
     # this matches the default values in scikit-learn's MDS
     n_init = kwargs.pop("n_init", configs.DEFAULT_MDS_NUM_INIT)
     n_jobs = kwargs.pop("n_jobs", configs.DEFAULT_CPU_COUNT_MDS)
-    
+
     # Initialize MDS with 3 components (for 3D) and the specified parameters
-    # nb: normalized_stress = 'auto' explicitly as this is the default 
+    # nb: normalized_stress = 'auto' explicitly as this is the default
     # value in sci-kit learn >1.4 , but before that it was False, so this just
     # ensures version-independent behavior in the MDS call
     mds = MDS(
@@ -129,13 +128,13 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
         dissimilarity="precomputed",
         n_init=n_init,
         n_jobs=n_jobs,
-        normalized_stress='auto',
+        normalized_stress="auto",
         **kwargs,
     )
 
     # Fit the MDS model to the distance matrix
     coords = mds.fit_transform(distance_matrix.cpu())
-    
+
     return coords
 
 
@@ -240,7 +239,7 @@ def create_ca_topology_from_coords(sequence, coords):
         coords = coords[np.newaxis, :, :]
 
     # commented out for now
-    #else:
+    # else:
     #    print(coords.shape)
 
     # Create an MDTraj trajectory object with the topology and coordinates
