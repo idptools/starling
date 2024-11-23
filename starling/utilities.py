@@ -7,6 +7,7 @@
 
 import os
 import torch
+import pickle
 
 def fix_ref_to_home(input_path):
     '''
@@ -40,6 +41,62 @@ def check_file_exists(input_path):
     bool: True if the file exists, False otherwise. 
     '''
     return os.path.exists(input_path) and os.path.isfile(input_path)
+
+
+def remove_extension(input_path):
+    '''
+    Function to remove the extension from a file.
+
+    Parameters
+    ---------------
+    path : str
+        The path to remove the extension from. 
+
+    Returns
+    ---------------
+    str  
+        The path with the extension removed. 
+
+    '''
+
+    return os.path.splitext(input_path)[0]
+
+
+def parse_output_path(args):
+    """
+    Parse the output path from the command line arguments.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The command line arguments.
+
+    Returns
+    -------
+    str
+        The output path and filename without an extension.
+    """
+
+    # get the filename (+extension) if the input file, without
+    # any path info
+    input_filename = os.path.basename(args.input_file)
+
+    # if no output is specified, use the current directory;
+    # this is the default behavior 
+    if args.output == ".":
+        outname = input_filename
+
+    # if input was provided for the output
+    else:
+        # if we were passed a path
+        if os.path.isdir(args.output):
+            outname = os.path.join(args.output, input_filename)
+        else:
+            outname = args.output
+    # remove the extension
+    outname = os.path.splitext(outname)[0]
+
+    return outname
 
 
 def check_device(use_device, default_device='gpu'):
@@ -127,3 +184,76 @@ def check_device(use_device, default_device='gpu'):
 
     # This should never be reached
     raise RuntimeError("Unexpected state in the check_device function. Please raise an issue on GitHub.")
+
+
+def write_starling_ensemble(ensemble_object, filename):
+    """
+    Function to write the STARLING ensemble to a file in the STARLING
+    format (.starling). This is actially just a dictionary with the 
+    amino acid sequence, the distance maps, and the SSProtein object
+    if available.
+
+    Parameters
+    ---------------
+    ensemble_object : starling.structure.Ensemble
+        The STARLING ensemble object to save to a file.
+
+    filename : str
+        The filename to save the ensemble to; note this should
+        not include a file extenison and if it does this will
+        be removed
+
+    
+    """
+
+    # build_the save dictionary
+    save_dict = {'sequence': ensemble_object.sequence, 
+                'distance_maps': ensemble_object._Ensemble__distance_maps, 
+                'traj':ensemble_object._Ensemble__trajectory,
+                'DEFAULT_ENCODER_WEIGHTS_PATH': ensemble_object._Ensemble__metadata['DEFAULT_ENCODER_WEIGHTS_PATH'],
+                'DEFAULT_DDPM_WEIGHTS_PATH': ensemble_object._Ensemble__metadata['DEFAULT_DDPM_WEIGHTS_PATH'],
+                'VERSION': ensemble_object._Ensemble__metadata['VERSION'],
+                'DATE': ensemble_object._Ensemble__metadata['DATE']}
+    
+    # Remove the extension if it exists
+    filename = remove_extension(filename)
+
+    # add starling extension
+    filename = filename + '.starling'
+
+    # Save the dictionary to a file
+    with open(filename, 'wb') as file:
+        pickle.dump(save_dict, file)
+
+
+def read_starling_ensemble(filename):        
+    """
+    Function to read a STARLING ensemble from a file in the STARLING
+    format (.starling). This is actially just a dictionary with the 
+    amino acid sequence, the distance maps, and the SSProtein object
+    if available.
+
+    Parameters
+    ---------------
+    filename : str
+        The filename to read the ensemble from; note this should
+        not include a file extenison and if it does this will
+        be removed
+
+    Returns
+    ---------------
+    starling.structure.Ensemble: The STARLING ensemble object
+    """
+
+    # Read the dictionary from the file
+    try:
+        with open(filename, 'rb') as file:
+            return_dict = pickle.load(file)
+    except Exception:
+        raise ValueError(f"Could not read the file {filename}. Please check the path and try again.")
+    
+    return return_dict
+    
+
+    
+

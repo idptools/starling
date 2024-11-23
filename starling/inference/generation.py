@@ -327,9 +327,8 @@ def generate_backend(sequence_dict,
                 # this saves both a topology (PDB) and a trajectory (XTC) file
                 E.save_trajectory(filename_prefix=os.path.join(output_directory, seq_name+'_STARLING'))
 
-            # save distance maps            
-            np.save(os.path.join(output_directory, f"{seq_name}_STARLING_DM.npy"), final_distance_maps)
-
+            # save full ensemble
+            E.save(os.path.join(output_directory, f"{seq_name}"))
 
         ## End of prediction cycle for this sequence
         ## -----------------------------------------  
