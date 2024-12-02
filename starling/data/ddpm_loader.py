@@ -68,10 +68,10 @@ class MatrixDataset(torch.utils.data.Dataset):
         data = load_hdf5_compressed(
             data_path, keys_to_load=["dm", "seq"], frame=int(frame)
         )
-        distance_map = data["dm"].astype(np.float32)
+        distance_map = data["dm"].astype(np.float16)
         distance_map = torch.from_numpy(distance_map).unsqueeze(0)
 
-        sequence = data["seq"].astype(np.int64)
+        sequence = data["seq"].astype(np.int32)
         sequence = torch.from_numpy(sequence)
 
         return distance_map, sequence
