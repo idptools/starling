@@ -166,3 +166,37 @@ def test_ensemble_reconstruction():
     
     assert np.all(np.isclose(p.get_end_to_end_distance(), E.end_to_end_distance(), atol=1, rtol=1))
     
+
+def test_skip_long_seqs():
+    """
+    Check we can pass a sequence that's too long and it's skipped but
+    does not trigger a total failure.
+    """
+    
+    seqs = {}
+    seqs['a'] = 'AP'*20
+    seqs['b'] = 'AP'*200
+
+    C = generate(seqs, conformations=10, verbose=False, show_progress_bar=False, return_data=True, return_structures=True)
+    assert len(C) == 1
+
+    
+def test_invalid_input_options():
+
+    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
+
+    seqs = {}
+    seqs['a'] = 'AP'*20
+    seqs['b'] = 'AQ'*30
+
+
+    # check we fail if return_data=False and output_directory is None
+    with pytest.raises(ValueError):
+        generate(seq, conformations=10, verbose=False, show_progress_bar=False, return_data=False)
+    
+    # check we fail if we pass multiple sequences and request a single ensemble
+    with pytest.raises(ValueError):
+        generate(seqs, conformations=10, verbose=False, show_progress_bar=False, return_single_ensemble=True)
+
+
+    

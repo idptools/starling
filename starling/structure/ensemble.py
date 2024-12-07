@@ -31,13 +31,14 @@ class Ensemble:
                  sequence, 
                  ssprot_ensemble=None):                 
         """
-        Initialize the ensemble with a list of distance maps and the sequence of the protein chain.
+        Initialize the ensemble with a list of distance maps and the sequence 
+        of the protein chain.
 
         Parameters
         ----------
         distance_maps : np.ndarray
-            3D Numpy array of shape (n_conformations, n_residues, n_residues). Note 
-            this this expects symmetrized distance maps.
+            3D Numpy array of shape (n_conformations, n_residues, n_residues). 
+            Note this this expects symmetrized distance maps.
 
         sequence : str
             Amino acid sequence of the protein chain.
@@ -105,15 +106,13 @@ class Ensemble:
         
         if not isinstance(sequence, str):
             raise ValueError("sequence must be a string")
-        
-        VALID_AA = "ACDEFGHIKLMNPQRSTVWY"
-        if not all(char in VALID_AA for char in sequence):
-            raise ValueError("sequence must contain only valid amino acid characters ({VALID_AA})")
+                
+        if not all(char in configs.VALID_AA for char in sequence):
+            raise ValueError("sequence must contain only valid amino acid characters ({configs.VALID_AA})")
         
         if ssprot_ensemble is not None:
             if not isinstance(ssprot_ensemble, SSProtein):
                 raise ValueError("ssprot_ensemble must be a soursop.ssprotein.SSProtein object")
-            
 
 
     def rij(self, i, j, return_mean=False):
@@ -225,7 +224,6 @@ class Ensemble:
             If return_mean is set to true returns the mean value as a float
 
         """
-
         if len(self._rg_vals) == 0 or force_recompute == True:
             for d in self.__distance_maps:
                 distances = np.sum(np.square(d))
@@ -241,12 +239,12 @@ class Ensemble:
                         
 
     def build_ensemble_trajectory(self,                               
-                            method=configs.DEFAULT_STRUCTURE_GEN,
-                            num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
-                            num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
-                            device=None,
-                            force_recompute=False,
-                            progress_bar=True):
+                                  method=configs.DEFAULT_STRUCTURE_GEN,
+                                  num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
+                                  num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
+                                  device=None,
+                                  force_recompute=False,
+                                  progress_bar=True):
 
         """
         Function that explicitly reconstructs a 3D ensemble of conformations
@@ -262,22 +260,25 @@ class Ensemble:
         ----------
         method : str
             Method to use for generating the 3D structures. Must be one
-            of 'mds' or 'gd'. Default is 'mds'. 
+            of 'mds' or 'gd'. Default is 'mds' (set by 
+            configs.DEFAULT_STRUCTURE_GEN).
 
         num_cpus_mds : int
-            The number of CPUs to use for MDS. Default is 4
+            The number of CPUs to use for MDS. Default is 4 (set by
+            configs.DEFAULT_CPU_COUNT_MDS)
 
         num_mds_init : int
-            Number of independent MDS jobs to execute. Default is 
-            4. Note if goes up in principle more shots of finding
-            a good solution but there is a performance hit unless
-            num_cpus_mds == num_mds_init.
+            Number of independent MDS jobs to execute. NB: if this is
+            increased this in principle means there are more chances
+            of finding a good solution, but there is a performance hit 
+            unless num_cpus_mds >= num_mds_init. Default is 
+            4 (set by configs.DEFAULT_MDS_NUM_INIT).
 
         device : str
             The device to use for predictions. Default is None. If None, the
             default device will be used. Default device is 'gpu'.
             This is MPS for apple silicon and CUDA for all other devices.
-            If MPS and CUDA are not available, automatically falls back to CPU.
+            If MPS and CUDA are not available, automatically falls back to CPU.            
 
         force_recompute : bool
             If True, forces recomputation of the ensemble trajectory, otherwise
@@ -311,8 +312,8 @@ class Ensemble:
             if progress_bar == True:
                 dm_generator = tqdm(self.__distance_maps)
 
+            # if we're using gradient descent
             if method=='gd':
-
              
                 # list comprehension version 
                 coordinates = (
@@ -331,6 +332,7 @@ class Ensemble:
                     / configs.CONVERT_ANGSTROM_TO_NM
                 )         
                 
+            # if we're using mds
             elif method=='mds':                
                 coordinates = (
                     np.array(
@@ -344,13 +346,11 @@ class Ensemble:
                         ]
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
-                )
-            
-            
+                )                        
             else:
                 raise Exception("Should not have gotten here. Method not implemented.")
 
-            # make traj and then use that to initailize a SOURSOP Trajectory object
+            # make an mdtraj.Trajectory object and then use that to initailize a SOURSOP SSTrajectory object
             self.__trajectory = SSTrajectory(TRJ=create_ca_topology_from_coords(self.sequence, coordinates)).proteinTrajectoryList[0]
 
         return self.__trajectory
@@ -413,25 +413,32 @@ class Ensemble:
         else:
             traj[0].save_pdb(filename_prefix + ".pdb")
             traj.save_xtc(filename_prefix + ".xtc")
-
-
-            
         
         
     def __len__(self):
+        """
+        Return the number of conformations in the ensemble.
+        """
         return len(self.__distance_maps)
 
     def __str__(self):
+        """
+        Return a string representation of the ensemble.
+        """
         if self.__trajectory is not None:
             marker = '[X]' 
         else:
-            marker = '[ ]' 
-        
+            marker = '[ ]'         
         return f"ENSEMBLE | len={len(self.sequence)}, ensemble_size={len(self)}, structures={marker}"
 
     def __repr__(self):
+        """
+        Return a string representation of the ensemble.
+        """
         return self.__str__()
     
+## ------------------------------------------ END OF CLASS DEFINITION  
+
     
 def load_ensemble(filename):
     """
