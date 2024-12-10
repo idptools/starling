@@ -64,8 +64,14 @@ def remove_extension(input_path):
         The path with the extension removed. 
 
     '''
+    new_filename = os.path.splitext(input_path)[0]
 
-    return os.path.splitext(input_path)[0]
+    # added this in so we don't silently edit away a filename with a period
+    # that would be invisible...
+    if input_path != new_filename:
+        print('Warning: removed file extension from input file name.\nWas:{input_path}\nNow:{new_filename}')
+
+    return new_filename
 
 
 def parse_output_path(args):
