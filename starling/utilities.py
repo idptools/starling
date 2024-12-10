@@ -8,6 +8,12 @@
 import os
 import torch
 import pickle
+import gzip
+import lzma
+import numpy as np
+import warnings
+
+
 
 def fix_ref_to_home(input_path):
     '''
@@ -186,7 +192,11 @@ def check_device(use_device, default_device='gpu'):
     raise RuntimeError("Unexpected state in the check_device function. Please raise an issue on GitHub.")
 
 
-def write_starling_ensemble(ensemble_object, filename):
+def write_starling_ensemble(ensemble_object, 
+                            filename, 
+                            compress=False, 
+                            reduce_precision=None,
+                            compression_algorithm='lzma'):
     """
     Function to write the STARLING ensemble to a file in the STARLING
     format (.starling). This is actially just a dictionary with the 
@@ -203,8 +213,28 @@ def write_starling_ensemble(ensemble_object, filename):
         not include a file extenison and if it does this will
         be removed
 
+    compress : bool
+        Whether to compress the file or not. Default is False.
+
+    reduce_precision : bool
+        Whether to reduce the precision of the distance map to a 
+        single decimal point and cast to float16 if possible. 
+        Default is None. Sets to False if compression is False,
+        but True if compression is True.
+
+    compression_algorithm : str
+        The compression algorithm to use. Options are 'gzip' and 'lzma'.
+        `lzma` gives better compression if reduce_precision is set to True,
+        but actually 'gzip' is better if reduce_precision is False. 'lzma'
+        is also slower than 'gzip'. Default is 'lzma'. 
+        
+
     
     """
+
+    # set reduce_precision to mirror compress if not set
+    if reduce_precision is None:
+        reduce_precision = compress
 
     # build_the save dictionary
     save_dict = {'sequence': ensemble_object.sequence, 
@@ -215,24 +245,63 @@ def write_starling_ensemble(ensemble_object, filename):
                 'VERSION': ensemble_object._Ensemble__metadata['VERSION'],
                 'DATE': ensemble_object._Ensemble__metadata['DATE']}
     
+    # if we wish to reduce the precision of the distance map to a single decimal point
+    if reduce_precision:
+        
+        # run here so we catch warnings if they happen
+        with warnings.catch_warnings(record=True) as w:
+
+            # cast to float16 array and round to 1 decimal place
+            tmp = np.round(ensemble_object._Ensemble__distance_maps, decimals=1).astype('float16')
+
+            # check if a RuntimeWarning was raised
+            for warning in w:
+
+                # IF yes, then we actually don't cast because we can't do so faithfully
+                if issubclass(warning.category, RuntimeWarning):
+                    print("Warning: Could not reduce precision of distance maps to float16. Saving as float64.")
+                    tmp = np.round(ensemble_object._Ensemble__distance_maps, decimals=1)
+        
+        # update the save dictionary one way or another.
+        save_dict['distance_maps'] = tmp
+
+    
     # Remove the extension if it exists
     filename = remove_extension(filename)
 
     # add starling extension
     filename = filename + '.starling'
 
-    # Save the dictionary to a file
-    with open(filename, 'wb') as file:
-        pickle.dump(save_dict, file)
+    # If we want to compress the file
+    if compress:
+        if compression_algorithm == 'gzip':
+            with gzip.open(filename+'.gzip', "wb") as file:
+                pickle.dump(save_dict, file)
+
+        elif compression_algorithm == 'lzma':
+            with lzma.open(filename+'.xz', "wb") as file:
+                pickle.dump(save_dict, file)
+        else:
+            raise ValueError(f"Compression algorithm {compression_algorithm} is not supported. Supported algorithms are 'gzip' and 'lzma'.")
+
+    else:
+        with open(filename, 'wb') as file:
+            pickle.dump(save_dict, file)
 
 
-def read_starling_ensemble(filename):        
+
+def read_starling_ensemble(filename):
     """
     Function to read a STARLING ensemble from a file in the STARLING
-    format (.starling). This is actially just a dictionary with the 
-    amino acid sequence, the distance maps, and the SSProtein object
-    if available.
+    format (.starling) or a compressed starling file (.gzip, .xz). 
+    The .starling file is actially just a dictionary with the 
+    amino acid sequence, the distance maps, some metadata and the 
+    SSProtein object if available.
 
+    Note this determines the file type based on the extension and
+    will raise an error if the file is not a .starling file, a
+    a .starling.gzip or .starling.xz file.
+    
     Parameters
     ---------------
     filename : str
@@ -245,12 +314,33 @@ def read_starling_ensemble(filename):
     starling.structure.Ensemble: The STARLING ensemble object
     """
 
-    # Read the dictionary from the file
-    try:
-        with open(filename, 'rb') as file:
-            return_dict = pickle.load(file)
-    except Exception:
-        raise ValueError(f"Could not read the file {filename}. Please check the path and try again.")
+    if filename.endswith('.starling.gzip'):      
+        try:
+            with gzip.open(filename, 'rb') as file:
+                return_dict = pickle.load(file)
+        except Exception:
+            raise ValueError(f"Could not read the file {filename}. Please check the path and try again.")
+        
+    elif filename.endswith('.starling.xz'):
+        try:
+            with lzma.open(filename, 'rb') as file:
+                return_dict = pickle.load(file)
+        except Exception:
+            raise ValueError(f"Could not read the file {filename}. Please check the path and try again.")   
+        
+    elif filename.endswith('.starling'):    
+        try:
+            with open(filename, 'rb') as file:
+                return_dict = pickle.load(file)
+        except Exception:
+            raise ValueError(f"Could not read the file {filename}. Please check the path and try again.")
+        
+    else:
+        raise ValueError(f"File {filename} does not have the extension of .starling.gzip, .starling.xz or .starling.")
+    
+    # NOTE: We if the distance maps are float16, we cast them to float32
+    if return_dict['distance_maps'].dtype == 'float16':
+        return_dict['distance_maps'] = return_dict['distance_maps'].astype('float32')
     
     return return_dict
     
