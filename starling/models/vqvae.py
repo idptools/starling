@@ -36,8 +36,6 @@ class VQVAE(pl.LightningModule):
         latent_dim: int,
         dimension: int,
         loss_type: str,
-        weights_type: str,
-        KLD_weight: float,
         lr_scheduler: str,
         set_lr: float,
         num_classes: int = 512,
@@ -76,9 +74,6 @@ class VQVAE(pl.LightningModule):
             The size of the image in the height and width dimensions (i.e., distance maps)
         loss_type : str
             The type of loss to use for the reconstruction loss. Options are "mse" and "nll"
-        weights_type : str
-            The type of weights to use for the reconstruction loss. Options are "linear",
-            "reciprocal", and "equal"
         KLD_weight : float
             The weight to apply to the KLD loss in the ELBO loss function, KLD loss regularizes the latent space
         lr_scheduler : str
@@ -116,14 +111,10 @@ class VQVAE(pl.LightningModule):
 
         # Loss params
         self.loss_type = loss_type
-        self.weights_type = weights_type
 
         # Learning rate params
         self.config_scheduler = lr_scheduler
         self.set_lr = set_lr
-
-        # KLD loss params
-        self.KLD_weight = KLD_weight
 
         # these are used to monitor the training losses for the *EPOCH*
         self.total_train_step_losses = 0
