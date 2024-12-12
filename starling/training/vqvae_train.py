@@ -13,7 +13,7 @@ from starling.data.VAE_loader import MatrixDataModule
 from starling.models.vqvae import VQVAE
 
 
-def train_vae():
+def train_vqvae():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -117,4 +117,4 @@ def train_vae():
 
 
 if __name__ == "__main__":
-    train_vae()
+    train_vqvae()
