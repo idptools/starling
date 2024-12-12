@@ -507,10 +507,11 @@ class VQVAE(pl.LightningModule):
                 "interval": "step",
             }
         elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
-            warmup_steps = 5000
             num_epochs = self.trainer.max_epochs
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
+            # Warmup for 5% of the total steps
+            warmup_steps = steps_per_epoch * int(num_epochs * 0.05)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:
