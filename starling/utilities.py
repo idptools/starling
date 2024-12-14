@@ -8,6 +8,7 @@
 import os
 import torch
 import pickle
+import numpy as np
 
 def fix_ref_to_home(input_path):
     '''
@@ -253,7 +254,35 @@ def read_starling_ensemble(filename):
         raise ValueError(f"Could not read the file {filename}. Please check the path and try again.")
     
     return return_dict
-    
 
-    
+def symmetrize_distance_maps(dist_maps):
+    """
+    Symmetrizes a stack of distance maps along an axis by reflecting the upper triangle
+    onto the lower triangle and setting the diagonal values to zero.
 
+    Parameters:
+    ----------
+    dist_maps : np.ndarray
+        A 3D NumPy array of shape (N, M, M), where N is the number of distance maps.
+
+    Returns:
+    -------
+    np.ndarray
+        A symmetrized stack of distance maps.
+    """
+    # Ensure input is a 3D array
+    assert dist_maps.ndim == 3, "Input must be a 3D array of shape (N, M, M)."
+    assert dist_maps.shape[1] == dist_maps.shape[2], "Each distance map must be square."
+
+    # Create masks for the upper triangle
+    M = dist_maps.shape[1]
+    mask_upper_triangle = np.triu_indices(M, k=1)
+
+    # Reflect the upper triangle onto the lower triangle
+    dist_maps[:, mask_upper_triangle[1], mask_upper_triangle[0]] = dist_maps[:, mask_upper_triangle[0], mask_upper_triangle[1]]
+
+    # Set diagonal values to zero
+    np.einsum("nii->ni", dist_maps)[:] = 0  # Efficient diagonal zeroing
+
+    return dist_maps
+ 

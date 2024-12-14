@@ -42,8 +42,9 @@ dependencies = [
 	'hdf5plugin',
 	'mdtraj',
 	'metapredict',
-	'finches @ git+https://git@github.com/idptools/finches@main#egg=finches',
-	'sparrow @ git+https://git@github.com/idptools/sparrow.git@main#egg=sparrow.git']
+    ]
+	#'finches @ git+https://git@github.com/idptools/finches@main#egg=finches',
+	#'sparrow @ git+https://git@github.com/idptools/sparrow.git@main#egg=sparrow.git']
 
 # Update the urls once the hosting is set up.
 #[project.urls]
@@ -61,6 +62,7 @@ starling2numpy = "starling.scripts.starling_converter:starling2numpy"
 starling2info = "starling.scripts.starling_converter:starling2info"
 starling2sequence = "starling.scripts.starling_converter:starling2sequence"
 numpy2starling = "starling.scripts.starling_converter:numpy2starling"
+xtc2starling = "starling.scripts.starling_converter:xtc2starling"
 
 
 [project.optional-dependencies]

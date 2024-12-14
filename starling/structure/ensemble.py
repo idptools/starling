@@ -20,7 +20,7 @@ from starling.structure.coordinates import (
 class Ensemble:
     """
     Class to represent an ensemble of conformations of a protein chain.
-    The ensemble is represented by a list of distance maps, where each 
+    The ensemble is represented by a 3D np.ndarray of N distance maps, where each 
     distance map is a 2D numpy array.
 
     """
@@ -80,8 +80,8 @@ class Ensemble:
 
         Parameters
         ----------
-        distance_maps : list of 2D numpy arrays
-            List of distance maps, where each distance map is a 2D numpy array.
+        distance_maps : np.ndarray
+            3D Numpy array of shape (n_conformations, n_residues, n_residues).
 
         sequence : str
             Amino acid sequence of the protein chain.
@@ -95,7 +95,7 @@ class Ensemble:
         """
 
         if not isinstance(distance_maps, np.ndarray):
-            raise ValueError("distance_maps must be a list of 2D numpy arrays")
+            raise ValueError("distance_maps must be a numpy ndarray")
 
         if not all([isinstance(d, np.ndarray) and d.ndim == 2 for d in distance_maps]):
             raise ValueError("distance_maps must be a list of 2D numpy arrays")
