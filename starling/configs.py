@@ -11,8 +11,7 @@ DEFAULT_STEPS          = 10
 DEFAULT_MDS_NUM_INIT   = 4
 DEFAULT_STRUCTURE_GEN  = 'mds'
 CONVERT_ANGSTROM_TO_NM = 10
-
-
+MAX_SEQUENCE_LENGTH    = 384 # set longest sequence the model can work on
 
 
 ### Derived default values 
@@ -24,6 +23,34 @@ DEFAULT_DDPM_WEIGHTS_PATH    = fix_ref_to_home(os.path.join(DEFAULT_MODEL_DIR, D
 # Set the default number of CPUs to use
 DEFAULT_CPU_COUNT_MDS = min(DEFAULT_MDS_NUM_INIT, os.cpu_count())
 
+# define valid amino acids
+VALID_AA = "ACDEFGHIKLMNPQRSTVWY"
+
+# define conversion dictionaries for AAs
+AA_THREE_TO_ONE = {'ALA':'A',
+                   'CYS':'C',
+                   'ASP':'D',
+                   'GLU':'E',
+                   'PHE':'F',
+                   'GLY':'G',
+                   'HIS':'H',
+                   'ILE':'I',
+                   'LYS':'K',
+                   'LEU':'L',
+                   'MET':'M',
+                   'ASN':'N',
+                   'PRO':'P',
+                   'GLN':'Q',
+                   'ARG':'R',
+                   'SER':'S',
+                   'THR':'T',
+                   'VAL':'V',
+                   'TRP':'W',
+                   'TYR':'Y'}
+
+AA_ONE_TO_THREE = {}
+for x in AA_THREE_TO_ONE:
+    AA_ONE_TO_THREE[AA_THREE_TO_ONE[x]] = x
 
 
 

@@ -1,5 +1,4 @@
 import math
-from typing import List, Tuple
 
 import pytorch_lightning as pl
 import torch
@@ -12,8 +11,8 @@ from torch.optim.lr_scheduler import (
     OneCycleLR,
 )
 
-from starling.data.distributions import DiagonalGaussianDistribution
 from starling.models import vae_components
+from starling.models.quantize import VectorQuantizer2 as VectorQuantizer
 
 
 class PrintLayer(nn.Module):
@@ -29,7 +28,7 @@ class PrintLayer(nn.Module):
 torch.set_float32_matmul_precision("high")
 
 
-class VAE(pl.LightningModule):
+class VQVAE(pl.LightningModule):
     def __init__(
         self,
         model_type: str,
@@ -37,10 +36,10 @@ class VAE(pl.LightningModule):
         latent_dim: int,
         dimension: int,
         loss_type: str,
-        weights_type: str,
-        KLD_weight: float,
         lr_scheduler: str,
         set_lr: float,
+        num_classes: int = 512,
+        beta: float = 0.25,
         norm: str = "instance",
         base: int = 64,
         optimizer: str = "SGD",
@@ -75,9 +74,6 @@ class VAE(pl.LightningModule):
             The size of the image in the height and width dimensions (i.e., distance maps)
         loss_type : str
             The type of loss to use for the reconstruction loss. Options are "mse" and "nll"
-        weights_type : str
-            The type of weights to use for the reconstruction loss. Options are "linear",
-            "reciprocal", and "equal"
         KLD_weight : float
             The weight to apply to the KLD loss in the ELBO loss function, KLD loss regularizes the latent space
         lr_scheduler : str
@@ -115,19 +111,15 @@ class VAE(pl.LightningModule):
 
         # Loss params
         self.loss_type = loss_type
-        self.weights_type = weights_type
 
         # Learning rate params
         self.config_scheduler = lr_scheduler
         self.set_lr = set_lr
 
-        # KLD loss params
-        self.KLD_weight = KLD_weight
-
         # these are used to monitor the training losses for the *EPOCH*
         self.total_train_step_losses = 0
         self.recon_step_losses = 0
-        self.KLD_step_losses = 0
+        self.quantized_step_losses = 0
         self.num_batches = 0
 
         self.monitor = "epoch_val_loss"
@@ -153,18 +145,23 @@ class VAE(pl.LightningModule):
             self.compressed_size,
         )
 
-        # Latent space construction layer
-        self.encoder_to_latent = nn.Sequential(
-            nn.Conv2d(
-                final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
-            ),
-            nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
+        self.quantize = VectorQuantizer(
+            n_e=num_classes,
+            e_dim=latent_dim,
+            beta=beta,
+            legacy=False,
         )
 
-        # Latent space to decoder layer
-        self.latent_to_decoder = nn.Sequential(
+        self.quant_conv = nn.Sequential(
+            nn.Conv2d(final_channels, latent_dim, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(latent_dim, latent_dim, 1),
+        )
+
+        self.post_quant_conv = nn.Sequential(
             nn.Conv2d(latent_dim, latent_dim, kernel_size=1, stride=1),
-            nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
+            torch.nn.Conv2d(
+                latent_dim, final_channels, kernel_size=3, stride=1, padding=1
+            ),
         )
 
         # Decoder
@@ -181,120 +178,26 @@ class VAE(pl.LightningModule):
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
 
-    def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Takes the data and encodes it into the latent space,
-        by returning the mean and log variance
+    def encode(self, data):
+        h = self.encoder(data)
+        h = self.quant_conv(h)
+        quant, emb_loss, info = self.quantize(h)
+        return quant, emb_loss, info
 
-        Parameters
-        ----------
-        data : torch.Tensor
-            Data in the shape of (batch, channel, height, width)
+    def encode_to_prequant(self, x):
+        h = self.encoder(x)
+        h = self.quant_conv(h)
+        return h
 
-        Returns
-        -------
-        List[Tuple[torch.Tensor, torch.Tensor]]
-            Return the mean and log variance of the latent space
-        """
+    def decode(self, quant):
+        quant = self.post_quant_conv(quant)
+        dec = self.decoder(quant)
+        return dec
 
-        data = self.encoder(data)
-
-        data = self.encoder_to_latent(data)
-
-        moments = DiagonalGaussianDistribution(data)
-
-        return moments
-
-    def decode(self, latents: torch.Tensor) -> torch.Tensor:
-        """
-        Decodes the latent space back into the original data
-
-        Parameters
-        ----------
-        latents : torch.Tensor
-            latents in the shape of (batch, channel, height, width)
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the reconstructed data
-        """
-
-        latents = self.latent_to_decoder(latents)
-
-        latents = self.decoder(latents)
-        return latents
-
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        """
-        Reparametarization trick that allows for the flow of gradients through the
-        non-random process. Check out the paper for more details:
-        https://arxiv.org/abs/1312.6114
-
-        Parameters
-        ----------
-        mu : torch.Tensor
-            A tensor containing means of the latent space
-        logvar : torch.Tensor
-            A tensor containg the log variance of the latent space
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the latent encoding
-        """
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-
-    def get_weights(self, ground_truth: torch.Tensor, scale: str) -> torch.Tensor:
-        """
-        A function that calculates weights for the reconstruction loss based on the
-        distance between the residues in the ground truth distance map. The weights
-        are calculated based on the scale parameter.
-
-        Parameters
-        ----------
-        ground_truth : torch.Tensor
-            Input data or the ground truth distance map
-        scale : str
-            A string that determines how the weights will be calculated. The options
-            are "linear", "reciprocal", and "equal"
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the weights for the reconstruction loss
-
-        Raises
-        ------
-        ValueError
-            If the scale parameter is not one of the three options
-        """
-        #! not sure linear is correct rn
-        if scale == "linear":
-            max_distance = ground_truth.max()
-            min_distance = ground_truth.min()
-            weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
-            weights = weights / weights.sum()
-            return weights
-        # Reciprocal of the distance between the two residues is taken as the weight
-        elif scale == "reciprocal":
-            # Handling division by zero
-            nonzero_indices = ground_truth != 0
-            weights = torch.zeros_like(ground_truth)
-            weights[nonzero_indices] = torch.reciprocal(ground_truth[nonzero_indices])
-            weights = weights / weights.sum()
-            return weights
-        # We assign equal weight to each distance here
-        elif scale == "equal":
-            weights = torch.ones_like(ground_truth)
-            # Set diagonal elements to zero
-            weights = weights - torch.diag(torch.diag(weights))
-            weights = weights / weights.sum()
-            return weights
-        else:
-            raise ValueError(f"Variable name '{scale}' for get_weights does not exist")
+    def decode_code(self, code_b):
+        quant_b = self.quantize.embed_code(code_b)
+        dec = self.decode(quant_b)
+        return dec
 
     def gaussian_likelihood(
         self,
@@ -336,9 +239,7 @@ class VAE(pl.LightningModule):
         self,
         data_reconstructed: torch.Tensor,
         data: torch.Tensor,
-        mu: torch.Tensor,
-        logvar: torch.Tensor,
-        KLD_weight: int = None,
+        quantized_loss: torch.Tensor,
     ) -> dict:
         """
         Calculates the loss of the VAE, using the sum between the KLD loss
@@ -373,8 +274,6 @@ class VAE(pl.LightningModule):
         ValueError
             If the loss type is not mse or elbo
         """
-        if KLD_weight is None:
-            KLD_weight = float(self.KLD_weight)
 
         # Find out where 0s are in the data
         mask = (data != 0).float()
@@ -402,40 +301,16 @@ class VAE(pl.LightningModule):
         recon = recon * mask
         recon = torch.sum(recon) / torch.sum(mask)
 
-        # For more information of KLD loss check out Appendix B:
-        # https://arxiv.org/abs/1312.6114
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
-        KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+        loss = recon + quantized_loss
 
-        loss = recon + KLD_weight * KLD
+        return {"loss": loss, "recon": recon, "quantized_loss": quantized_loss}
 
-        return {"loss": loss, "recon": recon, "KLD": KLD}
-
-    def forward(
-        self,
-        data: torch.Tensor,
-    ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        """
-        Forward pass of the VAE
-
-        Parameters
-        ----------
-        data : torch.Tensor
-            Data in the shape of (batch, channel, height, width) to pass through the VAE
-
-        Returns
-        -------
-        List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
-            Returns the reconstructed data, the mean of the latent space, and the log variance
-        """
-
-        moments = self.encode(data)
-
-        latent_encoding = moments.sample()
-
-        data_reconstructed = self.decode(latent_encoding)
-
-        return data_reconstructed, moments
+    def forward(self, input, return_pred_indices=False):
+        quant, quantized_loss, (_, _, ind) = self.encode(input)
+        dec = self.decode(quant)
+        if return_pred_indices:
+            return dec, quantized_loss, ind
+        return dec, quantized_loss
 
     def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
         """
@@ -455,22 +330,27 @@ class VAE(pl.LightningModule):
         """
         data = batch
 
-        data_reconstructed, moments = self.forward(data=data)
+        data_reconstructed, quantized_loss = self.forward(input=data)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=moments.mean,
-            logvar=moments.logvar,
+            quantized_loss=quantized_loss,
         )
 
         self.total_train_step_losses += loss["loss"].item()
         self.recon_step_losses += loss["recon"].item()
-        self.KLD_step_losses += loss["KLD"].item()
+        self.quantized_step_losses += loss["quantized_loss"].item()
         self.num_batches += 1
 
         self.log("train_loss", loss["loss"], prog_bar=True, batch_size=data.size(0))
         self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=data.size(0))
+        self.log(
+            "quantized_loss",
+            loss["quantized_loss"],
+            prog_bar=True,
+            batch_size=data.size(0),
+        )
 
         return loss["loss"]
 
@@ -486,13 +366,13 @@ class VAE(pl.LightningModule):
         recon_mean = self.recon_step_losses / self.num_batches
         self.log("epoch_recon_loss", recon_mean, prog_bar=True, sync_dist=True)
 
-        KLD_mean = self.KLD_step_losses / self.num_batches
-        self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
+        quantized_mean = self.quantized_step_losses / self.num_batches
+        self.log("epoch_quantized_loss", quantized_mean, prog_bar=True, sync_dist=True)
 
         # Reset the total losses
         self.total_train_step_losses = 0
         self.recon_step_losses = 0
-        self.KLD_step_losses = 0
+        self.quantized_step_losses = 0
         self.num_batches = 0
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
@@ -515,14 +395,21 @@ class VAE(pl.LightningModule):
 
         data = batch
 
-        data_reconstructed, moments = self.forward(data=data)
+        data_reconstructed, quantized_loss = self.forward(input=data)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=moments.mean,
-            logvar=moments.logvar,
+            quantized_loss=quantized_loss,
         )
+
+        # self.log(
+        #     "epoch_recon_loss",
+        #     loss["recon"],
+        #     prog_bar=True,
+        #     sync_dist=True,
+        #     batch_size=data.size(0),
+        # )
 
         self.log(
             "epoch_val_loss",
@@ -590,7 +477,6 @@ class VAE(pl.LightningModule):
                 momentum=0.875,
                 nesterov=True,
             )
-
         elif self.optimizer == "AdamW":
             optimizer = torch.optim.AdamW(
                 optimizer_params,

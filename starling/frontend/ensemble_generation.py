@@ -12,7 +12,6 @@ from starling import utilities
 
 from starling.inference import generation
 
-
 def handle_input(user_input, 
                  invalid_sequence_action='convert',
                  output_name=None,
@@ -133,8 +132,6 @@ def handle_input(user_input,
         return sequence_dict
     else:
         raise ValueError(f"Invalid input type: {type(user_input)}. Must be str, list, or dict.")
-
-
 
 
 def check_positive_int(val):
@@ -266,9 +263,10 @@ def generate(user_input,
         to a FASTA file is passed, this is ignored. Default is None.
 
     return_data : bool
-        If True, will return the distance maps and structures (if generated)
-        as a dictionary. If False, will return None (so you need to set the
-        output_dictionary, or the analysis will be lost!). Default is True
+        If True, will return a dictionary of Ensemble objects which will
+        include structural ensembles if return_structures=True. If False, 
+        will return None (so you need to set the output_dictionary, or the 
+        analysis will be lost!). Default is True. 
 
     verbose : bool
         Whether to print verbose output. Default is False.
@@ -281,61 +279,90 @@ def generate(user_input,
         Default is True
 
     return_single_ensemble : bool
-        If True, will return a single ensemble object instead of
-        a dictionary of ensemble objects IF and only if there is
-        one sequence passed. This options is ignored if more than
-        one sequence is passed. It also defaults to off so the
-        return is always a dictionary unless you explicitly want
-        a single ensemble object. Default is False.        
+        If True, will return a single starling.structure.ensemble.Ensemble 
+        object instead of a dictionary of ensemble objects IF and only if 
+        there is one sequence passed. If this option is passed and multiple
+        sequences are passed this will throw an ValueError. Default False.
 
     Returns
     ---------------
-    dict or None: 
-        A dict with the sequence names as the key and 
-        an np.ndarray of the distance maps as the value. 
+    dict, None, or Ensemble
+        The function returns a dictionary of Ensemble objects,
+        a single Ensemble object, or a None depending on the
+        requested return information.
 
-        If return_structures=True, the dict will a key that is
-        the sequence name + '_traj' and the value will be the 
-        structure as a mdtraj.Trajectory object. 
+        The default behavior is to return a dict of Ensemble 
+        objects, which happens if return_data=True and
+        and return_single_ensemble=False.
 
-        If output_directory is not none, the output will save to 
-        the specified path.
-    '''
+        If return_data=False then None is returned.
+
+        If return_single_ensemble=True then a single Ensemble
+        object is returned.
+
+        if return_data=False and return_single_ensemble=True
+        then a ValueError exception is raised.
+
+    '''    
     # check user input, return a sequence dict. 
-    sequence_dict = handle_input(user_input, output_name=output_name)
+    _sequence_dict = handle_input(user_input, output_name=output_name)
 
-    # check no sequence too big
-    for k in sequence_dict:
-        if len(sequence_dict[k]) > 384:
-            raise ValueError(f"Sequence {k} is too long. Maximum sequence in STARLING is 384 residues.")
 
-    if verbose:
-        if len(sequence_dict) == 1:
-            print(f"[STATUS]: Generating distance maps for 1 sequence.")
+    # we do this specific sanity check EARLY so we don't silently fix what would
+    # otherwise be a faulty input
+    if return_single_ensemble and len(_sequence_dict) > 1:
+        raise ValueError(f'Error: requested single ensemble yet provided input of {len(_sequence_dict)} sequences.')
+
+    # filter out sequences that are too long (rather than erroring out)
+    sequence_dict = {}
+    removed_counter = 0    
+    for k in _sequence_dict:        
+        if len(_sequence_dict[k]) > configs.MAX_SEQUENCE_LENGTH:
+            print(f"Warning: Sequence {k} is too long; maximum sequence in STARLING is {configs.MAX_SEQUENCE_LENGTH} residues, {k} is {len(_sequence_dict[k])}. Skipping...")
+            removed_counter = removed_counter + 1 
         else:
-            print(f"[STATUS]: Generating distance maps for {len(sequence_dict)} sequences.")
+            sequence_dict[k] = _sequence_dict[k]
+    
+    if verbose:
+
+        # if we removed one sequence for being too long...
+        if removed_counter == 1:            
+            bonus_message = f'. Removed {removed_counter} sequence for being too long'
+
+        # if we removed more than one sequence for being too long....
+        elif removed_counter > 1:
+            bonus_message = f'. Removed {removed_counter} sequences for being too long'
+
+        # if we removed no sequences!
+        else:
+            bonus_message = ''
+
+        if len(sequence_dict) == 1:
+            print(f"[STATUS]: Generating distance maps for 1 sequence{bonus_message}.")
+        else:
+            print(f"[STATUS]: Generating distance maps for {len(sequence_dict)} sequences{bonus_message}.")
 
     # check various other things so we fail early. Don't
     # want to go about the entire process and then have it fail at the end.
     # check conformations
     if not check_positive_int(conformations):
-        raise ValueError("Conformations must be a positive integer.")
+        raise ValueError("Error: Conformations must be an integer greater than 0.")
     
     # check steps
     if not check_positive_int(steps):
-            raise ValueError("Steps must be an integer greater than 0.")
+            raise ValueError("Error: Steps must be an integer greater than 0.")
     
     # check batch size
     if not check_positive_int(batch_size):
-        raise ValueError("batch_size must be an integer greater than 0.")
+        raise ValueError("Error: batch_size must be an integer greater than 0.")
     
     # check number of cpus
     if not check_positive_int(num_cpus_mds):
-        raise ValueError("num_cpus_mds must be an integer greater than 0.")
+        raise ValueError("Error: num_cpus_mds must be an integer greater than 0.")
     
     # check number of independent runs of MDS
     if not check_positive_int(num_mds_init):
-        raise ValueError("num_mds_init must be an integer greater than 0.")
+        raise ValueError("Error: num_mds_init must be an integer greater than 0.")
         
     # make sure batch_size is not smaller than conformations.
     # if it is, make batch_size = conformations. 
@@ -343,53 +370,67 @@ def generate(user_input,
         batch_size = conformations
 
     # make method lowercase and then check method
-    method=method.lower()
+    method = method.lower()
     if method not in ['mds', 'gd']:
-        raise ValueError("Method must be 'mds' or 'gd'.")
+        raise ValueError("Error: Method must be 'mds' or 'gd'.")
 
     # check output_directory is a directory that exists.
     if output_directory is not None:
         if not os.path.exists(output_directory):
-            raise FileNotFoundError(f"Directory {output_directory} does not exist.")
+            raise FileNotFoundError(f"Error: Directory {output_directory} does not exist.")
 
     # check ddim is a bool
     if not isinstance(ddim, bool):
-        raise ValueError("DDIM must True or False.")
+        raise ValueError("Error: DDIM must True or False.")
 
     # check return_structures is a bool
     if not isinstance(return_structures, bool):
-        raise ValueError("return_structures must be True or False.")
+        raise ValueError("Error: return_structures must be True or False.")
 
     # check verbose is a bool
     if not isinstance(verbose, bool):
-        raise ValueError("verbose must be True or False.")
+        raise ValueError("Error: verbose must be True or False.")
 
     # check show_progress_bar
     if not isinstance(show_progress_bar, bool):
-        raise ValueError("show_progress_bar must be True or False.")
+        raise ValueError("Error: show_progress_bar must be True or False.")
 
     # check show_per_step_progress_bar
     if not isinstance(show_per_step_progress_bar, bool):
-        raise ValueError("show_per_step_progress_bar must be True or False.")
+        raise ValueError("Error: show_per_step_progress_bar must be True or False.")
+        
+    # we do this specific sanity check to make the logic later in this function easier
+    if return_single_ensemble and return_data is False:
+        raise ValueError('Error: requested single ensemble yet also did not request data to be returned.')
+    
+    if return_data is False and output_directory is None:
+        raise ValueError('Error: both no return data (return_data=False) and also did not specifiy an output_directory; this means no output will be returned/saved anywhere, which is probably not desired!')
 
-    # check device, get back torch.device
+    # check device, get back a torch.device (not a str!)
     device = utilities.check_device(device)
 
     # run the actual inference and return the results
-    return generation.generate_backend(sequence_dict,
-                                       conformations,
-                                       device,
-                                       steps,
-                                       method,
-                                       ddim,
-                                       return_structures,
-                                       batch_size,
-                                       num_cpus_mds,
-                                       num_mds_init,
-                                       output_directory,
-                                       return_data,
-                                       verbose,
-                                       show_progress_bar,
-                                       show_per_step_progress_bar,
-                                       return_single_ensemble)
+    ensemble_return =  generation.generate_backend(sequence_dict,
+                                                   conformations,
+                                                   device,
+                                                   steps,
+                                                   method,
+                                                   ddim,
+                                                   return_structures,
+                                                   batch_size,
+                                                   num_cpus_mds,
+                                                   num_mds_init,
+                                                   output_directory,
+                                                   return_data,
+                                                   verbose,
+                                                   show_progress_bar,
+                                                   show_per_step_progress_bar)
+    
+    # if this is true we KNOW there is only one Ensemble in the return dict because
+    # we previously checked for this. 
+    if return_single_ensemble:
+        return list(ensemble_return.values())[0]
+    else:
+        return ensemble_return
+
 

@@ -6,7 +6,6 @@ import torch
 import torch.optim as optim
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
-from sparrow.data.amino_acids import AA_ONE_TO_THREE
 from starling import configs
 
 import time
@@ -38,7 +37,6 @@ def get_tensor_dtype(device):
         tensor_dtype = torch.float32
     else:
         tensor_dtype = torch.float64
-
 
     return tensor_dtype
 
@@ -79,19 +77,26 @@ def compute_pairwise_distances(coords):
 
 
 def loss_function(original_distance_matrix, coords):
-    """Function to compute the loss between the original distance matrix and the computed distance matrix.
+    """
+    Function to compute the loss between the original distance 
+    matrix and the computed distance matrix.
 
     Parameters
     ----------
     original_distance_matrix : torch.Tensor
-        A tensor of shape (n, n) containing the original pairwise distances between n points.
+        A tensor of shape (n, n) containing the original pairwise 
+        distances between n points.
+
     coords : torch.Tensor
-        A tensor of shape (n, 3) containing the 3D coordinates of n points.
+        A tensor of shape (n, 3) containing the 3D coordinates 
+        of n points.
 
     Returns
     -------
     torch.Tensor
-        The mean squared error between the original and computed distance matrices, considering only the upper triangle.
+        The mean squared error between the original and computed 
+        distance matrices, considering only the upper triangle.
+
     """
     computed_distances = compute_pairwise_distances(coords)
 
@@ -111,12 +116,13 @@ def loss_function(original_distance_matrix, coords):
 
 
 def create_incremental_coordinates(n_points, distance, device):
-    
-
+    """
+    TO DO: Add docstring
+    """
     
     coordinates = torch.zeros((n_points, 3), dtype=get_tensor_dtype(device), device=device)
-    # Start the first coordinate at (0, 0, 0)
 
+    # Start the first coordinate at (0, 0, 0)
     for i in range(1, n_points):
         # Generate a random direction vector
         direction = torch.randn(3, dtype=get_tensor_dtype(device), device=device)
@@ -135,17 +141,31 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
     Generate 3D coordinates from a distance matrix using
     multidimensional scaling (MDS).
 
+    NB: by default the MDS object is initialized with
+    the following defaults, although these can be overridden
+    by passing them in the kwargs:
+
+    n_components = 3
+    dissimilarity = "precomputed"
+    n_init = configs.DEFAULT_MDS_NUM_INIT  (default setting)
+    n_jobs = configs.DEFAULT_CPU_COUNT_MDS (default setting)
+    normalized_stress = 'auto'
+
     Parameters
     ----------
     distance_matrix : torch.Tensor
         A 2D tensor representing the distance matrix.
+
     kwargs : dict
-        Keyword arguments to pass to scikit-learn's MDS algorithm.
+        Keyword arguments to pass to scikit-learn's MDS 
+        algorithm.
 
     Returns
     -------
     torch.Tensor
-        A 3D tensor representing the coordinates of the atoms.
+        A 3D tensor representing the coordinates of the 
+        atoms.
+
     """
     
     # Set the default values for n_init and n_jobs if not provided in kwargs
@@ -179,18 +199,24 @@ def distance_matrix_to_3d_structure_gd(
     device="cuda:0",
     verbose=True,
 ):
-    """Function to reconstruct a 3D structure from a distance matrix using gradient descent.
+    """
+    Function to reconstruct a 3D structure from a 
+    distance matrix using gradient descent.
 
     Parameters
     ----------
     original_distance_matrix : torch.Tensor or numpy.ndarray
         The original distance matrix.
+
     num_iterations : int, optional
         Number of iterations for gradient descent, by default 5000.
+
     learning_rate : float, optional
         Learning rate for the optimizer, by default 1e-3.
+
     device : str, optional
         Device to which tensors are moved, by default "cuda:0".
+        
     verbose : bool, optional
         Whether to print progress, by default True.
 
@@ -198,7 +224,6 @@ def distance_matrix_to_3d_structure_gd(
     -------
     numpy.ndarray
         The reconstructed 3D coordinates.
-
 
     NB: As of Nov 2024, Apple MPS does not support float64 tensors, so we cast
     tensors to float32 in the case of MPS being used. Note that this is actually
@@ -241,9 +266,44 @@ def distance_matrix_to_3d_structure_gd(
     return coords.detach().cpu().numpy()
 
 
-def compare_distance_matrices(original_distance_matrix, coords):
+def compare_distance_matrices(original_distance_matrix, coords, return_abs_diff=True):
+    """
+    Function to compare the original distance matrix with the 
+    computed distance matrix.
+
+    Parameters
+    ----------
+    original_distance_matrix : np.ndarray
+        The original distance matrix.
+
+    coords : np.ndarray
+        The computed 3D coordinates.
+
+    return_abs_diff : bool
+        Whether to return the absolute difference between the 
+        original and computed distance matrices, or the signed
+        difference (original - computed), by default True.
+
+    Returns 
+    -------
+    tuple (np.ndarray, np.ndarray)
+        [0] - The distance matrix computed from the 3D coordinates.
+        [1] - The absolute difference between the original and computed 
+              distance matrices.
+    """
+
+    # compute the redundant inter-residue distance map based on the
+    # passed coordinates
     computed_distance_matrix = distance_matrix(coords, coords)
-    difference_matrix = np.abs(original_distance_matrix - computed_distance_matrix)
+
+    # calculate the difference between the original distance map and the distance map
+    # derived from the input 3D structure    
+    difference_matrix = original_distance_matrix - computed_distance_matrix
+
+    if return_abs_diff:
+        difference_matrix = np.abs(difference_matrix)
+
+    # return the computed distance matrix and the difference matrix
     return computed_distance_matrix, difference_matrix
 
 
@@ -251,23 +311,34 @@ def create_ca_topology_from_coords(sequence, coords):
     """
     Creates a CA backbone topology from a protein sequence and 3D coordinates.
 
-    Parameters:
-    - sequence (str): Protein sequence as a string of amino acid single-letter codes.
-    - coords (np.ndarray): 3D coordinates for each CA atom.
+    Parameters
+    ----------
+    sequence : str
+        Protein sequence as a string of amino acid single-letter codes.
 
-    Returns:
-    - traj (md.Trajectory): MDTraj trajectory object containing the CA backbone topology and coordinates.
+    coords : np.ndarray
+        3D coordinates for each CA atom.
+
+    Returns
+    ----------
+    md.Trajectory
+         MDTraj trajectory object containing the CA backbone topology and coordinates.
     """
+
     # Create an empty topology
     topology = md.Topology()
 
     # Add a chain to the topology
     chain = topology.add_chain()
 
-    # Add residues and CA atoms to the topology
+    # -- topology construction loop    
+
     for i, res in enumerate(sequence):
-        # Add a residue
-        res_three_letter = AA_ONE_TO_THREE[res]
+        try:
+            res_three_letter = configs.AA_ONE_TO_THREE[res]
+        except KeyError:
+            raise ValueError(f"Invalid amino acid: {res}")
+
         residue = topology.add_residue(res_three_letter, chain)
         # residue = topology.add_residue(res, chain)
 
@@ -277,6 +348,8 @@ def create_ca_topology_from_coords(sequence, coords):
         # Connect the CA atom to the previous CA atom (if not the first residue)
         if i > 0:
             topology.add_bond(topology.atom(i - 1), ca_atom)
+
+    # --- end of topology construction loop
 
     # Ensure the coordinates are in the right shape (1, num_atoms, 3)
     if coords.ndim != 3:
@@ -295,10 +368,16 @@ def create_ca_topology_from_coords(sequence, coords):
 # Function to save the MDTraj trajectory to a specified file
 def save_trajectory(traj, filename):
     """
-    Saves the MDTraj trajectory to a specified file.
+    Saves the MDTraj trajectory to a specified file. This invokes
+    the trak.save() method of the MDTraj trajectory object.
 
-    Parameters:
-    - traj (md.Trajectory): The MDTraj trajectory object to save.
-    - filename (str): The name of the file to save the trajectory to.
+    Parameters
+    -----------
+    traj : md.Trajectory
+        The MDTraj trajectory object to save.
+
+    filename : str
+        The name of the file to save the trajectory .
     """
+
     traj.save(filename)

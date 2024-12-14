@@ -74,14 +74,13 @@ def generate_backend(sequence_dict,
                      return_data,
                      verbose,
                      show_progress_bar,
-                     show_per_step_progress_bar,
-                     return_single_ensemble,
+                     show_per_step_progress_bar,                     
                      model_manager=model_manager):
 
     """
     Backend function for generating the distance maps using STARLING.
 
-    NOTE - this function does not sanity checking; to actually perform
+    NOTE - this function does VERY littel sanity checking; to actually perform
     predictions use starling.frontend.ensemble_generation. This is NOT
     a user facing function!
 
@@ -142,14 +141,6 @@ def generate_backend(sequence_dict,
 
     show_per_step_progress_bar : bool, optional
         whether to show progress bar per step. 
-
-    return_single_ensemble : bool
-        If True, will return a single ensemble object instead of
-        a dictionary of ensemble objects IF and only if there is
-        one sequence passed. This options is ignored if more than
-        one sequence is passed. It also defaults to off so the
-        return is always a dictionary unless you explicitly want
-        a single ensemble object.
         
     model_manager : ModelManager
         A ModelManager object to manage loaded models.
@@ -165,18 +156,14 @@ def generate_backend(sequence_dict,
     ---------------
     dict or None: 
         A dict with the sequence names as the key and 
-        an np.ndarray of the distance maps as the value. 
-
-        If return_structures=True, the dict will a key that is
-        the sequence name + '_traj' and the value will be the 
-        structure as a mdtraj.Trajectory object. 
+        a starling.ensembl.Ensemble objects for each
+        sequence as values.
 
         If output_directory is not none, the output will save to 
         the specified path.
     """
 
     overall_start_time = time.time()
-
 
     # get models. This will only load once even if we call this 
     # function multiple times. 
@@ -211,7 +198,7 @@ def generate_backend(sequence_dict,
         starling_dm = []
     
         # get sequence
-        sequence=sequence_dict[seq_name]
+        sequence = sequence_dict[seq_name]
     
         # iterate over batches for actual DDIM sampling
         for batch in range(num_batches):
@@ -257,11 +244,10 @@ def generate_backend(sequence_dict,
 
         # we initialize this to 0 and will update as needed (or not)
         end_time_structure_generation = time.time()
+
         if return_structures:
-
-            start_time_structure_generation = time.time()                
+            
             if method=='gd':
-
                 coordinates = (
                     np.array(
                         [
@@ -276,7 +262,8 @@ def generate_backend(sequence_dict,
                         ]
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
-                )                 
+                )
+
             elif method=='mds':                
                 coordinates = (
                     np.array(
@@ -291,11 +278,9 @@ def generate_backend(sequence_dict,
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
                 )
-                
-                
+                                
             else:
                 raise NotImplementedError("Method not implemented! We shouldn't have gotten this far.")
-
             
             # make traj as an sstrajectory object and extract out the ssprotein object
             ssprotein = SSTrajectory(TRJ=create_ca_topology_from_coords(sequence, coordinates)).proteinTrajectoryList[0]
@@ -309,8 +294,9 @@ def generate_backend(sequence_dict,
         # pull the distance maps out of the tensor and convert to numpy
         final_distance_maps = sym_distance_maps.detach().cpu().numpy()
 
-        # create ensemble object. Note if ssprotein is None this is expected
-        # and will initialize the ensemble without structures
+        # create Ensemble object. Note if the ssprotein argument is None 
+        # this is expected and will initialize the ensemble without 
+        # structures
         E = Ensemble(final_distance_maps, sequence, ssprot_ensemble=ssprotein)
 
         # if we are saving things, save as we progress through so we generate 
@@ -339,7 +325,7 @@ def generate_backend(sequence_dict,
         
         # if not, force cleanup of things to save memory
         else:            
-            del E
+            del E            
             del final_distance_maps            
             gc.collect()
 
@@ -387,13 +373,6 @@ def generate_backend(sequence_dict,
         print('STARLING predictions completed at:', formatted_datetime)
         print('')
 
-    # if we are not saving, return the output_dict if possible, otherwise just skip (don't error)
-    if return_single_ensemble and return_data:
-        if len(sequence_dict) == 1:
-            return E
-        if verbose:
-            print('Warning: return_single_ensemble is set to True but more than one sequence was passed. Returning dictionary of ensembles.')
-    
     return output_dict
 
 
