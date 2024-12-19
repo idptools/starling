@@ -212,23 +212,23 @@ def main():
         )
 
         ## Calculate potential energy
-        #recon_energy_data = zip(
+        # recon_energy_data = zip(
         #    recon_dm, [data["seq"] for _ in range(recon_dm.shape[0])]
-        #)
-        #ground_truth_energy_data = zip(
+        # )
+        # ground_truth_energy_data = zip(
         #    data["dm"], [data["seq"] for _ in range(recon_dm.shape[0])]
-        #)
+        # )
 
         ## Run the calculations in parallel
-        #recon_results = pool.map(finches_potential_energy, recon_energy_data)
-        #ground_truth_results = pool.map(
+        # recon_results = pool.map(finches_potential_energy, recon_energy_data)
+        # ground_truth_results = pool.map(
         #    finches_potential_energy, ground_truth_energy_data
-        #)
+        # )
 
-        #recon_interaction_energy, recon_harmonic_energy, _ = zip(*recon_results)
-        #ground_truth_interaction_energy, ground_truth_harmonic_energy, _ = zip(
+        # recon_interaction_energy, recon_harmonic_energy, _ = zip(*recon_results)
+        # ground_truth_interaction_energy, ground_truth_harmonic_energy, _ = zip(
         #    *ground_truth_results
-        #)
+        # )
 
         sequence_stats["mse"] = round(all_mse.mean(), 4)
         sequence_stats["std_mse"] = round(all_mse.std(), 4)
@@ -239,12 +239,12 @@ def main():
         sequence_stats["max_bond_mse"] = round(bonds_mse.max(), 4)
 
         ## Positive difference means the model is generating distance maps that are less stable
-        #difference = list(recon_interaction_energy) - np.array(
+        # difference = list(recon_interaction_energy) - np.array(
         #    ground_truth_interaction_energy
-        #)
+        # )
 
-        #sequence_stats["Potential_energy_abe"] = round(difference.mean(), 4)
-        #sequence_stats["Max_potential_energy_abe"] = round(difference.max(), 4)
+        # sequence_stats["Potential_energy_abe"] = round(difference.mean(), 4)
+        # sequence_stats["Max_potential_energy_abe"] = round(difference.max(), 4)
 
         sequence_stats["Sequence Length"] = mask[0].diagonal(offset=1).sum() + 1
 

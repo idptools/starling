@@ -15,6 +15,41 @@ from tqdm import tqdm
 from starling.models.vqvae import VQVAE
 
 
+def track_codebook_usage(encoder_outputs, codebook_vectors):
+    """
+    Tracks the utilization of codebook entries during training.
+
+    Args:
+        encoder_outputs (torch.Tensor): The output of the encoder before quantization.
+                                        Shape: (batch_size, num_latents, latent_dim)
+        codebook_vectors (torch.Tensor): The learnable codebook vectors.
+                                         Shape: (num_codebook_entries, latent_dim)
+
+    Returns:
+        usage_counts (np.ndarray): Count of how many times each codebook entry was selected.
+    """
+    # Compute distances to all codebook entries
+
+    # Shape: (batch_size, num_latents, num_codebook_entries)
+    distances = torch.cdist(encoder_outputs.view(-1, 1), codebook_vectors)
+
+    # Find the closest codebook entry for each encoder output
+    # Shape: (batch_size, num_latents)
+    closest_codebook_indices = torch.argmin(distances, dim=-1)
+
+    # Count how many times each codebook entry is used
+    num_codebook_entries = codebook_vectors.shape[0]
+    usage_counts = (
+        torch.bincount(
+            closest_codebook_indices.view(-1), minlength=num_codebook_entries
+        )
+        .cpu()
+        .numpy()
+    )
+
+    return usage_counts
+
+
 def int_to_seq(int_seq):
     """
     Convert an integer sequence to a string sequence.
@@ -59,25 +94,6 @@ def symmetrize(dm):
     return dm
 
 
-def finches_potential_energy(data):
-    mpipi = Mpipi_model()
-    interaction_energy = 0
-    dm = data[0]
-    seq = data[1]
-    bonds = np.diagonal(dm, offset=1)
-    harmonic_energy = harmonic(bonds).sum()
-    sequence = list(seq)
-    for num, residue in enumerate(sequence):
-        for next_residue in range(2, len(sequence[num:])):
-            residue_interaction = mpipi.compute_full_Mpipi(
-                residue,
-                sequence[num + next_residue],
-                dm[num, num + next_residue],
-            )
-            interaction_energy += residue_interaction
-    return interaction_energy, harmonic_energy, interaction_energy + harmonic_energy
-
-
 def load_hdf5_compressed(file_path, keys_to_load=None):
     """
     Loads data from an HDF5 file.
@@ -99,11 +115,14 @@ def load_hdf5_compressed(file_path, keys_to_load=None):
     return data_dict
 
 
-def reconstruct(model, distance_maps):
-    recon_dm, _ = model(distance_maps)
-    recon_dm = recon_dm.detach().cpu().numpy().squeeze()
-
-    return recon_dm
+def get_codebook_usage(model, distance_maps):
+    encoder_outputs = model.encode_to_prequant(distance_maps)
+    codebook_vectors = model.quantize.embedding.weight
+    usage_counts = track_codebook_usage(encoder_outputs, codebook_vectors)
+    total_entries = len(usage_counts)
+    used_entries = np.count_nonzero(usage_counts)
+    utilization_percentage = (used_entries / total_entries) * 100
+    return utilization_percentage
 
 
 def get_errors(recon_dm, dm, mask):
@@ -184,7 +203,7 @@ def main():
 
         for batch in range(num_batches):
             recon_dm.append(
-                reconstruct(
+                get_codebook_usage(
                     vae,
                     ground_truth_dm[batch * args.batch : (batch + 1) * args.batch].to(
                         args.device
@@ -194,7 +213,7 @@ def main():
 
         if remaining_samples > 0:
             recon_dm.append(
-                reconstruct(
+                get_codebook_usage(
                     vae,
                     ground_truth_dm[
                         (batch + 1) * args.batch : (batch + 1) * args.batch
@@ -203,49 +222,9 @@ def main():
                 )
             )
 
-        recon_dm = np.concatenate(recon_dm, axis=0)
+        sequence_stats["usage"] = round(np.mean(recon_dm), 4)
 
         mask = data["dm"] != 0
-        mask = mask ^ np.tril(mask)
-        all_mse, bonds_mse = get_errors(
-            torch.from_numpy(recon_dm), torch.from_numpy(data["dm"]), mask
-        )
-
-        ## Calculate potential energy
-        # recon_energy_data = zip(
-        #    recon_dm, [data["seq"] for _ in range(recon_dm.shape[0])]
-        # )
-        # ground_truth_energy_data = zip(
-        #    data["dm"], [data["seq"] for _ in range(recon_dm.shape[0])]
-        # )
-
-        ## Run the calculations in parallel
-        # recon_results = pool.map(finches_potential_energy, recon_energy_data)
-        # ground_truth_results = pool.map(
-        #    finches_potential_energy, ground_truth_energy_data
-        # )
-
-        # recon_interaction_energy, recon_harmonic_energy, _ = zip(*recon_results)
-        # ground_truth_interaction_energy, ground_truth_harmonic_energy, _ = zip(
-        #    *ground_truth_results
-        # )
-
-        sequence_stats["mse"] = round(all_mse.mean(), 4)
-        sequence_stats["std_mse"] = round(all_mse.std(), 4)
-        sequence_stats["max_mse"] = round(all_mse.max(), 4)
-
-        sequence_stats["bond_mse"] = round(bonds_mse.mean(), 4)
-        sequence_stats["std_bond_mse"] = round(bonds_mse.std(), 4)
-        sequence_stats["max_bond_mse"] = round(bonds_mse.max(), 4)
-
-        ## Positive difference means the model is generating distance maps that are less stable
-        # difference = list(recon_interaction_energy) - np.array(
-        #    ground_truth_interaction_energy
-        # )
-
-        # sequence_stats["Potential_energy_abe"] = round(difference.mean(), 4)
-        # sequence_stats["Max_potential_energy_abe"] = round(difference.max(), 4)
-
         sequence_stats["Sequence Length"] = mask[0].diagonal(offset=1).sum() + 1
 
         results[path] = sequence_stats
