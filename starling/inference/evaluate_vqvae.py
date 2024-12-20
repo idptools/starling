@@ -12,7 +12,7 @@ from finches.forcefields.mpipi import Mpipi_model, harmonic
 from tabulate import tabulate
 from tqdm import tqdm
 
-from starling.models.vae import VAE
+from starling.models.vqvae import VQVAE
 
 
 def int_to_seq(int_seq):
@@ -160,8 +160,8 @@ def main():
     # Create a pool of workers
     pool = mp.Pool(num_cores)
 
-    # Load the VAE model
-    vae = VAE.load_from_checkpoint(args.vae, map_location=args.device)
+    # Load the VQVAE model
+    vae = VQVAE.load_from_checkpoint(args.vae, map_location=args.device)
 
     # Read the input file
     paths = read_input_file(args.input)
