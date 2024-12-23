@@ -10,10 +10,10 @@ from pytorch_lightning.loggers import WandbLogger
 
 from starling.data.argument_parser import get_vae_params
 from starling.data.VAE_loader import MatrixDataModule
-from starling.models.vae import VAE
+from starling.models.vqvae import VQVAE
 
 
-def train_vae():
+def train_vqvae():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -86,7 +86,7 @@ def train_vae():
 
     dataset.setup(stage="fit")
 
-    vae = VAE(**config["model"])
+    vae = VQVAE(**config["model"])
 
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
         f.write(str(vae))
@@ -103,7 +103,7 @@ def train_vae():
         num_nodes=args.num_nodes,
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor, save_last_checkpoint],
-        # gradient_clip_val=1.0,
+        gradient_clip_val=1.0,
         precision="bf16-mixed",
         logger=wandb_logger,
     )
@@ -117,4 +117,4 @@ def train_vae():
 
 
 if __name__ == "__main__":
-    train_vae()
+    train_vqvae()

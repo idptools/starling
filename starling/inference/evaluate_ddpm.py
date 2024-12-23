@@ -296,8 +296,8 @@ def main():
 
     # Load the UNet model
     UNet_model = UNetConditional(
-        in_channels=2,
-        out_channels=2,
+        in_channels=1,
+        out_channels=1,
         base=64,
         norm="group",
         blocks=[2, 2, 2],
