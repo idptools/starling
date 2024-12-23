@@ -81,10 +81,10 @@ class ResNet_Encoder(nn.Module):
                 SelfAttention(layer_in_channels[3], 8, custom=False),
             )
 
-        # Middle convolutional blocks
-        self.mid_block2 = self._make_layer(
-            self.block_type, layer_in_channels[3], 2, stride=1
-        )
+            # Middle convolutional blocks
+            self.mid_block2 = self._make_layer(
+                self.block_type, layer_in_channels[3], 2, stride=1
+            )
 
     def _make_layer(self, block, out_channels, blocks, stride=1):
         # layers = nn.ModuleList()
@@ -141,8 +141,8 @@ class ResNet_Encoder(nn.Module):
             # Attention layer (24x24)
             data = data + self.mid_attention1(data)
 
-        # Second mid block (24x24)
-        data = self.mid_block2(data)
+            # Second mid block (24x24)
+            data = self.mid_block2(data)
 
         return data
 
@@ -175,11 +175,12 @@ class ResNet_Decoder(nn.Module):
 
         # Setting up middle blocks at the most compressed layer
 
-        # Middle convolutional blocks
-        self.mid_block1 = self._make_layer(
-            self.block_type, self.in_channels, 2, stride=1
-        )
         if self.attention:
+            # Middle convolutional blocks
+            self.mid_block1 = self._make_layer(
+                self.block_type, self.in_channels, 2, stride=1
+            )
+
             # Attention layer
             self.mid_attention1 = nn.Sequential(
                 PositionalEncoding2D(self.in_channels),
@@ -265,10 +266,10 @@ class ResNet_Decoder(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, data):
-        # First mid block (24x24)
-        data = self.mid_block1(data)
-
         if self.attention:
+            # First mid block (24x24)
+            data = self.mid_block1(data)
+
             # Attention layer (24x24)
             data = data + self.mid_attention1(data)
 
