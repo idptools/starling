@@ -169,28 +169,18 @@ class VAE(pl.LightningModule):
             self.compressed_size,
         )
 
-        # # Latent space construction layer
-        # self.encoder_to_latent = nn.Sequential(
-        #     nn.Conv2d(
-        #         final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
-        #     ),
-        #     nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
-        # )
-
-        # # Latent space to decoder layer
-        # self.latent_to_decoder = nn.Sequential(
-        #     nn.Conv2d(latent_dim, latent_dim, kernel_size=1, stride=1),
-        #     nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
-        # )
-
         # Latent space construction layer
-        self.encoder_to_latent = nn.Conv2d(
-            final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
+        self.encoder_to_latent = nn.Sequential(
+            nn.Conv2d(
+                final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
+            ),
+            nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
         )
 
         # Latent space to decoder layer
-        self.latent_to_decoder = nn.Conv2d(
-            latent_dim, final_channels, kernel_size=3, stride=1, padding=1
+        self.latent_to_decoder = nn.Sequential(
+            nn.Conv2d(latent_dim, latent_dim, kernel_size=1, stride=1),
+            nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
         )
 
         # Decoder
