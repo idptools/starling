@@ -13,6 +13,7 @@ dynamic = ["version"]
 readme = "README.md"
 authors = [
     { name = "Borna Novak", email = "bnovak@wustl.edu" }
+    { name = "Jeffrey Lotthammer", email = "j.lotthammer@wustl.edu" }
 ]
 license = { text = "MIT" }
 # See https://pypi.org/classifiers/
@@ -42,6 +43,7 @@ dependencies = [
 	'hdf5plugin',
 	'mdtraj',
 	'metapredict',
+    'soursop',
     ]
 	#'finches @ git+https://git@github.com/idptools/finches@main#egg=finches',
 	#'sparrow @ git+https://git@github.com/idptools/sparrow.git@main#egg=sparrow.git']
