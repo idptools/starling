@@ -1,4 +1,5 @@
 import math
+import pdb
 from typing import List, Tuple
 
 import pytorch_lightning as pl
@@ -15,18 +16,24 @@ from torch.optim.lr_scheduler import (
 from starling.data.distributions import DiagonalGaussianDistribution
 from starling.models import vae_components
 
-
-class PrintLayer(nn.Module):
-    def __init__(self, layer_name):
-        super(PrintLayer, self).__init__()
-        self.layer_name = layer_name
-
-    def forward(self, x):
-        print(f"Intermediate output of {self.layer_name}: {x.shape}")
-        return x
-
-
 torch.set_float32_matmul_precision("high")
+
+
+class LinearKLDScheduler:
+    def __init__(self, total_steps: int, max_weight: float = 1e-4):
+        """
+        Args:
+            total_steps (int): The number of steps to reach the max weight.
+            max_weight (float): The maximum weight for the KLD term.
+        """
+        self.total_steps = total_steps
+        self.max_weight = max_weight
+
+    def get_weight(self, current_step: int) -> float:
+        """Compute the weight for the current step."""
+        if current_step >= self.total_steps:
+            return self.max_weight
+        return (self.max_weight / self.total_steps) * current_step
 
 
 class VAE(pl.LightningModule):
@@ -44,6 +51,7 @@ class VAE(pl.LightningModule):
         norm: str = "instance",
         base: int = 64,
         optimizer: str = "SGD",
+        KLD_warmup_fraction: float = 0.1,
     ) -> None:
         """
         The variational autoencoder (VAE) model that is used to learn the latent space of
@@ -123,6 +131,14 @@ class VAE(pl.LightningModule):
 
         # KLD loss params
         self.KLD_weight = KLD_weight
+        self.KLD_warmup_fraction = KLD_warmup_fraction
+
+        if self.KLD_warmup_fraction is not None:
+            # This needs to be initialized here but will be updated in on_train_start
+            self.kl_scheduler = LinearKLDScheduler(
+                total_steps=1, max_weight=self.KLD_weight
+            )
+            self.current_step = 0
 
         # these are used to monitor the training losses for the *EPOCH*
         self.total_train_step_losses = 0
@@ -338,7 +354,6 @@ class VAE(pl.LightningModule):
         data: torch.Tensor,
         mu: torch.Tensor,
         logvar: torch.Tensor,
-        KLD_weight: int = None,
     ) -> dict:
         """
         Calculates the loss of the VAE, using the sum between the KLD loss
@@ -373,8 +388,6 @@ class VAE(pl.LightningModule):
         ValueError
             If the loss type is not mse or elbo
         """
-        if KLD_weight is None:
-            KLD_weight = float(self.KLD_weight)
 
         # Find out where 0s are in the data
         mask = (data != 0).float()
@@ -406,6 +419,12 @@ class VAE(pl.LightningModule):
         # https://arxiv.org/abs/1312.6114
         KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
         KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+
+        if self.KLD_warmup_fraction is not None:
+            KLD_weight = self.kl_scheduler.get_weight(self.current_step)
+            self.current_step += 1
+        else:
+            KLD_weight = self.KLD_weight
 
         loss = recon + KLD_weight * KLD
 
@@ -471,6 +490,15 @@ class VAE(pl.LightningModule):
 
         self.log("train_loss", loss["loss"], prog_bar=True, batch_size=data.size(0))
         self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=data.size(0))
+        self.log("KLD_loss", loss["KLD"], prog_bar=False, batch_size=data.size(0))
+        self.log(
+            "KLD_weight",
+            self.kl_scheduler.get_weight(self.current_step)
+            if self.KLD_warmup_fraction is not None
+            else self.KLD_weight,
+            prog_bar=True,
+            batch_size=data.size(0),
+        )
 
         return loss["loss"]
 
@@ -690,43 +718,28 @@ class VAE(pl.LightningModule):
 
         return symmetrized_arrays
 
-    def sample(self, num_samples: int, sequence: torch.Tensor = None) -> torch.Tensor:
-        """
-        Sample from the latent space of the VAE and optionally
-        condition on a sequence
+    # def on_fit_start(self):
+    #     def init_weights(m):
+    #         if isinstance(m, (nn.Linear, nn.Conv2d)):
+    #             nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+    #             if m.bias is not None:
+    #                 nn.init.constant_(m.bias, 0)
 
-        Parameters
-        ----------
-        num_samples : int
-            Number of samples to generate
-        sequence : torch.Tensor
-            Sequence to generate distance maps for (sequence needs to be < 385), by default None
+    #     # Initialize weights for encoder and decoder
+    #     self.encoder.apply(init_weights)
+    #     self.decoder.apply(init_weights)
+    #     # Apply initialization to the encoder_to_latent and latent_to_decoder layers (as they are part of the model)
+    #     self.encoder_to_latent.apply(init_weights)
+    #     self.latent_to_decoder.apply(init_weights)
 
-        Returns
-        -------
-        torch.Tensor
-            Returns the generated distance maps
-        """
-        # If no sequence is given, generate zeroes (no conditioning)
-        if sequence is None:
-            sequence = torch.zeros(
-                (num_samples, self.hparams.dimension, self.vocab_size),
-                dtype=torch.float32,
-            ).to(self.device)
-        else:
-            sequence = [sequence] * num_samples
-        # Sample the latent encoding from N(0, I)
-        latent_samples = torch.randn(
-            num_samples, 1, int(self.compressed_size), int(self.compressed_size)
-        ).to(self.device)
+    def on_train_start(self):
+        if self.KLD_warmup_fraction is not None:
+            # Access the trainer and total steps after training starts
+            total_steps = self.trainer.estimated_stepping_batches
+            # Calculate the warm-up steps (fraction of the total steps)
+            kl_warmup_steps = int(total_steps * self.KLD_warmup_fraction)
 
-        # Decode the samples conditioned on sequence/labels
-        with torch.no_grad():
-            generated_samples = self.decode(latent_samples, sequence)
-
-        if sequence is not None:
-            sequence_length = len(sequence[0])
-            generated_samples = generated_samples[
-                :, :, :sequence_length, :sequence_length
-            ]
-        return generated_samples
+            # Initialize the KLD scheduler with warm-up steps
+            self.kl_scheduler = LinearKLDScheduler(
+                total_steps=kl_warmup_steps, max_weight=self.KLD_weight
+            )
