@@ -202,6 +202,10 @@ def main():
                     ].to(args.device),
                 )
             )
+        recon_dm = [
+            arr[np.newaxis, :, :] if arr.ndim == 2 else arr
+            for arr in recon_dm
+        ]
 
         recon_dm = np.concatenate(recon_dm, axis=0)
 
