@@ -368,7 +368,7 @@ class DiffusionModel(pl.LightningModule):
         return distance_map, latents, labels
 
     # Remove mixed precision from this function, I've experienced numerical instability here
-    @autocast(device_type='cuda', enabled=False)
+    @autocast(device_type="cuda", enabled=False)
     def q_sample(
         self, x_start: torch.Tensor, t: int, noise: torch.Tensor = None
     ) -> torch.Tensor:
@@ -652,10 +652,11 @@ class DiffusionModel(pl.LightningModule):
                 "interval": "epoch",
             }
         elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
-            warmup_steps = 1000
             num_epochs = self.trainer.max_epochs
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
+            # Warmup for 5% of the total steps
+            warmup_steps = steps_per_epoch * int(num_epochs * 0.05)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:

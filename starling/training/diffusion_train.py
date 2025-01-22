@@ -124,13 +124,13 @@ def train_model():
         num_nodes=args.num_nodes,
         max_epochs=config["training"]["num_epochs"],
         callbacks=[checkpoint_callback, lr_monitor, save_last_checkpoint],
-        gradient_clip_val=1.0,
+        gradient_clip_val=config["training"]["gradient_clip_val"],
         precision="bf16-mixed",
         logger=wandb_logger,
     )
 
     # Start training
-    trainer.fit(diffusion_model, dataset)
+    trainer.fit(diffusion_model, dataset, ckpt_path=ckpt_path)
 
     # Detach the logging on wandb
     wandb_logger.experiment.unwatch(diffusion_model)
