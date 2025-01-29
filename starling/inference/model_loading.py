@@ -32,7 +32,7 @@ class ModelManager:
         diffusion_model = DiffusionModel.load_from_checkpoint(
             ddpm_path,
             model=UNetConditional(in_channels=1, out_channels=1, base=64,
-                                  norm="group", blocks=[2, 2, 2], middle_blocks=2, labels_dim=384),
+                                  norm="group", blocks=[2, 2, 2], middle_blocks=2, labels_dim=512),
             encoder_model=encoder_model,
             map_location=device
         )
