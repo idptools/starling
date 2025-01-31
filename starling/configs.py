@@ -1,8 +1,14 @@
 import os
+import importlib.util
 
 from starling.utilities import fix_ref_to_home
 
-DEFAULT_MODEL_DIR = os.path.join("~/", ".starling_weights")
+
+
+#DEFAULT_MODEL_DIR = os.path.join("~/", ".starling_weights")
+#os.path.expanduser(os.path.join("~/", ".starling_weights"))
+
+DEFAULT_MODEL_DIR = os.path.join(os.path.expanduser(os.path.join("~/", ".starling_weights")))
 DEFAULT_ENCODE_WEIGHTS = "model-kernel-epoch=99-epoch_val_loss=1.72.ckpt"
 DEFAULT_DDPM_WEIGHTS = "model-kernel-epoch=47-epoch_val_loss=0.03.ckpt"
 DEFAULT_NUMBER_CONFS = 200
@@ -13,6 +19,38 @@ DEFAULT_STRUCTURE_GEN = "mds"
 CONVERT_ANGSTROM_TO_NM = 10
 MAX_SEQUENCE_LENGTH = 384  # set longest sequence the model can work on
 
+
+# model model-kernel-epoch=47-epoch_val_loss=0.03.ckpt has  a UNET_LABELS_DIM of 512
+# model model-kernel-epoch=47-epoch_val_loss=0.03.ckpt has a UNET_LABELS_DIM of 384
+UNET_LABELS_DIM = 512 
+
+
+
+
+# Path to user config file
+USER_CONFIG_PATH = os.path.expanduser(os.path.join("~/", ".starling_weights", "configs.py"))
+
+
+##
+## The code block below lets us over-ride default values based on the configs.py file in the 
+## ~/.starling_weights directory
+##
+
+def load_user_config():
+    """Load user configuration if the file exists and override default values."""
+    if os.path.exists(USER_CONFIG_PATH):
+        print(f'Loading configurations from {USER_CONFIG_PATH}')
+        spec = importlib.util.spec_from_file_location("user_config", USER_CONFIG_PATH)
+        user_config = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(user_config)
+
+        # Override globals with user-defined values
+        globals().update(
+            {key: value for key, value in vars(user_config).items() if not key.startswith("__")}
+        )
+
+# Load user-defined config if available
+load_user_config()
 
 ### Derived default values
 
