@@ -3,7 +3,6 @@ import time
 from datetime import datetime
 import gc
 
-
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -11,6 +10,7 @@ import torch
 from starling import configs
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
+from starling.samplers.dpm_sampler import DPMSolver
 from starling.structure.coordinates import (    
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
@@ -171,7 +171,7 @@ def generate_backend(sequence_dict,
 
     # Construct a sampler
     if ddim:
-        sampler = DDIMSampler(ddpm_model=diffusion, n_steps=steps)
+        sampler = DPMSolver(ddpm_model=diffusion, n_steps=steps)
     else:
         sampler = diffusion
 

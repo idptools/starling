@@ -114,7 +114,7 @@ class DDIMSampler(nn.Module):
         labels: torch.Tensor,
         repeat_noise: bool = False,
         temperature: float = 1.0,
-        show_per_step_progress_bar : bool = True,
+        show_per_step_progress_bar: bool = True,
     ) -> torch.Tensor:
         """
         Sample the generative process using the DDIM model.
@@ -130,8 +130,8 @@ class DDIMSampler(nn.Module):
         temperature : float, optional
             _description_, by default 1.0
         show_per_step_progress_bar : bool, optional
-            whether to show progress bar per step. 
-            
+            whether to show progress bar per step.
+
         Returns
         -------
         torch.Tensor
@@ -157,7 +157,7 @@ class DDIMSampler(nn.Module):
 
         # initialize progress bar if we want to show it
         if show_per_step_progress_bar:
-            pbar=tqdm(len(time_steps))
+            pbar = tqdm(len(time_steps))
 
         # Denoise the initial latent
         for i, step in enumerate(time_steps):
@@ -180,7 +180,7 @@ class DDIMSampler(nn.Module):
             if show_per_step_progress_bar:
                 pbar.update(1)
 
-        # if we have progress bar, close after finishing the steps. 
+        # if we have progress bar, close after finishing the steps.
         if show_per_step_progress_bar:
             pbar.close()
 
