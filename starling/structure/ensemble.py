@@ -236,7 +236,44 @@ class Ensemble:
             return np.mean(self._rg_vals)
         else:
             return self._rg_vals
-                        
+        
+
+    def local_radius_of_gyration(self, start, end, return_mean=False):
+        """
+        Return the local radius of gyration of the protein chain based on a subregion
+        of the chain.
+
+        Parameters
+        ----------
+        start : int
+            The starting residue index.
+
+        end : int
+            The ending residue index.
+
+        return_mean : bool  
+            If True, returns the mean radius of gyration of the ensemble.
+            Default is False.
+
+        Returns
+        -------
+        np.array or float
+            Array of radii of gyration for each conformation in the ensemble.
+            If return_mean is set to true returns the mean value as a float
+        """
+
+        local_rg = []
+        for d in self.__distance_maps:
+            distances = np.sum(np.square(d[start:end, start:end]))
+            rg_val = np.sqrt(distances / (2 * np.power(end-start, 2)))
+            local_rg.append(rg_val)
+        
+        local_rg = np.array(local_rg)
+
+        if return_mean:
+            return np.mean(local_rg)    
+        return local_rg
+    
 
     def build_ensemble_trajectory(self,                               
                                   method=configs.DEFAULT_STRUCTURE_GEN,
