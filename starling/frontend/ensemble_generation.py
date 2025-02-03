@@ -147,7 +147,7 @@ def check_positive_int(val):
     ---------------
     bool: True if val is a positive integer, False otherwise.
     '''
-    if isinstance(val, int):
+    if isinstance(val, (int, np.integer)):
         if val > 0:
             return True
     return False
