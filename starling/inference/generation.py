@@ -1,63 +1,45 @@
-from argparse import ArgumentParser
+import gc
+import os
+import time
+from datetime import datetime
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.spatial import distance_matrix
-from sklearn.manifold import MDS
+from soursop.sstrajectory import SSTrajectory
+from tqdm import tqdm
 
-from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNetConditional
-from starling.models.cvae import cVAE
+from starling import configs
+from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
-    compare_distance_matrices,
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
+    distance_matrix_to_3d_structure_mds,
 )
+from starling.structure.ensemble import Ensemble
 
-
-def distance_matrix_to_3d_structure(distance_matrix):
-    # Initialize MDS with 3 components (for 3D)
-    mds = MDS(n_components=3, dissimilarity="precomputed", random_state=42)
-
-    # Fit the MDS model to the distance matrix
-    coords = mds.fit_transform(distance_matrix.cpu())
-
-    return coords
-
-
-def plot_matrices(original, computed, difference, filename):
-    """Plot the original, computed, and difference matrices using imshow and save to disk."""
-    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
-
-    # Plot the original distance matrix
-    im0 = axs[0].imshow(original, cmap="viridis")
-    axs[0].set_title("Original Distance Matrix")
-    axs[0].set_xlabel("Residue Index")
-    axs[0].set_ylabel("Residue Index")
-    fig.colorbar(im0, ax=axs[0])
-
-    # Plot the computed distance matrix
-    im1 = axs[1].imshow(computed, cmap="viridis")
-    axs[1].set_title("Computed Distance Matrix (GD)")
-    axs[1].set_xlabel("Residue Index")
-    axs[1].set_ylabel("Residue Index")
-    fig.colorbar(im1, ax=axs[1])
-
-    # Plot the difference matrix
-    im2 = axs[2].imshow(difference, cmap="viridis")
-    axs[2].set_title("Difference Matrix (GD)")
-    axs[2].set_xlabel("Residue Index")
-    axs[2].set_ylabel("Residue Index")
-    fig.colorbar(im2, ax=axs[2])
-
-    # Save the plot to disk
-    plt.savefig(filename)
-    plt.close()
+# initialize model_manager singleton. This happens when this module
+# is imported to ensemble_generation, so we can use the
+# same model_manager for all calls to generate_backend.
+model_manager = ModelManager()
 
 
 def symmetrize_distance_map(dist_map):
+    """
+    Symmetrize a distance map by replacing the lower triangle with the upper triangle values.
+
+    Parameters
+    ----------
+    dist_map : torch.Tensor
+        A 2D tensor representing the distance map.
+
+    Returns
+    -------
+    torch.Tensor
+        A symmetrized distance map.
+
+    """
+
     # Ensure the distance map is 2D
     dist_map = dist_map.squeeze(0) if dist_map.dim() == 3 else dist_map
 
@@ -77,193 +59,335 @@ def symmetrize_distance_map(dist_map):
     return sym_dist_map.cpu()
 
 
-def compare_distance_matrices(original_distance_matrix, coords):
-    computed_distance_matrix = distance_matrix(coords, coords)
-    difference_matrix = np.abs(original_distance_matrix - computed_distance_matrix)
-    return computed_distance_matrix, difference_matrix
+def generate_backend(
+    sequence_dict,
+    conformations,
+    device,
+    steps,
+    method,
+    ddim,
+    return_structures,
+    batch_size,
+    num_cpus_mds,
+    num_mds_init,
+    output_directory,
+    return_data,
+    verbose,
+    show_progress_bar,
+    show_per_step_progress_bar,
+    model_manager=model_manager,
+):
+    """
+    Backend function for generating the distance maps using STARLING.
 
+    NOTE - this function does VERY littel sanity checking; to actually perform
+    predictions use starling.frontend.ensemble_generation. This is NOT
+    a user facing function!
 
-def main():
-    CONVERT_ANGSTROM_TO_NM = 10
-    parser = ArgumentParser()
-    parser.add_argument("--conformations", type=int, default=100)
-    parser.add_argument("--input", type=str)
-    parser.add_argument("--encoder", type=str, default=None)
-    parser.add_argument("--ddpm", type=str, default=None)
-    parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--steps", type=int, default=1000)
-    parser.add_argument("--method", type=str, default="mds")
-    parser.add_argument("--ddim", action="store_true")
-    parser.add_argument("--no_struct", action="store_true")
-    parser.add_argument("--batch", type=int, default=100)
+    Parameters
+    ---------------
+    sequence_dict : dict
+        A dictionary with the sequence names as the key and the
+       sequences as the values. These names will be used to write
+       any output files (if writing is requested).
 
-    args = parser.parse_args()
+    ddpm : str
+        The path to the DDPM model
 
-    UNet_model = UNetConditional(
-        in_channels=1,
-        out_channels=1,
-        base=64,
-        norm="group",
-        blocks=[2, 2, 2],
-        middle_blocks=2,
-        labels_dim=384,
-    )
+    device : str
+        The device to use for predictions.
 
-    if args.encoder is not None:
-        encoder_model = cVAE.load_from_checkpoint(args.encoder, map_location=args.device)
-    else:
-        encoder_model = cVAE.load_from_checkpoint(
-            "/home/bnovak/github/starling/starling/models/trained_models/renamed_keys_model-kernel-epoch=09-epoch_val_loss=1.72.ckpt",
-            map_location=args.device,
-        )
+    steps : int
+        The number of steps to run the DDPM model.
 
-    if args.ddpm is not None:
-        diffusion = DiffusionModel.load_from_checkpoint(
-            args.ddpm,
-            model=UNet_model,
-            encoder_model=encoder_model,
-            map_location=args.device,
-        )
-    else:
-        diffusion = DiffusionModel.load_from_checkpoint(
-            "/home/bnovak/projects/test_diffusion/diffusion_testing_my_UNet_attention/model-kernel-epoch=09-epoch_val_loss=0.05.ckpt",
-            model=UNet_model,
-            encoder_model=encoder_model,
-            map_location=args.device,
-        )
+    method : str
+        The method to use for generating the 3D structure.
+
+    ddim : bool
+        Whether to use DDIM for sampling.
+
+    return_structures : bool
+        Whether to return the 3D structure.
+
+    batch_size : int
+        The batch size to use for sampling.
+
+    num_cpus_mds : int
+        The number of CPUs to use for MDS. There
+        is no point specifying more than the default
+        number of MDS runs performed (defined in configs)
+
+    output_directory : str or None
+        If None, no output is saved.
+        If not None, will save the output to the specified path.
+        This includes the distance maps and if return_structures=True,
+        the 3D structures.
+        The distance maps are saved as .npy files with the names
+        <sequence_name>_STARLING_DM.npy
+        and the structures are save with the file names
+        <sequence_name>_STARLING.xtc and <sequence_name>_STARLING.pdb.
+
+    return_data : bool
+        If True, will return the distance maps and structures (if generated)
+        as a dictionary regardless of the output_directory. If False, will
+        return None. Note the reason to set this to None is if you're
+        predicting a large set of sequences this will save memory.
+
+    verbose : bool
+        Whether to print verbose output. Default is False.
+
+    show_progress_bar : bool
+        Whether to show a progress bar. Default is True.
+
+    show_per_step_progress_bar : bool, optional
+        whether to show progress bar per step.
+
+    model_manager : ModelManager
+        A ModelManager object to manage loaded models.
+        This lets us avoid loading the model iteratively
+        when calling generate multiple times in a single
+        session. Default is model_manager, which is initialized
+        outside of this function code block. To update the path
+        to the models, update the paths in config.py, which are
+        read into the ModelManager object located the
+        model_loading.py
+
+    Returns
+    ---------------
+    dict or None:
+        A dict with the sequence names as the key and
+        a starling.ensembl.Ensemble objects for each
+        sequence as values.
+
+        If output_directory is not none, the output will save to
+        the specified path.
+    """
+
+    overall_start_time = time.time()
+
+    # get models. This will only load once even if we call this
+    # function multiple times.
+    encoder_model, diffusion = model_manager.get_models(device=device)
 
     # Construct a sampler
-    if args.ddim:
-        sampler = DDIMSampler(ddpm_model=diffusion, n_steps=args.steps)
+    if ddim:
+        sampler = DDIMSampler(ddpm_model=diffusion, n_steps=steps)
     else:
         sampler = diffusion
 
-    with open(args.input, "r") as f:
-        for line in f:
-            filename, sequence = line.strip().split("\t")
+    # get num_batchs and remaining samples
+    num_batches = conformations // batch_size
+    remaining_samples = conformations % batch_size
 
-            num_batches = args.conformations // args.batch
-            remaining_samples = args.conformations % args.batch
+    # dictionary to hold distance maps and structures if applicable.
+    output_dict = {}
 
-            starling_dm = []
+    # see if a progress bar is wanted. If it is, set it up.
+    if show_progress_bar:
+        pbar = tqdm(total=len(sequence_dict))
 
-            for batch in range(num_batches):
-                distance_maps = sampler.sample(args.batch, labels=sequence)
-                starling_dm.append(
-                    [
-                        symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                        for dm in distance_maps
-                    ]
-                )
+    # iterate over sequence_dict
+    for num, seq_name in enumerate(sequence_dict):
+        ## -----------------------------------------
+        ## Start of prediction cycle for this sequence
 
-            if remaining_samples > 0:
-                distance_maps, *_ = sampler.sample(remaining_samples, labels=sequence)
-                starling_dm.append(
-                    [
-                        symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                        for dm in distance_maps
-                    ]
-                )
-            sym_distance_maps = torch.cat(
-                [torch.stack(batch) for batch in starling_dm], dim=0
+        start_time_prediction = time.time()
+
+        # list to hold distance maps
+        starling_dm = []
+
+        # get sequence
+        sequence = sequence_dict[seq_name]
+
+        # iterate over batches for actual DDIM sampling
+        for batch in range(num_batches):
+            distance_maps = sampler.sample(
+                batch_size,
+                labels=sequence,
+                show_per_step_progress_bar=show_per_step_progress_bar,
+            )
+            starling_dm.append(
+                [
+                    symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                    for dm in distance_maps
+                ]
             )
 
-            # Initialize an empty list to store symmetrized distance maps
-            # sym_distance_maps = []
-
-            # # Iterate over each distance map
-            # for dist_map in distance_maps:
-            #     sym_dist_map = symmetrize_distance_map(
-            #         dist_map[:, : len(sequence), : len(sequence)]
-            #     )
-            #     sym_distance_maps.append(sym_dist_map)
-
-            # # Convert the list back to a tensor
-            # sym_distance_maps = torch.stack(sym_distance_maps)
-
-            if not args.no_struct:
-                if args.method == "gd":
-                    coordinates = (
-                        np.array(
-                            [
-                                distance_matrix_to_3d_structure_gd(
-                                    dist_map,
-                                    num_iterations=10000,
-                                    learning_rate=0.05,
-                                    verbose=True,
-                                )
-                                for dist_map in sym_distance_maps
-                            ]
-                        )
-                        / CONVERT_ANGSTROM_TO_NM
-                    )
-                elif args.method == "mds":
-                    # SCALE CORDINATES TO NM
-                    coordinates = (
-                        np.array(
-                            [
-                                distance_matrix_to_3d_structure(
-                                    dist_map,
-                                )
-                                for dist_map in sym_distance_maps
-                            ]
-                        )
-                        / CONVERT_ANGSTROM_TO_NM
-                    )
-                else:
-                    raise NotImplementedError("Method not implemented")
-
-                computed_distance_matrix_gd = []
-                difference_matrix_gd = []
-
-                for sym, coord in zip(sym_distance_maps, coordinates):
-                    computed_dm, difference_dm = compare_distance_matrices(
-                        sym.cpu(), coord.squeeze() * CONVERT_ANGSTROM_TO_NM
-                    )
-                    computed_distance_matrix_gd.append(computed_dm)
-                    difference_matrix_gd.append(difference_dm)
-
-                # computed_distance_matrix_gd, difference_matrix_gd = (
-                #     compare_distance_matrices(
-                #         sym_distance_maps[0].cpu(),
-                #         coordinates[0].squeeze() * CONVERT_ANGSTROM_TO_NM,
-                #     )
-                # )
-
-                # original_distance_matrix = sym_distance_maps[0].cpu()
-                # plot_matrices(
-                #     original_distance_matrix,
-                #     computed_distance_matrix_gd,
-                #     difference_matrix_gd.cpu(),
-                #     "distance_matrices.png",
-                # )
-
-                # print(
-                #     f"Min: {original_distance_matrix.min()}, Max: {original_distance_matrix.max()}"
-                # )
-                # print(f"NaN values: {torch.isnan(original_distance_matrix).any()}")
-                # print(f"Inf values: {torch.isinf(original_distance_matrix).any()}")
-                # print(
-                #     f"Symmetric: {torch.allclose(original_distance_matrix, original_distance_matrix.T)}"
-                # )
-
-                print("\nOriginal Distance Matrix")
-                print(sym_distance_maps[0].cpu())
-
-                print("\nComputed Distance Matrix (Gradient Descent):")
-                print(computed_distance_matrix_gd)
-
-                print("\nDifference Matrix (Gradient Descent):")
-                print(difference_matrix_gd)
-
-                traj = create_ca_topology_from_coords(sequence, coordinates)
-                traj.save(f"{filename}.xtc")
-                traj.save(f"{filename}.pdb")
-                np.save(f"{filename}_3D_struct_dm.npy", computed_distance_matrix_gd)
-            np.save(
-                f"{filename}_original_dm.npy", sym_distance_maps.detach().cpu().numpy()
+        # iterate over remaining samples
+        if remaining_samples > 0:
+            distance_maps = sampler.sample(
+                remaining_samples,
+                labels=sequence,
+                show_per_step_progress_bar=show_per_step_progress_bar,
+            )
+            starling_dm.append(
+                [
+                    symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                    for dm in distance_maps
+                ]
             )
 
+        # concatenate symmetrized distance maps.
+        sym_distance_maps = torch.cat(
+            [torch.stack(batch) for batch in starling_dm], dim=0
+        )
 
-if __name__ == "__main__":
-    main()
+        end_time_prediction = time.time()
+
+        ##
+        ## NB: We keep the ensemble reconstruction code here for now because
+        ## at this point the distance maps are still tensors, not np.arrays
+        ## so we avoid unnecessary conversions by using the tensor versions
+        ## here.
+        ##
+        # if return_structures is True, generate 3D structure
+
+        # set time at which we start structure generation to 0
+        start_time_structure_generation = time.time()
+
+        # we initialize this to 0 and will update as needed (or not)
+        end_time_structure_generation = time.time()
+
+        if return_structures:
+            if method == "gd":
+                coordinates = (
+                    np.array(
+                        [
+                            distance_matrix_to_3d_structure_gd(
+                                dist_map,
+                                num_iterations=10000,
+                                learning_rate=0.05,
+                                device=device,
+                                verbose=False,
+                            )
+                            for dist_map in sym_distance_maps
+                        ]
+                    )
+                    / configs.CONVERT_ANGSTROM_TO_NM
+                )
+
+            elif method == "mds":
+                coordinates = (
+                    np.array(
+                        [
+                            distance_matrix_to_3d_structure_mds(
+                                dist_map,
+                                n_jobs=num_cpus_mds,
+                                n_init=num_mds_init,
+                            )
+                            for dist_map in sym_distance_maps
+                        ]
+                    )
+                    / configs.CONVERT_ANGSTROM_TO_NM
+                )
+
+            else:
+                raise NotImplementedError(
+                    "Method not implemented! We shouldn't have gotten this far."
+                )
+
+            # make traj as an sstrajectory object and extract out the ssprotein object
+            ssprotein = SSTrajectory(
+                TRJ=create_ca_topology_from_coords(sequence, coordinates)
+            ).proteinTrajectoryList[0]
+
+            end_time_structure_generation = time.time()
+
+        # if no structures are requested, set ssprotein to None
+        else:
+            ssprotein = None
+
+        # pull the distance maps out of the tensor and convert to numpy
+        final_distance_maps = sym_distance_maps.detach().cpu().numpy()
+
+        # create Ensemble object. Note if the ssprotein argument is None
+        # this is expected and will initialize the ensemble without
+        # structures
+        E = Ensemble(final_distance_maps, sequence, ssprot_ensemble=ssprotein)
+
+        # if we are saving things, save as we progress through so we generate
+        # structures/DMs in situ
+        if output_directory is not None:
+            # num == 0 just means we are on the first sequence.
+            if verbose and num == 0:
+                print(f"Saving results to: {os.path.abspath(output_directory)}")
+
+            # if we're saving structures do that first;
+            if return_structures:
+                # this saves both a topology (PDB) and a trajectory (XTC) file
+                E.save_trajectory(
+                    filename_prefix=os.path.join(
+                        output_directory, seq_name + "_STARLING"
+                    )
+                )
+
+            # save full ensemble
+            E.save(os.path.join(output_directory, f"{seq_name}"))
+
+        ## End of prediction cycle for this sequence
+        ## -----------------------------------------
+
+        # if we are returning data, add the data to the output_dict
+        if return_data:
+            output_dict[seq_name] = E
+
+        # if not, force cleanup of things to save memory
+        else:
+            del E
+            del final_distance_maps
+            gc.collect()
+
+        # update progress bar if we have one.
+        if show_progress_bar:
+            pbar.update(1)
+
+        if verbose:
+            elapsed_time_structure_generation = (
+                end_time_structure_generation - start_time_structure_generation
+            )
+            elapsed_time_prediction = end_time_prediction - start_time_prediction
+            total_time = elapsed_time_structure_generation + elapsed_time_prediction
+            n_conformers = len(sym_distance_maps)
+
+            print(
+                f"\n\n##### SUMMARY OF SEQUENCE PREDICTION ({num + 1}/{len(sequence_dict)}) #####"
+            )
+            print(f"Sequence name                       : {seq_name}")
+            print(f"Sequence length                     : {len(sequence)}")
+            print(f"Number of conformers                : {n_conformers}")
+            print(
+                f"Total time for prediction           : {round(elapsed_time_prediction, 2)}s ({round(100 * (elapsed_time_prediction / total_time), 2)}% of time)"
+            )
+            print(
+                f"Total time for structure generation : {round(elapsed_time_structure_generation, 2)}s ({round(100 * (elapsed_time_structure_generation / total_time), 2)}% of time)"
+            )
+            print(f"Time per conformer                  : {total_time / n_conformers}s")
+            print("\n")
+        else:
+            # changed from print to pass because if not verbose, we don't need to do anything.
+            pass
+
+    # make sure we close the progress bar if we used one
+    if show_progress_bar:
+        pbar.close()
+
+    if verbose:
+        # Convert total time to hours, minutes, and seconds
+        overall_time = time.time() - overall_start_time
+        total_hours = round(overall_time // 3600, 2)
+        total_minutes = round((overall_time % 3600) // 60, 2)
+        total_seconds = round(overall_time % 60, 2)
+        print("-------------------------------------------------------")
+        print(f"Summary of all predictions ({len(sequence_dict)} sequences)")
+        print("-------------------------------------------------------")
+        print(
+            f"\nTotal time (all sequences, all I/O) : {total_hours} hrs {total_minutes} mins {total_seconds} secs"
+        )
+
+        current_datetime = datetime.now()
+        formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")
+
+        print("STARLING predictions completed at:", formatted_datetime)
+        print("")
+
+    return output_dict

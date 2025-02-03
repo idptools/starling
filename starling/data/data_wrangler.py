@@ -1,9 +1,9 @@
-from typing import Iterator, List, Tuple
+from typing import Iterator, Tuple
 
 import h5py
+import hdf5plugin
 import numpy as np
 import pandas as pd
-from IPython import embed
 
 
 def one_hot_encode(sequences):
@@ -80,69 +80,27 @@ def MaxPad(original_array: np.array, shape: tuple) -> np.array:
     )
 
 
-# def load_hdf5_compressed(file_path, frame, keys_to_load=None):
-#     """
-#     Loads data from an HDF5 file.
-
-#     Parameters:
-#         - file_path (str): Path to the HDF5 file.
-#         - keys_to_load (list): List of keys to load. If None, loads all keys.
-#     Returns:
-#         - dict: Dictionary containing loaded data.
-#     """
-#     data_dict = {}
-#     with h5py.File(file_path, "r") as f:
-#         keys = keys_to_load if keys_to_load else f.keys()
-#         for key in keys:
-#             if key == "dm":
-#                 data_dict[key] = f[key][frame]
-#             else:
-#                 data_dict[key] = f[key][...]
-#     return data_dict
-
-
-def load_hdf5_compressed(file_path, frame, keys_to_load=None):
+def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
     """
-    Loads data from an HDF5 file.
+    Loads data from an HDF5 file, optionally for a specific frame.
 
     Parameters:
         - file_path (str): Path to the HDF5 file.
-        - keys_to_load (list): List of keys to load. If None, loads all keys.
+        - frame (int, optional): Specific frame to load from datasets. If None, loads the entire dataset.
+        - keys_to_load (list, optional): List of keys to load. If None, loads all keys.
+
     Returns:
-        - dict: Dictionary containing loaded data.
+        - dict: Dictionary containing loaded data with keys as dataset names and values as dataset contents.
     """
+    data = {}
     with h5py.File(file_path, "r") as f:
-        keys = keys_to_load if keys_to_load else f.keys()
+        keys = keys_to_load if keys_to_load else list(f.keys())
         for key in keys:
-            if key == "dm":
-                dm = f[key][frame]
+            if frame is not None and key == "dm":
+                data[key] = f[key][frame]
             else:
-                sequence = f[key][...][()].decode()
-    return dm, sequence
-
-
-# def read_tsv_file(tsv_file: str) -> List:
-#     """
-#     A function that reads the paths to distance maps from a txt file
-
-#     Parameters
-#     ----------
-#     txt_file : str
-#         A path to a tsv file containing the paths to distance maps as a first column
-#         and index of a distance map to load as a second column
-
-#     Returns
-#     -------
-#     List
-#         A list of paths to distance maps
-#     """
-#     paths = []
-#     with open(tsv_file, "r") as file:
-#         for line in file:
-#             line = line.strip()
-#             line = line.split("\t")[0:2]
-#             paths.append(line)
-#     return paths
+                data[key] = f[key][...]
+    return data
 
 
 def read_tsv_file(tsv_file: str) -> Iterator[Tuple[str, str]]:

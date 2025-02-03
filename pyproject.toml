@@ -22,9 +22,29 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 # Declare any run-time dependencies that should be installed with the package.
-#dependencies = [
-#"numpy", "h5py", "wandb"
-#]
+dependencies = [
+	'numpy',
+	'torch',
+	'scipy',
+	'cython',
+	'matplotlib',
+	'jupyter',
+	'ipython',
+	'pytorch-lightning',
+	'scikit-learn',
+	'einops',
+	'tqdm',
+	'PyYAML',
+	'h5py',
+	'pandas',
+	'pytest',
+	'protfasta',
+	'hdf5plugin',
+	'mdtraj',
+	'metapredict',
+    ]
+	#'finches @ git+https://git@github.com/idptools/finches@main#egg=finches',
+	#'sparrow @ git+https://git@github.com/idptools/sparrow.git@main#egg=sparrow.git']
 
 # Update the urls once the hosting is set up.
 #[project.urls]
@@ -35,6 +55,14 @@ requires-python = ">=3.8"
 starling-train = "starling.training.vae_train:train_vae"
 starling-sample = "starling.training.vae_generate:vae_generate"
 ae-train = "starling.training.ae_train:train_ae"
+starling = "starling.scripts.starling_main_cli:main"
+starling2xtc = "starling.scripts.starling_converter:starling2xtc"
+starling2pdb = "starling.scripts.starling_converter:starling2pdb"
+starling2numpy = "starling.scripts.starling_converter:starling2numpy"
+starling2info = "starling.scripts.starling_converter:starling2info"
+starling2sequence = "starling.scripts.starling_converter:starling2sequence"
+numpy2starling = "starling.scripts.starling_converter:numpy2starling"
+xtc2starling = "starling.scripts.starling_converter:xtc2starling"
 
 
 [project.optional-dependencies]

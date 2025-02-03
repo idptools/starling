@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
-from starling.models.cvae import cVAE
+from starling.models.vae import VAE
 from starling.samplers.ddim_sampler import DDIMSampler
 
 
@@ -175,9 +175,9 @@ def hellingers_summary(
     # Trim ground truth maps to match the size of reconstructed maps
     gt_dms_trimmed = gt_dms[:, :actual_length, :actual_length]
 
-    assert (
-        gt_dms_trimmed.shape[1:] == recon_dms.shape[1:]
-    ), "Inconsistent shapes between trimmed ground truth and reconstructed distance maps"
+    assert gt_dms_trimmed.shape[1:] == recon_dms.shape[1:], (
+        "Inconsistent shapes between trimmed ground truth and reconstructed distance maps"
+    )
 
     colors = ["#4c72b0", "#dd8452"]
 
@@ -292,7 +292,7 @@ def main():
     args = parser.parse_args()
 
     # Load the VAE model
-    vae = cVAE.load_from_checkpoint(args.vae, map_location=args.device)
+    vae = VAE.load_from_checkpoint(args.vae, map_location=args.device)
 
     # Load the UNet model
     UNet_model = UNetConditional(

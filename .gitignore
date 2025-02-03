@@ -4,6 +4,14 @@ starling/models/__pycache__/
 *cpython*
 lightning_logs/
 wandb/
+build/
+dist/
 
+*~
+
+starling/tests/test_scratch.ipynb
+
+# added to avoid local version clashes on buil
+starling/_version.py
 
 for_presentation/

@@ -1,7 +1,5 @@
 from typing import List
 
-import torch.nn.functional as F
-from IPython import embed
 from torch import nn
 
 from starling.models.blocks import (
@@ -29,6 +27,7 @@ class ResNet_Encoder(nn.Module):
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
+            "group": nn.GroupNorm,
         }
 
         # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
@@ -41,7 +40,9 @@ class ResNet_Encoder(nn.Module):
                 stride=2,
                 padding=3,
             ),
-            normalization[norm](base),
+            normalization[norm](base)
+            if norm != "group"
+            else normalization[norm](32, base),
         )
 
         self.in_channels = base
@@ -244,12 +245,11 @@ def Resnet34_Encoder(in_channels, base, norm):
     )
 
 
-def Resnet34_Decoder(out_channels, dimension, base, norm, conditional):
+def Resnet34_Decoder(out_channels, dimension, base, norm):
     return ResNet_Decoder(
         out_channels,
         num_blocks=[3, 4, 6, 3],
         dimension=dimension,
         base=base,
         norm=norm,
-        conditional=conditional,
     )

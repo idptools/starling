@@ -1,0 +1,36 @@
+data:
+  batch_size: 256
+  test_data: null
+  train_data: train_3x_data_for_jeff.csv
+  val_data: validation_3x_data_for_jeff.csv
+
+device:
+  cuda:
+  - 0
+  nodes: 1
+
+diffusion:
+  image_size: 24
+  beta_scheduler: cosine
+  timesteps: 1000
+  schedule_fn_kwargs: null
+  set_lr: 0.0001  
+  labels: learned-embeddings
+  max_seq_length: 384
+unet:
+  encoder_path: null
+  in_channels: 2
+  out_channels: 2
+  base: 64
+  norm: group
+  blocks:
+  - 2
+  - 2
+  - 2
+  middle_blocks: 2
+  labels_dim: 384
+
+training:
+  num_epochs: 50
+  output_path: training_dir
+  project_name: vista-starling-diffusion

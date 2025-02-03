@@ -1,19 +1,18 @@
-from typing import List, Tuple
+import math
 
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from IPython import embed
 from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
     CosineAnnealingWarmRestarts,
+    LambdaLR,
     OneCycleLR,
 )
 
-from starling.data.data_wrangler import one_hot_encode
-from starling.data.distributions import DiagonalGaussianDistribution
-from starling.models import resnets_original, vae_components
+from starling.models import vae_components
+from starling.models.quantize import VectorQuantizer2 as VectorQuantizer
 
 
 class PrintLayer(nn.Module):
@@ -29,26 +28,66 @@ class PrintLayer(nn.Module):
 torch.set_float32_matmul_precision("high")
 
 
-class cVAE(pl.LightningModule):
+class VQVAE(pl.LightningModule):
     def __init__(
         self,
-        model_type,
-        in_channels,
-        latent_dim,
-        dimension,
-        loss_type,
-        weights_type,
-        KLD_weight,
-        lr_scheduler,
-        set_lr,
-        labels="esm2_t6_8M_UR50D",
-        decoder_conditioning=False,
-        encoder_conditioning=True,
-        norm="instance",
-        encoder_model="modified",
-        decoder_model="modified",
-        base=64,
-    ):
+        model_type: str,
+        in_channels: int,
+        latent_dim: int,
+        dimension: int,
+        loss_type: str,
+        lr_scheduler: str,
+        set_lr: float,
+        num_classes: int = 512,
+        beta: float = 0.25,
+        norm: str = "instance",
+        base: int = 64,
+        optimizer: str = "SGD",
+    ) -> None:
+        """
+        The variational autoencoder (VAE) model that is used to learn the latent space of
+        protein distance maps. The model is based on the ResNet architecture and uses a
+        Gaussian distribution to model the latent space. The model is trained using the
+        evidence lower bound (ELBO) loss, which is a combination of the reconstruction
+        loss and the Kullback-Leibler divergence loss. The reconstruction loss can be
+        either mean squared error or negative log likelihood. The weights for the
+        reconstruction loss can be calculated based on the distance between residues in
+        the ground truth distance map. The model can be trained using different learning
+        rate schedulers and the learning rate can be set manually.
+
+        References
+        ----------
+        1) Kingma, D. P. & Welling, M. Auto-Encoding Variational Bayes. arXiv [stat.ML] (2013).
+
+        2) Rombach, R., Blattmann, A., Lorenz, D., Esser, P. & Ommer, B.
+        High-resolution image synthesis with latent diffusion models. arXiv [cs.CV] (2021).
+
+        Parameters
+        ----------
+        model_type : str
+            What ResNet architecture to use for the encoder and decoder portion of the VAE
+        in_channels : int
+            Number of input channels in the input data
+        latent_dim : int
+            The number of channels in the latent space representation of the data
+        dimension : int
+            The size of the image in the height and width dimensions (i.e., distance maps)
+        loss_type : str
+            The type of loss to use for the reconstruction loss. Options are "mse" and "nll"
+        KLD_weight : float
+            The weight to apply to the KLD loss in the ELBO loss function, KLD loss regularizes the latent space
+        lr_scheduler : str
+            The learning rate scheduler to use for training the model. Options are "CosineAnnealingWarmRestarts",
+            "OneCycleLR", and "CosineAnnealingLR"
+        set_lr : float
+            The learning rate to use for training the model
+        norm : str, optional
+            The normalization layer to use in the ResNet architecture, by default "instance"
+        base : int, optional
+            The base (starting) number of channels to use in the ResNet architecture, by default 64
+        optimizer: str, optional
+            The optimizer to use in the ResNet architecture, by default "SGD"
+        """
         super().__init__()
 
         self.save_hyperparameters()
@@ -56,89 +95,39 @@ class cVAE(pl.LightningModule):
         # Set up the ResNet Encoder and Decoder combinations
         resnets = {
             "Resnet18": {
-                "encoder": {
-                    "original": resnets_original.Resnet18_Encoder,
-                    "modified": vae_components.Resnet18_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet18_Decoder,
-                    "modified": vae_components.Resnet18_Decoder,
-                },
+                "encoder": vae_components.Resnet18_Encoder,
+                "decoder": vae_components.Resnet18_Decoder,
             },
             "Resnet34": {
-                "encoder": {
-                    "original": resnets_original.Resnet34_Encoder,
-                    "modified": vae_components.Resnet34_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet34_Decoder,
-                    "modified": vae_components.Resnet34_Decoder,
-                },
-            },
-            "Resnet50": {
-                "encoder": {
-                    "original": resnets_original.Resnet50_Encoder,
-                    # "modified": vae_components.Resnet50_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet50_Decoder,
-                    # "modified": vae_components.Resnet50_Decoder,
-                },
-            },
-            "Resnet101": {
-                "encoder": {
-                    "original": resnets_original.Resnet101_Encoder,
-                    # "modified": vae_components.Resnet101_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet101_Decoder,
-                    # "modified": vae_components.Resnet101_Decoder,
-                },
-            },
-            "Resnet152": {
-                "encoder": {
-                    "original": resnets_original.Resnet152_Encoder,
-                    # "modified": vae_components.Resnet152_Encoder,
-                },
-                "decoder": {
-                    "original": resnets_original.Resnet152_Decoder,
-                    # "modified": vae_components.Resnet152_Decoder,
-                },
+                "encoder": vae_components.Resnet34_Encoder,
+                "decoder": vae_components.Resnet34_Decoder,
             },
         }
+
+        self.optimizer = optimizer
 
         # Input dimensions
         self.dimension = dimension
 
         # Loss params
         self.loss_type = loss_type
-        self.weights_type = weights_type
 
         # Learning rate params
         self.config_scheduler = lr_scheduler
         self.set_lr = set_lr
 
-        # KLD loss params
-        self.KLD_weight = KLD_weight
-
         # these are used to monitor the training losses for the *EPOCH*
         self.total_train_step_losses = 0
         self.recon_step_losses = 0
-        self.KLD_step_losses = 0
+        self.quantized_step_losses = 0
         self.num_batches = 0
-
-        # Pick how the encoder and decoder are conditioned
-        self.labels = labels
-        self.decoder_conditioning = decoder_conditioning
-        self.encoder_conditioning = encoder_conditioning
 
         self.monitor = "epoch_val_loss"
 
         # Encoder
         encoder_chanel = in_channels
-        if self.encoder_conditioning:
-            encoder_chanel += 1
-        self.encoder = resnets[encoder_model]["encoder"][model_type](
+
+        self.encoder = resnets[model_type]["encoder"](
             in_channels=encoder_chanel, base=base, norm=norm
         )
 
@@ -156,46 +145,30 @@ class cVAE(pl.LightningModule):
             self.compressed_size,
         )
 
-        # Latent space (some parts are hard coded in - need to change this)
-        self.encoder_to_latent = nn.Sequential(
-            nn.Conv2d(
-                final_channels, 2 * latent_dim, kernel_size=3, stride=1, padding=1
-            ),
-            nn.Conv2d(2 * latent_dim, 2 * latent_dim, kernel_size=1, stride=1),
+        self.quantize = VectorQuantizer(
+            n_e=num_classes,
+            e_dim=latent_dim,
+            beta=beta,
+            legacy=False,
         )
 
-        if self.labels == "one-hot-encoding":
-            self.embeddings = nn.Linear(dimension * 21, latent_dim)
+        self.quant_conv = nn.Sequential(
+            nn.Conv2d(final_channels, latent_dim, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(latent_dim, latent_dim, 1),
+        )
 
-        # Learned encodings; alternative to one-hot-encoding
-        elif self.labels == "learned-embeddings":
-            self.seq2embedding = nn.Embedding(21, 21)
-            self.embeddings = nn.Linear(dimension * 21, latent_dim)
-
-        # If no labels are provided
-        elif self.labels is None:
-            pass
-        else:
-            raise ValueError(f"Labels of name '{self.labels}' does not exist")
-
-        # Make sure the labels are given if decoder conditioning is set to True
-        if self.labels is None and decoder_conditioning:
-            raise ValueError(
-                "Decoder conditioning is set to True but no labels are given"
-            )
-
-        # Latent space to decoder space
-        if self.labels is not None:
-            latent_dim = latent_dim + 1
-
-        self.latent_to_decoder = nn.Sequential(
+        self.post_quant_conv = nn.Sequential(
             nn.Conv2d(latent_dim, latent_dim, kernel_size=1, stride=1),
-            nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
+            torch.nn.Conv2d(
+                latent_dim, final_channels, kernel_size=3, stride=1, padding=1
+            ),
         )
 
         # Decoder
-        self.decoder = resnets[decoder_model]["decoder"][model_type](
-            out_channels=in_channels,
+        decoder_channels = in_channels
+
+        self.decoder = resnets[model_type]["decoder"](
+            out_channels=decoder_channels,
             dimension=dimension,
             base=base,
             norm=norm,
@@ -205,185 +178,26 @@ class cVAE(pl.LightningModule):
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
 
-    def encode(
-        self, data: torch.Tensor, labels: torch.Tensor
-    ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Takes the data and encodes it into the latent space,
-        by returning the mean and log variance
+    def encode(self, data):
+        h = self.encoder(data)
+        h = self.quant_conv(h)
+        quant, emb_loss, info = self.quantize(h)
+        return quant, emb_loss, info
 
-        Parameters
-        ----------
-        data : torch.Tensor
-            Data in the shape of (batch, channel, height, width)
-        labels : torch.Tensor
-            Labels to be concatenated with the data
+    def encode_to_prequant(self, x):
+        h = self.encoder(x)
+        h = self.quant_conv(h)
+        return h
 
-        Returns
-        -------
-        List[Tuple[torch.Tensor, torch.Tensor]]
-            Return the mean and log variance of the latent space
-        """
+    def decode(self, quant):
+        quant = self.post_quant_conv(quant)
+        dec = self.decoder(quant)
+        return dec
 
-        if labels is not None:
-            data = torch.cat((data, labels), dim=1)
-
-        data = self.encoder(data)
-
-        data = self.encoder_to_latent(data)
-
-        moments = DiagonalGaussianDistribution(data)
-
-        return moments
-
-    def decode(
-        self, latents: torch.Tensor, sequences: torch.Tensor = None
-    ) -> torch.Tensor:
-        """
-        Decodes the latent space back into the original data
-
-        Parameters
-        ----------
-        latents : torch.Tensor
-            latents in the shape of (batch, channel, height, width)
-        labels : torch.Tensor
-            Labels to be concatenated with the data
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the reconstructed data
-        """
-        if sequences is not None:
-            labels = self.sequence2labels(sequences)
-
-            # Concatenate the latents and the labels
-            latents = torch.cat(
-                (
-                    latents,
-                    self.embeddings(labels).view(
-                        -1, 1, int(self.compressed_size), int(self.compressed_size)
-                    ),
-                ),
-                dim=1,
-            )
-
-        # Linear layer first to get the shape of the final encoding layer
-        latents = self.latent_to_decoder(latents)
-
-        # Decode the data
-        if not self.decoder_conditioning:
-            labels = None
-
-        latents = self.decoder(latents)
-        return latents
-
-    def sequence2labels(self, sequences: List) -> torch.Tensor:
-        """
-        Converts sequences to labels based on user defined models,
-        It can either use some ESM model to generate labels, one-hot-encode,
-        or learn the embeddings.
-
-        Parameters
-        ----------
-        sequences : List
-            A list of sequences to convert to labels
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the labels for the decoder
-
-        Raises
-        ------
-        ValueError
-            If the labels are not one of the three options
-        """
-        # One-hot-encode or learn the embedding space
-        if self.labels in ["one-hot-encoding", "learned-embeddings"]:
-            # Pad the sequence with 0s these get one-hot-encoded to [1, 0, ..., 0]
-            sequences = [seq.ljust(self.dimension, "0") for seq in sequences]
-            encoded = one_hot_encode(sequences)
-            encoded = torch.from_numpy(encoded).to(self.device)
-            if self.labels == "learned-embeddings":
-                encoded = self.seq2embedding(encoded)
-        elif sequences is None:
-            return None
-        else:
-            raise ValueError(f"Labels of name '{self.labels}' does not exist")
-
-        return encoded
-
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        """
-        Reparametarization trick that allows for the flow of gradients through the
-        non-random process. Check out the paper for more details:
-        https://arxiv.org/abs/1312.6114
-
-        Parameters
-        ----------
-        mu : torch.Tensor
-            A tensor containing means of the latent space
-        logvar : torch.Tensor
-            A tensor containg the log variance of the latent space
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the latent encoding
-        """
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-
-    def get_weights(self, ground_truth: torch.Tensor, scale: str) -> torch.Tensor:
-        """
-        A function that calculates weights for the reconstruction loss based on the
-        distance between the residues in the ground truth distance map. The weights
-        are calculated based on the scale parameter.
-
-        Parameters
-        ----------
-        ground_truth : torch.Tensor
-            Input data or the ground truth distance map
-        scale : str
-            A string that determines how the weights will be calculated. The options
-            are "linear", "reciprocal", and "equal"
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the weights for the reconstruction loss
-
-        Raises
-        ------
-        ValueError
-            If the scale parameter is not one of the three options
-        """
-        #! not sure linear is correct rn
-        if scale == "linear":
-            max_distance = ground_truth.max()
-            min_distance = ground_truth.min()
-            weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
-            weights = weights / weights.sum()
-            return weights
-        # Reciprocal of the distance between the two residues is taken as the weight
-        elif scale == "reciprocal":
-            # Handling division by zero
-            nonzero_indices = ground_truth != 0
-            weights = torch.zeros_like(ground_truth)
-            weights[nonzero_indices] = torch.reciprocal(ground_truth[nonzero_indices])
-            weights = weights / weights.sum()
-            return weights
-        # We assign equal weight to each distance here
-        elif scale == "equal":
-            weights = torch.ones_like(ground_truth)
-            # Set diagonal elements to zero
-            weights = weights - torch.diag(torch.diag(weights))
-            weights = weights / weights.sum()
-            return weights
-        else:
-            raise ValueError(f"Variable name '{scale}' for get_weights does not exist")
+    def decode_code(self, code_b):
+        quant_b = self.quantize.embed_code(code_b)
+        dec = self.decode(quant_b)
+        return dec
 
     def gaussian_likelihood(
         self,
@@ -425,9 +239,7 @@ class cVAE(pl.LightningModule):
         self,
         data_reconstructed: torch.Tensor,
         data: torch.Tensor,
-        mu: torch.Tensor,
-        logvar: torch.Tensor,
-        KLD_weight: int = None,
+        quantized_loss: torch.Tensor,
     ) -> dict:
         """
         Calculates the loss of the VAE, using the sum between the KLD loss
@@ -462,8 +274,6 @@ class cVAE(pl.LightningModule):
         ValueError
             If the loss type is not mse or elbo
         """
-        if KLD_weight is None:
-            KLD_weight = float(self.KLD_weight)
 
         # Find out where 0s are in the data
         mask = (data != 0).float()
@@ -491,48 +301,16 @@ class cVAE(pl.LightningModule):
         recon = recon * mask
         recon = torch.sum(recon) / torch.sum(mask)
 
-        # For more information of KLD loss check out Appendix B:
-        # https://arxiv.org/abs/1312.6114
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
-        KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+        loss = recon + quantized_loss
 
-        loss = recon + KLD_weight * KLD
+        return {"loss": loss, "recon": recon, "quantized_loss": quantized_loss}
 
-        return {"loss": loss, "recon": recon, "KLD": KLD}
-
-    def forward(
-        self,
-        data: torch.Tensor,
-        encoder_labels: torch.Tensor = None,
-        decoder_labels: torch.Tensor = None,
-    ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        """
-        Forward pass of the VAE
-
-        Parameters
-        ----------
-        data : torch.Tensor
-            Data in the shape of (batch, channel, height, width) to pass through the VAE
-        encoder_labels : torch.Tensor, optional
-            Labels to be concatenated with the data in the encoder, if not given
-            0s will be concatenated, by default None
-        decoder_labels : torch.Tensor, optional
-            Labels to be concatenated with the data in the decoder, if not given
-            0s will be concatenated, by default None
-
-        Returns
-        -------
-        List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
-            Returns the reconstructed data, the mean of the latent space, and the log variance
-        """
-
-        moments = self.encode(data, labels=encoder_labels)
-
-        latent_encoding = moments.sample()
-
-        data_reconstructed = self.decode(latent_encoding, sequences=decoder_labels)
-
-        return data_reconstructed, moments
+    def forward(self, input, return_pred_indices=False):
+        quant, quantized_loss, (_, _, ind) = self.encode(input)
+        dec = self.decode(quant)
+        if return_pred_indices:
+            return dec, quantized_loss, ind
+        return dec, quantized_loss
 
     def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
         """
@@ -550,36 +328,29 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Total training loss of this batch
         """
-        data = batch["data"]
+        data = batch
 
-        if self.encoder_conditioning:
-            encoder_labels = batch["encoder_condition"]
-        else:
-            encoder_labels = None
-
-        if self.labels is not None:
-            decoder_labels = batch["decoder_condition"]
-        else:
-            decoder_labels = None
-
-        data_reconstructed, moments = self.forward(
-            data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
-        )
+        data_reconstructed, quantized_loss = self.forward(input=data)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=moments.mean,
-            logvar=moments.logvar,
+            quantized_loss=quantized_loss,
         )
 
         self.total_train_step_losses += loss["loss"].item()
         self.recon_step_losses += loss["recon"].item()
-        self.KLD_step_losses += loss["KLD"].item()
+        self.quantized_step_losses += loss["quantized_loss"].item()
         self.num_batches += 1
 
         self.log("train_loss", loss["loss"], prog_bar=True, batch_size=data.size(0))
         self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=data.size(0))
+        self.log(
+            "quantized_loss",
+            loss["quantized_loss"],
+            prog_bar=True,
+            batch_size=data.size(0),
+        )
 
         return loss["loss"]
 
@@ -595,13 +366,13 @@ class cVAE(pl.LightningModule):
         recon_mean = self.recon_step_losses / self.num_batches
         self.log("epoch_recon_loss", recon_mean, prog_bar=True, sync_dist=True)
 
-        KLD_mean = self.KLD_step_losses / self.num_batches
-        self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
+        quantized_mean = self.quantized_step_losses / self.num_batches
+        self.log("epoch_quantized_loss", quantized_mean, prog_bar=True, sync_dist=True)
 
         # Reset the total losses
         self.total_train_step_losses = 0
         self.recon_step_losses = 0
-        self.KLD_step_losses = 0
+        self.quantized_step_losses = 0
         self.num_batches = 0
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
@@ -621,28 +392,24 @@ class cVAE(pl.LightningModule):
         torch.Tensor
             Total validation loss of this batch
         """
-        data = batch["data"]
 
-        if self.encoder_conditioning:
-            encoder_labels = batch["encoder_condition"]
-        else:
-            encoder_labels = None
+        data = batch
 
-        if self.labels is not None:
-            decoder_labels = batch["decoder_condition"]
-        else:
-            decoder_labels = None
-
-        data_reconstructed, moments = self.forward(
-            data=data, encoder_labels=encoder_labels, decoder_labels=decoder_labels
-        )
+        data_reconstructed, quantized_loss = self.forward(input=data)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
             data=data,
-            mu=moments.mean,
-            logvar=moments.logvar,
+            quantized_loss=quantized_loss,
         )
+
+        # self.log(
+        #     "epoch_recon_loss",
+        #     loss["recon"],
+        #     prog_bar=True,
+        #     sync_dist=True,
+        #     batch_size=data.size(0),
+        # )
 
         self.log(
             "epoch_val_loss",
@@ -703,12 +470,22 @@ class cVAE(pl.LightningModule):
                 }
             )
 
-        optimizer = torch.optim.SGD(
-            optimizer_params,
-            lr=self.set_lr,
-            momentum=0.875,
-            nesterov=True,
-        )
+        if self.optimizer == "SGD":
+            optimizer = torch.optim.SGD(
+                optimizer_params,
+                lr=self.set_lr,
+                momentum=0.875,
+                nesterov=True,
+            )
+        elif self.optimizer == "AdamW":
+            optimizer = torch.optim.AdamW(
+                optimizer_params,
+                lr=self.set_lr,
+                betas=(0.9, 0.999),
+                eps=1e-08,
+            )
+        else:
+            raise NotImplementedError("Optimizer has not been implemented")
 
         if self.config_scheduler == "CosineAnnealingWarmRestarts":
             lr_scheduler = {
@@ -726,6 +503,32 @@ class cVAE(pl.LightningModule):
                     max_lr=0.01,
                     total_steps=self.trainer.estimated_stepping_batches,
                 ),
+                "monitor": self.monitor,
+                "interval": "step",
+            }
+        elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
+            num_epochs = self.trainer.max_epochs
+            total_steps = self.trainer.estimated_stepping_batches
+            steps_per_epoch = total_steps // num_epochs
+            # Warmup for 5% of the total steps
+            warmup_steps = steps_per_epoch * int(num_epochs * 0.05)
+
+            def lr_lambda(current_step):
+                if current_step < warmup_steps:
+                    # Linear warmup phase
+                    return current_step / max(1, warmup_steps)
+                else:
+                    # Cosine annealing phase
+                    eta_min = 1e-5
+                    remaining_steps = current_step - warmup_steps
+                    current_epoch = remaining_steps // steps_per_epoch
+                    cosine_factor = 0.5 * (
+                        1 + math.cos(math.pi * current_epoch / num_epochs)
+                    )
+                    return eta_min + (1 - eta_min) * cosine_factor
+
+            lr_scheduler = {
+                "scheduler": LambdaLR(optimizer, lr_lambda=lr_lambda),
                 "monitor": self.monitor,
                 "interval": "step",
             }
