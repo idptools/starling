@@ -157,6 +157,14 @@ dist_maps=generate('path/to/sequences.fasta', output_directory='path/to/output',
     - If `output_directory` is specified, results are saved to the directory.
     - If `return_data=False`, the function returns `None`.
 
+## `load_ensemble` Function Documentation
+STARLING can also easily reload previously generated and saved STARLING ensembles
+
+```python
+from starling.structure.ensemble import load_ensemble
+ensemble = load_ensemble('path/to/my_favorite_ensemble.starling')
+```
+
 # Usage from the command-line
 STARLING can also be used from the command-line using the ``starling`` command.
 
@@ -227,7 +235,7 @@ This would generate 100 conformations for the sequences in the `.fasta` file usi
 
 ### Copyright
 
-Copyright (c) 2024, Borna Novak
+Copyright (c) 2024-2025, Borna Novak, Jeffrey Lotthammer, Alex Holehouse
 
 
 #### Acknowledgements
