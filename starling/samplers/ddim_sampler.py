@@ -51,7 +51,7 @@ class DDIMSampler(nn.Module):
         # Ways to discretize the generative process
         if ddim_discretize == "uniform":
             c = self.n_steps // n_steps
-            self.ddim_time_steps = np.asarray(list(range(0, self.n_steps, c))) + 1
+            self.ddim_time_steps = np.asarray(list(range(0, self.n_steps - 1, c))) + 1
         elif ddim_discretize == "quad":
             self.ddim_time_steps = (
                 (np.linspace(0, np.sqrt(self.n_steps * 0.8), n_steps)) ** 2
