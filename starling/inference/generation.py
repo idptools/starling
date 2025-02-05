@@ -355,6 +355,7 @@ def generate_backend(
             print(f"Sequence name                       : {seq_name}")
             print(f"Sequence length                     : {len(sequence)}")
             print(f"Number of conformers                : {n_conformers}")
+            print(f"Number of steps                     : {steps}")
             print(
                 f"Total time for prediction           : {round(elapsed_time_prediction, 2)}s ({round(100 * (elapsed_time_prediction / total_time), 2)}% of time)"
             )
