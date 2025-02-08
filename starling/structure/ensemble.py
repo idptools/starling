@@ -198,6 +198,52 @@ class Ensemble:
             return np.mean(self.__distance_maps,0)
         else:
             return self.__distance_maps    
+        
+    def contact_map(self, contact_thresh=11, return_mean=False, return_summed=False):
+        """
+        Return the collection of contact maps for the ensemble.
+        Contacts are defined when residues are within a certain distance. Note
+        only one of return_mean and return_summed can be set to True. If both
+        are set to False, returns the array of instantaneous of contact maps.
+        Else returns the averaged or the sum,ed of the contact maps.
+
+        Parameters
+        ----------
+        contact_thresh : float
+            Distance threshold for defining contacts. Default is 11 
+            Angstroms.
+
+        return_mean : bool
+            If True, the average contact map will be returned, meaning
+            each element is between 0 and 1. Default is False.
+
+        return_summed : bool
+            If True, the summed contact map will be returned, meaning
+            each element is an integer. Default is False.
+
+        Returns
+        -------
+        np.array or list of np.array
+            If return_mean is set to True, returns the mean distance map,
+            otherwise returns the list of distance maps. Each distance map
+            is a 2D numpy array.
+
+        """        
+        # sanity check
+        if return_mean and return_summed:
+            raise ValueError("return_mean and return_summed cannot both be set to True")
+        
+        # get the distance maps
+        dm = self.distance_maps(return_mean=False)
+        
+        if return_mean:
+            return np.mean(np.array(dm < contact_thresh, dtype=int),0)
+
+        elif return_summed:
+            return np.sum(np.array(dm < contact_thresh, dtype=int),0)
+        else:
+            return np.array(dm < contact_thresh, dtype=int)
+            
 
 
     def radius_of_gyration(self, return_mean=False, force_recompute=False, use_slow=False):
