@@ -55,7 +55,10 @@ dependencies = [
 starling-train = "starling.training.vae_train:train_vae"
 starling-sample = "starling.training.vae_generate:vae_generate"
 ae-train = "starling.training.ae_train:train_ae"
+
 starling = "starling.scripts.starling_main_cli:main"
+starling-benchmark = "starling.scripts.starling_main_cli:starling_benchmark"
+
 starling2xtc = "starling.scripts.starling_converter:starling2xtc"
 starling2pdb = "starling.scripts.starling_converter:starling2pdb"
 starling2numpy = "starling.scripts.starling_converter:starling2numpy"

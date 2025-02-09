@@ -1,7 +1,12 @@
 import sys
 import os
+import time
+import numpy as np
+import psutil
+
 
 from argparse import ArgumentParser
+import argparse
 
 from starling. _version import __version__
 from starling import configs
@@ -115,4 +120,110 @@ def main():
         verbose=args.verbose,
         show_progress_bar=args.progress_bar,
     )
+
+
+
+#
+# BENCHMARKING CODE BELOW
+#
+
+# default sequence is alpha-synuclein
+ALPHA_SYN = "MDVFMKGLSKAKEGVVAAAEKTKQGVAEAAGKTKEGVLYVGSKTKEGVVHGVATVAEKTKEQVTNVGGAVVTGVTAVAQKTVEGAGSIAAATGFVKKDQLGKNEEGAPQEGILEDMPVDPDNEAYEMPSEEGYQDYEPEA"
+
+
+def measure_runtime(user_input,
+                    steps=25,
+                    batch_size=100,
+                    device=None,
+                    cooltime=600,
+                    single_run=0):
+    """
+    Measure runtime of Starling conformational generation for a given sequence.
+
+    Parameters
+    ----------
+    user_input : str
+        Protein sequence to process.
+
+    steps : int
+        Number of steps to run the DDPM model.
+
+    batch_size : int
+        Batch size for processing.
+
+    device : str
+        Device to run on (e.g., 'cpu', 'cuda', 'mps').
+
+    cooltime : int
+        Time to cool down the hardware after each run (default: 600 seconds).
+
+    single_run : int
+        If set means we just do a single run with the specified number of conformations,
+        otherwise we will do 10 predictions linearly spaced beteen 10 and 1000 confomers.
+    
+    """
+                    
+    
+    if single_run !=0:
+        conformations_list = [int(single_run)]
+    else:        
+        conformations_list = np.linspace(10, 1000, num=10, dtype=int)
+
+    if device is None:
+        device_name = str(check_device(device))
+    else:
+        device_name = device    
+    
+    # initialize matrices to store runtime and radius of gyration
+    runtime_matrix = np.zeros((len(conformations_list), 1))    
+    rg_matrix      = np.zeros((len(conformations_list), 1))
+    
+    # iterate over conformations and steps
+    for i, conf in enumerate(conformations_list):
+        
+        start_time = time.perf_counter()            
+        data = generate(user_input, 
+                        conformations=conf,
+                        device=device, 
+                        batch_size=batch_size, 
+                        steps=steps,
+                        verbose=True, 
+                        return_structures=False,
+                        return_single_ensemble=True)
+        end_time = time.perf_counter()
+        
+        #
+        runtime_matrix[i] = end_time - start_time
+        rg_matrix[i] = data.radius_of_gyration(return_mean=True)   
+
+        np.savetxt(f'rg_matrix_{conf}_confs_{steps}_steps_{device_name}_{batch_size}_batchsize.csv', rg_matrix, delimiter=', ')
+        np.savetxt(f'runtime_matrix_{conf}_confs_{steps}_steps_{device_name}_{batch_size}_batchsize.csv', runtime_matrix, delimiter=', ')
+        
+        # have a snoozle to cool down the hardware (could use -80 alternatively? TBD).        
+        print(len(conformations_list)-1)
+        if i != len(conformations_list)-1:
+            time.sleep(cooltime)  
+
+
+def starling_benchmark():
+
+    parser = argparse.ArgumentParser(description="Run Starling conformational generation with specified parameters.")
+    
+    parser.add_argument("--device", type=str, default=None, help="Device to run on (e.g., 'cpu', 'cuda', 'mps')")
+    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing (default: 100)")
+    parser.add_argument("--steps", type=int, default=25, help="Number of steps to run the DDPM model (default: 25)")
+    parser.add_argument("--sequence", type=str, default=ALPHA_SYN, help="Protein sequence to process. Default is alpha-synuclein.")
+    parser.add_argument("--cooltime", type=int, default=20, help="Time to cool down the hardware after each run (default: 20 seconds).")
+    parser.add_argument("--single-run", type=int, default=0, help="By default, starling-benchmark runs a series of 10 predictions for 10-1000 confomers. If you want to run a single prediction, specify the number of conformations here.")
+
+    args = parser.parse_args()    
+    
+    measure_runtime(args.sequence, 
+                    steps=args.steps, 
+                    batch_size=args.batch_size, 
+                    device=args.device, 
+                    cooltime=args.cooltime, 
+                    single_run=args.single_run)
+
+
 
