@@ -77,8 +77,6 @@ def starling2sequence():
     # Parse the command-line arguments
     args = parser.parse_args()
     
-    outname = parse_output_path(args)
-
     # build an ensemble from the starling file
     E = ensemble.load_ensemble(args.input_file)
 
@@ -90,12 +88,9 @@ def starling2info():
 
     # Add command-line arguments corresponding to the parameters of the generate function
     parser.add_argument('input_file', type=str, help="Input starling file", default=None)
-    parser.add_argument('-o', '--output', type=str, default=".", help="Directory and/or filename to save output (default: '.')")
         
     # Parse the command-line arguments
     args = parser.parse_args()
-    
-    outname = parse_output_path(args)
 
     # build an ensemble from the starling file
     E = ensemble.load_ensemble(args.input_file)
@@ -113,7 +108,38 @@ def starling2info():
     print(f"Sequence: {E.sequence}")
     print('-------------------------------')    
 
+
     
+def starling2starling():    
+    # Initialize the argument parser
+    parser = ArgumentParser(description="Convert .starling ensembles to a different .starling ensemble! Right now this is for error correction.")
+
+    # Add command-line arguments corresponding to the parameters of the generate function
+    parser.add_argument('input_file', type=str, help="Input starling file", default=None)
+    parser.add_argument('-o', '--output', type=str, default=".", help="Directory and/or filename to save output (default: '.')")
+    parser.add_argument('--error-check', action='store_true', default=False, help="If set then the we do error checking to scan the ensemble for any issues.")
+    parser.add_argument('--remove-errors', action='store_true', default=False, help="If set then the we output a new .starling file with any error-identified confomers removed.")
+    parser.add_argument('--overwrite', action='store_true', default=False, help="If set then the fixed file just overwrites the input file (including path information)...")
+        
+    # Parse the command-line arguments
+    args = parser.parse_args()
+
+    outname = parse_output_path(args)
+
+    # build an ensemble from the starling file
+    E = ensemble.load_ensemble(args.input_file)
+
+    if args.error_check:
+
+        nframes = len(E)
+        E.check_for_errors(remove_errors=args.remove_errors, verbose=True)        
+        if args.remove_errors and len(E) != nframes: 
+            if args.overwrite:                       
+                outname = args.input_file
+            else:
+                outname = "fixed_" + outname
+            E.save(outname, verbose=False)
+
 
 def numpy2starling():    
 

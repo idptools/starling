@@ -47,7 +47,7 @@ def check_file_exists(input_path):
     return os.path.exists(input_path) and os.path.isfile(input_path)
 
 
-def remove_extension(input_path):
+def remove_extension(input_path, verbose=True):
     """
     Function to remove the extension from a file.
 
@@ -55,6 +55,9 @@ def remove_extension(input_path):
     ---------------
     path : str
         The path to remove the extension from.
+
+    verbose : str
+        Define how noisy to be...
 
     Returns
     ---------------
@@ -66,10 +69,9 @@ def remove_extension(input_path):
 
     # added this in so we don't silently edit away a filename with a period
     # that would be invisible...
-    if input_path != new_filename:
-        print(
-            "Warning: removed file extension from input file name.\nWas:{input_path}\nNow:{new_filename}"
-        )
+    if verbose:
+        if input_path != new_filename:        
+            print(f"Warning: removed file extension from input file name.\nWas: {input_path}\nNow: {new_filename}")
 
     return new_filename
 
@@ -217,7 +219,7 @@ def write_starling_ensemble(
     compress=False,
     reduce_precision=None,
     compression_algorithm="lzma",
-):
+    verbose=True):
     """
     Function to write the STARLING ensemble to a file in the STARLING
     format (.starling). This is actially just a dictionary with the
@@ -249,8 +251,8 @@ def write_starling_ensemble(
         but actually 'gzip' is better if reduce_precision is False. 'lzma'
         is also slower than 'gzip'. Default is 'lzma'.
 
-
-
+    verbose : bool
+        Flag to define how noisy we should be
     """
 
     # set reduce_precision to mirror compress if not set
@@ -294,7 +296,7 @@ def write_starling_ensemble(
         save_dict["distance_maps"] = tmp
 
     # Remove the extension if it exists
-    filename = remove_extension(filename)
+    filename = remove_extension(filename, verbose=verbose)
 
     # add starling extension
     filename = filename + ".starling"
@@ -413,3 +415,97 @@ def symmetrize_distance_maps(dist_maps):
     np.einsum("nii->ni", dist_maps)[:] = 0  # Efficient diagonal zeroing
 
     return dist_maps
+
+
+def get_off_diagonals(distance_map, min_separation=1, max_separation=4, return_mean=False):
+    """
+    Function to calculate the  the off-diagonal elements of a matrix.
+    
+    This is useful for error checking as we can KNOW the max distance between
+    any pair of residues base on the contour length of the protein, allowing
+    us to identify conformations that are simply impossible.
+
+    Parameters
+    ---------------    
+    distance_map : np.ndarray
+        The distance map to check for errors.
+    
+    min_separation : int
+        The minimum sequence separation to check across.
+
+    max_separation : int
+        The maxiumum sequence separation to check across.
+
+    Returns
+    ---------------    
+    np.ndarray
+        All off-diagonal elements of the distance map from
+        min_separation to max_separation away from the true
+        diagonal.
+
+    """
+
+    # check we have a square...
+    if distance_map.shape[0] != distance_map.shape[1]:
+        raise ValueError("Input matrix must be square.")
+    
+    # get sequence length
+    n = distance_map.shape[0]
+    
+    # build a single list with all the diagonal vals
+    values = []    
+    for d in range(min_separation, max_separation + 1):
+        values.extend(distance_map.diagonal(d))  # Upper diagonals
+        values.extend(distance_map.diagonal(-d)) # Lower diagonals
+    
+    if return_mean:
+        return np.mean(values)
+    else:
+        return np.array(values)
+
+
+def check_distance_map_for_error(distance_map, min_separation=1, max_separation=2):
+    """
+    Function to check the distance map for errors.
+
+    Parameters
+    ---------------
+    distance_map : np.ndarray
+        The distance map to check for errors.
+    
+    min_separation : int
+        The minimum sequence separation to check across.
+
+    max_separation : int
+        The maxiumum sequence separation to check across.
+
+    Returns
+    ---------------
+    bool
+        Returns True if an error was detected, 
+        and False if not.
+
+    """
+
+    ij_abs = abs(max_separation-min_separation)+1
+
+    # we can KNOW the max distance any i-j residues are
+    # nb 3.81 is Mpipi bond length, but we add a +1 Angstrom to EACH
+    # bond as an error term; this likely makes the efficacy of this approach
+    # VERY poor if you have large sequence separation, but it also minimizes
+    # the risk of false positives. 
+    # changes should update this but we'll hardcode it for now...
+    max_possible_dist = 4.5*ij_abs
+
+    # get biggest distance from the set
+    max_ods = np.max(get_off_diagonals(distance_map, min_separation=min_separation,  max_separation=max_separation))
+    if max_ods > max_possible_dist:
+        return True
+    else:
+        return False
+
+
+
+
+    
+

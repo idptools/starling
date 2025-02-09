@@ -113,6 +113,67 @@ class Ensemble:
         if ssprot_ensemble is not None:
             if not isinstance(ssprot_ensemble, SSProtein):
                 raise ValueError("ssprot_ensemble must be a soursop.ssprotein.SSProtein object")
+            
+
+    def check_for_errors(self, 
+                         remove_errors=False, 
+                         verbose=True, 
+                         rebuild_trajectory=False):
+        """
+        Function which scans the ensemble and finds any frames which may be erroneous
+        based on impossible intermolecular distances.
+
+        Note if the ensemble has an SSProtein object associated with it and remove_errors
+        is set to true, this will either rebuild the trajectory object from scratch (if
+        rebuild_trajectory=True) or delete the SSProtein object (if rebuild_trajectory=False).
+
+        Parameters
+        ------------
+        remove_errors : bool
+            If set to True, the erroneous frames are removed from the ensemble.
+
+        verbose : bool
+            If set to True, the function will print out the indices of the erroneous
+            frames.
+
+        rebuild_trajectory : bool
+            If True, and if remove_errors set to True, AND if the ensemble has trajectory
+            (SSProtein) object associated with it, this will trigger the reconstruction 
+            of this trajectory object with the removed frames. If set to False, and if
+            remove_errors set to True, AND if the ensemble has a trajectory (SSProtein)
+            object associated with it, this will delete that object. 
+
+        Parameters
+        ------------
+        list 
+            List of indices of the erroneous frames (note if they have been removed)
+            these indices no longer make sense...
+        
+        """
+
+        bad_frames = []
+        for idx, distance_map in enumerate(self.__distance_maps):
+            if utilities.check_distance_map_for_error(distance_map, min_separation=1, max_separation=4):
+                bad_frames.append(idx)
+
+        if len(bad_frames) > 0:
+            if verbose:
+                print(f"Found {len(bad_frames)} bad frames: {bad_frames}")
+        
+            # remove frames and update any derived values
+            if remove_errors:
+                if verbose:
+                    print("Removing bad frames")        
+                self.__distance_maps = np.delete(self.__distance_maps, bad_frames, axis=0)
+                self._rg_vals = []
+                self.number_of_conformations = len(self.__distance_maps)
+
+                if self.__trajectory is not None:
+                    if rebuild_trajectory:
+                        # delete and zero
+                        self.build_ensemble_trajectory(force_recompute=True)
+                
+        return bad_frames
 
 
     def rij(self, i, j, return_mean=False):
@@ -458,7 +519,8 @@ class Ensemble:
              filename_prefix, 
              compress=False, 
              reduce_precision=None, 
-             compression_algorithm='lzma'):
+             compression_algorithm='lzma',
+             verbose = True):
         """
         Save the ensemble to a file in the STARLING format. Note this
         will add the .starling extension to the filename if not provided
@@ -487,12 +549,17 @@ class Ensemble:
             but actually 'gzip' is better if reduce_precision is False. 'lzma'
             is also slower than 'gzip'. Default is 'lzma'.             
 
+        verbose : bool
+            Flag to define how noisy we should be
+
+
         """
         utilities.write_starling_ensemble(self, 
                                           filename_prefix, 
                                           compress=compress, 
                                           reduce_precision=reduce_precision,
-                                          compression_algorithm=compression_algorithm)
+                                          compression_algorithm=compression_algorithm,
+                                          verbose=verbose)
     
     def save_trajectory(self, filename_prefix, pdb_trajectory=False):
         """
