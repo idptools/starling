@@ -118,6 +118,7 @@ def create_incremental_coordinates(n_points, distance, device):
 
     return torch.nn.Parameter(coordinates)
 
+
 def distance_matrix_to_3d_structure_torch_mds(
     target_distances, batch_size=100, n_iter=300, tol=1e-4, device="cuda"
 ):
@@ -134,6 +135,8 @@ def distance_matrix_to_3d_structure_torch_mds(
         X: tensor of shape (total_samples, n_points, 3)
         stress_history: tensor of shape (total_samples, n_iter)
     """
+    if isinstance(target_distances, np.ndarray):
+        target_distances = torch.from_numpy(target_distances).to(device)
     total_samples = target_distances.shape[0]
     n_points = target_distances.shape[1]
     dim = 3
@@ -151,8 +154,12 @@ def distance_matrix_to_3d_structure_torch_mds(
         X = X - X.mean(dim=1, keepdim=True)
 
         # Initialize stress tracking
-        stress_history = torch.zeros(end - start, n_iter, dtype=torch.float32, device=device)
-        old_stress = torch.full((end - start,), float("inf"), dtype=torch.float32, device=device)
+        stress_history = torch.zeros(
+            end - start, n_iter, dtype=torch.float32, device=device
+        )
+        old_stress = torch.full(
+            (end - start,), float("inf"), dtype=torch.float32, device=device
+        )
         converged = torch.zeros(end - start, dtype=torch.bool, device=device)
 
         for it in range(n_iter):
@@ -188,6 +195,7 @@ def distance_matrix_to_3d_structure_torch_mds(
     stress_final = torch.cat(stress_results, dim=0)
 
     return X_final.numpy(), stress_final.numpy()
+
 
 def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
     """
@@ -452,6 +460,8 @@ def generate_3d_coordinates_from_distances(
             / configs.CONVERT_ANGSTROM_TO_NM
         )
     else:
-        coordinates, _ =  distance_matrix_to_3d_structure_torch_mds(distance_maps,batch_size=batch_size,device=device) 
-        coordinates /=  configs.CONVERT_ANGSTROM_TO_NM
+        coordinates, _ = distance_matrix_to_3d_structure_torch_mds(
+            distance_maps, batch_size=batch_size, device=device
+        )
+        coordinates /= configs.CONVERT_ANGSTROM_TO_NM
     return coordinates
