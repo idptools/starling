@@ -22,9 +22,9 @@ class ModelManager:
         def load_from_path_or_url(path):
             if path.startswith("http"):
                 # Download from URL if not cached
-                cached_path = (
-                    torch.hub.get_dir() + "/checkpoints/" + os.path.basename(path)
-                )
+                cache_dir = torch.hub.get_dir() + "/checkpoints/"
+                os.makedirs(cache_dir, exist_ok=True)
+                cached_path = cache_dir + os.path.basename(path)
                 if not os.path.exists(cached_path):
                     torch.hub.download_url_to_file(path, cached_path)
                 return cached_path
