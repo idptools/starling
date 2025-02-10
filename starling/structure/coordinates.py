@@ -118,86 +118,76 @@ def create_incremental_coordinates(n_points, distance, device):
 
     return torch.nn.Parameter(coordinates)
 
-
 def distance_matrix_to_3d_structure_torch_mds(
-    target_distances, batch=None, n_iter=300, tol=1e-4, device="cuda"
+    target_distances, batch_size=100, n_iter=300, tol=1e-4, device="cuda"
 ):
     """
-    SMACOF implementation using PyTorch.
+    SMACOF implementation using PyTorch with support for batched processing.
 
     Args:
-        target_distances: tensor of shape (batch, n_points, n_points)
+        target_distances: tensor of shape (total_samples, n_points, n_points)
+        batch_size: size of each processing batch_size
         n_iter: maximum number of iterations
         tol: convergence tolerance
         device: computation device
     Returns:
-        X: tensor of shape (batch, n_points, 3)
-        stress_history: tensor of shape (batch, n_iter)
+        X: tensor of shape (total_samples, n_points, 3)
+        stress_history: tensor of shape (total_samples, n_iter)
     """
-    batch_size = target_distances.shape[0] if batch is None else batch
+    total_samples = target_distances.shape[0]
     n_points = target_distances.shape[1]
     dim = 3
     eps = 1e-12
 
-    # Move target distances to device and convert to float32
-    target = torch.tensor(target_distances, dtype=torch.float32, device=device)
+    X_results = []
+    stress_results = []
 
-    # Initialize random coordinates for all samples in batch
-    X = torch.randn(batch_size, n_points, dim, dtype=torch.float32, device=device)
+    for start in range(0, total_samples, batch_size):
+        end = min(start + batch_size, total_samples)
+        batch_distances = target_distances[start:end].to(device)
 
-    # Center each sample's coordinates independently
-    X = X - X.mean(dim=1, keepdim=True)
+        # Initialize random coordinates for the current batch_size
+        X = torch.randn(end - start, n_points, dim, dtype=torch.float32, device=device)
+        X = X - X.mean(dim=1, keepdim=True)
 
-    # Initialize stress tracking
-    stress_history = torch.zeros(batch_size, n_iter, dtype=torch.float32, device=device)
-    old_stress = torch.full(
-        (batch_size,), float("inf"), dtype=torch.float32, device=device
-    )
+        # Initialize stress tracking
+        stress_history = torch.zeros(end - start, n_iter, dtype=torch.float32, device=device)
+        old_stress = torch.full((end - start,), float("inf"), dtype=torch.float32, device=device)
+        converged = torch.zeros(end - start, dtype=torch.bool, device=device)
 
-    # Track convergence per sample
-    converged = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        for it in range(n_iter):
+            diff = X.unsqueeze(2) - X.unsqueeze(1)
+            D = torch.norm(diff, dim=3) + eps
 
-    for it in range(n_iter):
-        # Compute pairwise distances for all samples simultaneously
-        # Results in tensor of shape (batch, n_points, n_points)
-        diff = X.unsqueeze(2) - X.unsqueeze(
-            1
-        )  # Shape: (batch, n_points, n_points, dim)
-        D = torch.norm(diff, dim=3) + eps  # Add eps for numerical stability
+            stress = torch.sum((D - batch_distances) ** 2, dim=(1, 2))
+            stress_history[:, it] = stress
 
-        # Compute stress for each sample independently
-        stress = torch.sum((D - target) ** 2, dim=(1, 2))
-        stress_history[:, it] = stress
+            converged = converged | (torch.abs(old_stress - stress) < tol)
+            if torch.all(converged):
+                stress_history = stress_history[:, : it + 1]
+                break
 
-        # Check convergence for each sample
-        converged = converged | (torch.abs(old_stress - stress) < tol)
-        if torch.all(converged):
-            stress_history = stress_history[:, : it + 1]
-            break
+            B = torch.zeros_like(D)
+            mask = D > eps
+            B[mask] = -batch_distances[mask] / D[mask]
 
-        # Compute B matrices for all samples simultaneously
-        B = torch.zeros_like(D)
-        mask = D > eps
-        B[mask] = -target[mask] / D[mask]
+            row_sums = B.sum(dim=2)
+            B.diagonal(dim1=1, dim2=2).copy_(-row_sums)
 
-        # Set diagonal of B matrices to -row_sums
-        row_sums = B.sum(dim=2)
-        B.diagonal(dim1=1, dim2=2).copy_(-row_sums)
+            X_new = torch.bmm(B, X) / n_points
+            X[~converged] = X_new[~converged]
+            X[~converged] = X[~converged] - X[~converged].mean(dim=1, keepdim=True)
 
-        # Update configurations for non-converged samples
-        # Shape: (batch, n_points, dim)
-        X_new = torch.bmm(B, X) / n_points
+            old_stress = stress
 
-        # Only update non-converged samples
-        X[~converged] = X_new[~converged]
+        X_results.append(X.cpu())
+        stress_results.append(stress_history.cpu())
 
-        # Center each non-converged sample independently
-        X[~converged] = X[~converged] - X[~converged].mean(dim=1, keepdim=True)
+    # Concatenate all chunk results
+    X_final = torch.cat(X_results, dim=0)
+    stress_final = torch.cat(stress_results, dim=0)
 
-        old_stress = stress
-
-    return X.cpu().numpy(), stress_history.cpu().numpy()
-
+    return X_final.numpy(), stress_final.numpy()
 
 def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
     """
@@ -442,3 +432,26 @@ def save_trajectory(traj, filename):
     """
 
     traj.save(filename)
+
+
+def generate_3d_coordinates_from_distances(
+    device, batch_size, num_cpus_mds, num_mds_init, distance_maps
+):
+    if device == "cpu":
+        coordinates = (
+            np.array(
+                [
+                    distance_matrix_to_3d_structure_mds(
+                        dist_map,
+                        n_jobs=num_cpus_mds,
+                        n_init=num_mds_init,
+                    )
+                    for dist_map in distance_maps
+                ]
+            )
+            / configs.CONVERT_ANGSTROM_TO_NM
+        )
+    else:
+        coordinates, _ =  distance_matrix_to_3d_structure_torch_mds(distance_maps,batch_size=batch_size,device=device) 
+        coordinates /=  configs.CONVERT_ANGSTROM_TO_NM
+    return coordinates

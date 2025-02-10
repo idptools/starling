@@ -14,6 +14,7 @@ from starling.structure.coordinates import (
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
     distance_matrix_to_3d_structure_mds,
+    generate_3d_coordinates_from_distances,
 )
 
 
@@ -390,7 +391,7 @@ class Ensemble:
 
     def build_ensemble_trajectory(
         self,
-        method=configs.DEFAULT_STRUCTURE_GEN,
+        batch_size=100,
         num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
         num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
         device=None,
@@ -409,10 +410,6 @@ class Ensemble:
 
         Parameters
         ----------
-        method : str
-            Method to use for generating the 3D structures. Must be one
-            of 'mds' or 'gd'. Default is 'mds' (set by
-            configs.DEFAULT_STRUCTURE_GEN).
 
         num_cpus_mds : int
             The number of CPUs to use for MDS. Default is 4 (set by
@@ -454,52 +451,13 @@ class Ensemble:
 
         # if no traj yet or we're focing to recompute...
         if self.__trajectory is None or force_recompute:
-            # check method before we initialize the progress bar
-            if method not in ["mds", "gd"]:
-                raise NotImplementedError(
-                    "Method not implemented! We shouldn't have gotten this far."
-                )
-
             # initialize progress bar
             if progress_bar == True:
                 dm_generator = tqdm(self.__distance_maps)
 
-            # if we're using gradient descent
-            if method == "gd":
-                # list comprehension version
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_gd(
-                                torch.from_numpy(dist_map),
-                                num_iterations=10000,
-                                learning_rate=0.05,
-                                device=device,
-                                verbose=True,
-                            )
-                            for dist_map in dm_generator
-                        ]
-                    )
-                    / configs.CONVERT_ANGSTROM_TO_NM
-                )
-
-            # if we're using mds
-            elif method == "mds":
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_mds(
-                                torch.from_numpy(dist_map),
-                                n_jobs=num_cpus_mds,
-                                n_init=num_mds_init,
-                            )
-                            for dist_map in dm_generator
-                        ]
-                    )
-                    / configs.CONVERT_ANGSTROM_TO_NM
-                )
-            else:
-                raise Exception("Should not have gotten here. Method not implemented.")
+            coordinates = generate_3d_coordinates_from_distances(
+                device, batch_size, num_cpus_mds, num_mds_init, self.__distance_maps
+            )
 
             # make an mdtraj.Trajectory object and then use that to initailize a SOURSOP SSTrajectory object
             self.__trajectory = SSTrajectory(

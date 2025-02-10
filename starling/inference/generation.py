@@ -16,6 +16,7 @@ from starling.structure.coordinates import (
     distance_matrix_to_3d_structure_gd,
     distance_matrix_to_3d_structure_mds,
     distance_matrix_to_3d_structure_torch_mds,
+    generate_3d_coordinates_from_distances,
 )
 from starling.structure.ensemble import Ensemble
 
@@ -246,34 +247,9 @@ def generate_backend(
         end_time_structure_generation = time.time()
 
         if return_structures:
-            if device == "cpu":
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_mds(
-                                dist_map,
-                                n_jobs=num_cpus_mds,
-                                n_init=num_mds_init,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
-                    )
-                    / configs.CONVERT_ANGSTROM_TO_NM
-                )
-            else:
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_torch_mds(
-                                dist_map,
-                                batch=batch_size,
-                                device=device,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
-                    )
-                    / configs.CONVERT_ANGSTROM_TO_NM
-                )
+            coordinates = generate_3d_coordinates_from_distances(
+                device, batch_size, num_cpus_mds, num_mds_init, sym_distance_maps
+            )
 
             # make traj as an sstrajectory object and extract out the ssprotein object
             ssprotein = SSTrajectory(
