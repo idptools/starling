@@ -12,6 +12,13 @@ import warnings
 import numpy as np
 import torch
 
+# code that allows access to the data directory
+_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
+def get_data(path):
+    return os.path.join(_ROOT, "data", path)
+
 
 def fix_ref_to_home(input_path):
     """
@@ -70,8 +77,10 @@ def remove_extension(input_path, verbose=True):
     # added this in so we don't silently edit away a filename with a period
     # that would be invisible...
     if verbose:
-        if input_path != new_filename:        
-            print(f"Warning: removed file extension from input file name.\nWas: {input_path}\nNow: {new_filename}")
+        if input_path != new_filename:
+            print(
+                f"Warning: removed file extension from input file name.\nWas: {input_path}\nNow: {new_filename}"
+            )
 
     return new_filename
 
@@ -150,7 +159,7 @@ def check_device(use_device, default_device="gpu"):
             if device_index >= num_devices:
                 raise ValueError(
                     f"{cuda_str} specified, but only {num_devices} CUDA-enabled GPUs are available. "
-                    f"Valid device indices are from 0 to {num_devices-1}."
+                    f"Valid device indices are from 0 to {num_devices - 1}."
                 )
             return torch.device(cuda_str)
 
@@ -219,7 +228,8 @@ def write_starling_ensemble(
     compress=False,
     reduce_precision=None,
     compression_algorithm="lzma",
-    verbose=True):
+    verbose=True,
+):
     """
     Function to write the STARLING ensemble to a file in the STARLING
     format (.starling). This is actially just a dictionary with the
@@ -417,19 +427,21 @@ def symmetrize_distance_maps(dist_maps):
     return dist_maps
 
 
-def get_off_diagonals(distance_map, min_separation=1, max_separation=4, return_mean=False):
+def get_off_diagonals(
+    distance_map, min_separation=1, max_separation=4, return_mean=False
+):
     """
     Function to calculate the  the off-diagonal elements of a matrix.
-    
+
     This is useful for error checking as we can KNOW the max distance between
     any pair of residues base on the contour length of the protein, allowing
     us to identify conformations that are simply impossible.
 
     Parameters
-    ---------------    
+    ---------------
     distance_map : np.ndarray
         The distance map to check for errors.
-    
+
     min_separation : int
         The minimum sequence separation to check across.
 
@@ -437,7 +449,7 @@ def get_off_diagonals(distance_map, min_separation=1, max_separation=4, return_m
         The maxiumum sequence separation to check across.
 
     Returns
-    ---------------    
+    ---------------
     np.ndarray
         All off-diagonal elements of the distance map from
         min_separation to max_separation away from the true
@@ -448,16 +460,16 @@ def get_off_diagonals(distance_map, min_separation=1, max_separation=4, return_m
     # check we have a square...
     if distance_map.shape[0] != distance_map.shape[1]:
         raise ValueError("Input matrix must be square.")
-    
+
     # get sequence length
     n = distance_map.shape[0]
-    
+
     # build a single list with all the diagonal vals
-    values = []    
+    values = []
     for d in range(min_separation, max_separation + 1):
         values.extend(distance_map.diagonal(d))  # Upper diagonals
-        values.extend(distance_map.diagonal(-d)) # Lower diagonals
-    
+        values.extend(distance_map.diagonal(-d))  # Lower diagonals
+
     if return_mean:
         return np.mean(values)
     else:
@@ -472,7 +484,7 @@ def check_distance_map_for_error(distance_map, min_separation=1, max_separation=
     ---------------
     distance_map : np.ndarray
         The distance map to check for errors.
-    
+
     min_separation : int
         The minimum sequence separation to check across.
 
@@ -482,30 +494,28 @@ def check_distance_map_for_error(distance_map, min_separation=1, max_separation=
     Returns
     ---------------
     bool
-        Returns True if an error was detected, 
+        Returns True if an error was detected,
         and False if not.
 
     """
 
-    ij_abs = abs(max_separation-min_separation)+1
+    ij_abs = abs(max_separation - min_separation) + 1
 
     # we can KNOW the max distance any i-j residues are
     # nb 3.81 is Mpipi bond length, but we add a +1 Angstrom to EACH
     # bond as an error term; this likely makes the efficacy of this approach
     # VERY poor if you have large sequence separation, but it also minimizes
-    # the risk of false positives. 
+    # the risk of false positives.
     # changes should update this but we'll hardcode it for now...
-    max_possible_dist = 4.5*ij_abs
+    max_possible_dist = 4.5 * ij_abs
 
     # get biggest distance from the set
-    max_ods = np.max(get_off_diagonals(distance_map, min_separation=min_separation,  max_separation=max_separation))
+    max_ods = np.max(
+        get_off_diagonals(
+            distance_map, min_separation=min_separation, max_separation=max_separation
+        )
+    )
     if max_ods > max_possible_dist:
         return True
     else:
         return False
-
-
-
-
-    
-
