@@ -193,7 +193,6 @@ def main():
         conformations=args.conformations,
         device=args.device,
         steps=args.steps,
-        method=args.method,
         ddim=args.ddim,
         return_structures=args.return_structures,
         batch_size=args.batch_size,
