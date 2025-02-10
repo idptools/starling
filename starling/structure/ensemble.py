@@ -1,15 +1,15 @@
-import numpy as np
 from datetime import datetime
 
-from tqdm import tqdm
+import numpy as np
 import torch
-
-from soursop.sstrajectory import SSTrajectory
 from soursop.ssprotein import SSProtein
+from soursop.sstrajectory import SSTrajectory
+from tqdm import tqdm
 
-from starling import __version__
 from starling import configs, utilities
-
+from starling._version import (
+    __version__,
+)
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
@@ -20,24 +20,20 @@ from starling.structure.coordinates import (
 class Ensemble:
     """
     Class to represent an ensemble of conformations of a protein chain.
-    The ensemble is represented by a 3D np.ndarray of N distance maps, where each 
+    The ensemble is represented by a 3D np.ndarray of N distance maps, where each
     distance map is a 2D numpy array.
 
     """
 
-    
-    def __init__(self, 
-                 distance_maps, 
-                 sequence, 
-                 ssprot_ensemble=None):                 
+    def __init__(self, distance_maps, sequence, ssprot_ensemble=None):
         """
-        Initialize the ensemble with a list of distance maps and the sequence 
+        Initialize the ensemble with a list of distance maps and the sequence
         of the protein chain.
 
         Parameters
         ----------
         distance_maps : np.ndarray
-            3D Numpy array of shape (n_conformations, n_residues, n_residues). 
+            3D Numpy array of shape (n_conformations, n_residues, n_residues).
             Note this this expects symmetrized distance maps.
 
         sequence : str
@@ -55,7 +51,7 @@ class Ensemble:
         self.__distance_maps = distance_maps
         self.sequence = sequence
         self.number_of_conformations = len(distance_maps)
-        self.sequence_length = len(sequence)        
+        self.sequence_length = len(sequence)
 
         # initailize and then compute as needed
         self._rg_vals = []
@@ -65,15 +61,17 @@ class Ensemble:
         elif isinstance(ssprot_ensemble, SSProtein):
             self.__trajectory = ssprot_ensemble
         else:
-            raise TypeError('ssprot_ensemble must be a soursop.ssprotein.SSProtein object')
-        
-        
-        self.__metadata = {}
-        self.__metadata['DEFAULT_ENCODER_WEIGHTS_PATH'] = configs.DEFAULT_ENCODER_WEIGHTS_PATH
-        self.__metadata['DEFAULT_DDPM_WEIGHTS_PATH']    = configs.DEFAULT_DDPM_WEIGHTS_PATH
-        self.__metadata['VERSION']    = __version__
-        self.__metadata['DATE']       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
+            raise TypeError(
+                "ssprot_ensemble must be a soursop.ssprotein.SSProtein object"
+            )
 
+        self.__metadata = {}
+        self.__metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = (
+            configs.DEFAULT_ENCODER_WEIGHTS_PATH
+        )
+        self.__metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = configs.DEFAULT_DDPM_WEIGHTS_PATH
+        self.__metadata["VERSION"] = __version__
+        self.__metadata["DATE"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def __sanity_check_init(self, distance_maps, sequence, ssprot_ensemble):
         """
@@ -100,25 +98,34 @@ class Ensemble:
 
         if not all([isinstance(d, np.ndarray) and d.ndim == 2 for d in distance_maps]):
             raise ValueError("distance_maps must be a list of 2D numpy arrays")
-        
-        if not all([d.shape[0] == d.shape[1] and d.shape[0] == len(sequence) for d in distance_maps]):
-            raise ValueError("distance_maps must be square matrices with the same size as the sequence")
-        
+
+        if not all(
+            [
+                d.shape[0] == d.shape[1] and d.shape[0] == len(sequence)
+                for d in distance_maps
+            ]
+        ):
+            raise ValueError(
+                "distance_maps must be square matrices with the same size as the sequence"
+            )
+
         if not isinstance(sequence, str):
             raise ValueError("sequence must be a string")
-                
+
         if not all(char in configs.VALID_AA for char in sequence):
-            raise ValueError("sequence must contain only valid amino acid characters ({configs.VALID_AA})")
-        
+            raise ValueError(
+                "sequence must contain only valid amino acid characters ({configs.VALID_AA})"
+            )
+
         if ssprot_ensemble is not None:
             if not isinstance(ssprot_ensemble, SSProtein):
-                raise ValueError("ssprot_ensemble must be a soursop.ssprotein.SSProtein object")
-            
+                raise ValueError(
+                    "ssprot_ensemble must be a soursop.ssprotein.SSProtein object"
+                )
 
-    def check_for_errors(self, 
-                         remove_errors=False, 
-                         verbose=True, 
-                         rebuild_trajectory=False):
+    def check_for_errors(
+        self, remove_errors=False, verbose=True, rebuild_trajectory=False
+    ):
         """
         Function which scans the ensemble and finds any frames which may be erroneous
         based on impossible intermolecular distances.
@@ -138,33 +145,37 @@ class Ensemble:
 
         rebuild_trajectory : bool
             If True, and if remove_errors set to True, AND if the ensemble has trajectory
-            (SSProtein) object associated with it, this will trigger the reconstruction 
+            (SSProtein) object associated with it, this will trigger the reconstruction
             of this trajectory object with the removed frames. If set to False, and if
             remove_errors set to True, AND if the ensemble has a trajectory (SSProtein)
-            object associated with it, this will delete that object. 
+            object associated with it, this will delete that object.
 
         Parameters
         ------------
-        list 
+        list
             List of indices of the erroneous frames (note if they have been removed)
             these indices no longer make sense...
-        
+
         """
 
         bad_frames = []
         for idx, distance_map in enumerate(self.__distance_maps):
-            if utilities.check_distance_map_for_error(distance_map, min_separation=1, max_separation=4):
+            if utilities.check_distance_map_for_error(
+                distance_map, min_separation=1, max_separation=4
+            ):
                 bad_frames.append(idx)
 
         if len(bad_frames) > 0:
             if verbose:
                 print(f"Found {len(bad_frames)} bad frames: {bad_frames}")
-        
+
             # remove frames and update any derived values
             if remove_errors:
                 if verbose:
-                    print("Removing bad frames")        
-                self.__distance_maps = np.delete(self.__distance_maps, bad_frames, axis=0)
+                    print("Removing bad frames")
+                self.__distance_maps = np.delete(
+                    self.__distance_maps, bad_frames, axis=0
+                )
                 self._rg_vals = []
                 self.number_of_conformations = len(self.__distance_maps)
 
@@ -172,13 +183,12 @@ class Ensemble:
                     if rebuild_trajectory:
                         # delete and zero
                         self.build_ensemble_trajectory(force_recompute=True)
-                
-        return bad_frames
 
+        return bad_frames
 
     def rij(self, i, j, return_mean=False):
         """
-        Compute the distance between residues i and j for each conformation 
+        Compute the distance between residues i and j for each conformation
         in the ensemble.
 
         Parameters
@@ -192,29 +202,28 @@ class Ensemble:
         Returns
         -------
         list of float
-            List of distances between residues i and j for each conformation 
+            List of distances between residues i and j for each conformation
             in the ensemble. If return_mean is set returns the mean value.
 
-        
+
         """
         if i < 0 or i >= self.sequence_length:
             raise ValueError(f"Invalid residue index i: {i}")
-        
-        tmp =  []
+
+        tmp = []
         for d in self.__distance_maps:
             tmp.append(d[i][j])
 
-        tmp  = np.array(tmp)
+        tmp = np.array(tmp)
 
         if return_mean:
             return np.mean(tmp)
         else:
             return tmp
-            
 
     def end_to_end_distance(self, return_mean=False):
         """
-        Compute the end-to-end distance of the protein chain 
+        Compute the end-to-end distance of the protein chain
         for each conformation in the ensemble.
 
         Parameters
@@ -228,15 +237,14 @@ class Ensemble:
             List of end-to-end distances for each conformation in the ensemble.
 
         """
-        
-        tmp = self.rij(0, self.sequence_length-1)
+
+        tmp = self.rij(0, self.sequence_length - 1)
 
         if return_mean:
             return np.mean(tmp)
         else:
             return tmp
-        
-        
+
     def distance_maps(self, return_mean=False):
         """
         Return the collection of distance maps for the ensemble.
@@ -245,7 +253,7 @@ class Ensemble:
         ----------
         return_mean : bool
             If True, returns the mean distance map will be returned.
-            Default is False.   
+            Default is False.
 
         Returns
         -------
@@ -254,12 +262,12 @@ class Ensemble:
             otherwise returns the list of distance maps. Each distance map
             is a 2D numpy array.
 
-        """        
+        """
         if return_mean:
-            return np.mean(self.__distance_maps,0)
+            return np.mean(self.__distance_maps, 0)
         else:
-            return self.__distance_maps    
-        
+            return self.__distance_maps
+
     def contact_map(self, contact_thresh=11, return_mean=False, return_summed=False):
         """
         Return the collection of contact maps for the ensemble.
@@ -271,7 +279,7 @@ class Ensemble:
         Parameters
         ----------
         contact_thresh : float
-            Distance threshold for defining contacts. Default is 11 
+            Distance threshold for defining contacts. Default is 11
             Angstroms.
 
         return_mean : bool
@@ -289,25 +297,25 @@ class Ensemble:
             otherwise returns the list of distance maps. Each distance map
             is a 2D numpy array.
 
-        """        
+        """
         # sanity check
         if return_mean and return_summed:
             raise ValueError("return_mean and return_summed cannot both be set to True")
-        
+
         # get the distance maps
         dm = self.distance_maps(return_mean=False)
-        
+
         if return_mean:
-            return np.mean(np.array(dm < contact_thresh, dtype=int),0)
+            return np.mean(np.array(dm < contact_thresh, dtype=int), 0)
 
         elif return_summed:
-            return np.sum(np.array(dm < contact_thresh, dtype=int),0)
+            return np.sum(np.array(dm < contact_thresh, dtype=int), 0)
         else:
             return np.array(dm < contact_thresh, dtype=int)
-            
 
-
-    def radius_of_gyration(self, return_mean=False, force_recompute=False, use_slow=False):
+    def radius_of_gyration(
+        self, return_mean=False, force_recompute=False, use_slow=False
+    ):
         """
         Compute the radius of gyration of the protein chain
         for each conformation in the ensemble.
@@ -323,7 +331,7 @@ class Ensemble:
             uses the cached value if previously computed.
             Default is False.
 
-        
+
         Returns
         -------
         np.array or float
@@ -343,7 +351,6 @@ class Ensemble:
             return np.mean(self._rg_vals)
         else:
             return self._rg_vals
-        
 
     def local_radius_of_gyration(self, start, end, return_mean=False):
         """
@@ -358,7 +365,7 @@ class Ensemble:
         end : int
             The ending residue index.
 
-        return_mean : bool  
+        return_mean : bool
             If True, returns the mean radius of gyration of the ensemble.
             Default is False.
 
@@ -372,24 +379,24 @@ class Ensemble:
         local_rg = []
         for d in self.__distance_maps:
             distances = np.sum(np.square(d[start:end, start:end]))
-            rg_val = np.sqrt(distances / (2 * np.power(end-start, 2)))
+            rg_val = np.sqrt(distances / (2 * np.power(end - start, 2)))
             local_rg.append(rg_val)
-        
+
         local_rg = np.array(local_rg)
 
         if return_mean:
-            return np.mean(local_rg)    
+            return np.mean(local_rg)
         return local_rg
-    
 
-    def build_ensemble_trajectory(self,                               
-                                  method=configs.DEFAULT_STRUCTURE_GEN,
-                                  num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
-                                  num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
-                                  device=None,
-                                  force_recompute=False,
-                                  progress_bar=True):
-
+    def build_ensemble_trajectory(
+        self,
+        method=configs.DEFAULT_STRUCTURE_GEN,
+        num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
+        num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
+        device=None,
+        force_recompute=False,
+        progress_bar=True,
+    ):
         """
         Function that explicitly reconstructs a 3D ensemble of conformations
         using the distance maps. This happens automatically if the trajectory
@@ -404,7 +411,7 @@ class Ensemble:
         ----------
         method : str
             Method to use for generating the 3D structures. Must be one
-            of 'mds' or 'gd'. Default is 'mds' (set by 
+            of 'mds' or 'gd'. Default is 'mds' (set by
             configs.DEFAULT_STRUCTURE_GEN).
 
         num_cpus_mds : int
@@ -414,15 +421,15 @@ class Ensemble:
         num_mds_init : int
             Number of independent MDS jobs to execute. NB: if this is
             increased this in principle means there are more chances
-            of finding a good solution, but there is a performance hit 
-            unless num_cpus_mds >= num_mds_init. Default is 
+            of finding a good solution, but there is a performance hit
+            unless num_cpus_mds >= num_mds_init. Default is
             4 (set by configs.DEFAULT_MDS_NUM_INIT).
 
         device : str
             The device to use for predictions. Default is None. If None, the
             default device will be used. Default device is 'gpu'.
             This is MPS for apple silicon and CUDA for all other devices.
-            If MPS and CUDA are not available, automatically falls back to CPU.            
+            If MPS and CUDA are not available, automatically falls back to CPU.
 
         force_recompute : bool
             If True, forces recomputation of the ensemble trajectory, otherwise
@@ -430,7 +437,7 @@ class Ensemble:
             Default is False.
 
         progress_bar : bool
-            If True, displays a progress bar when generating the ensemble 
+            If True, displays a progress bar when generating the ensemble
             trajectory. Default is True.
 
         Returns
@@ -438,7 +445,7 @@ class Ensemble:
         soursop.sstrajectory.SSTrajectory
             The ensemble trajectory as a SOURSOP Trajectory object. Note that
             this object
-            
+
 
         """
 
@@ -447,19 +454,19 @@ class Ensemble:
 
         # if no traj yet or we're focing to recompute...
         if self.__trajectory is None or force_recompute:
-
             # check method before we initialize the progress bar
-            if method not in ['mds', 'gd']:
-                raise NotImplementedError("Method not implemented! We shouldn't have gotten this far.")
+            if method not in ["mds", "gd"]:
+                raise NotImplementedError(
+                    "Method not implemented! We shouldn't have gotten this far."
+                )
 
             # initialize progress bar
             if progress_bar == True:
                 dm_generator = tqdm(self.__distance_maps)
 
             # if we're using gradient descent
-            if method=='gd':
-             
-                # list comprehension version 
+            if method == "gd":
+                # list comprehension version
                 coordinates = (
                     np.array(
                         [
@@ -467,38 +474,40 @@ class Ensemble:
                                 torch.from_numpy(dist_map),
                                 num_iterations=10000,
                                 learning_rate=0.05,
-                                device=device,     
+                                device=device,
                                 verbose=True,
                             )
                             for dist_map in dm_generator
                         ]
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
-                )         
-                
+                )
+
             # if we're using mds
-            elif method=='mds':                
+            elif method == "mds":
                 coordinates = (
                     np.array(
                         [
                             distance_matrix_to_3d_structure_mds(
                                 torch.from_numpy(dist_map),
                                 n_jobs=num_cpus_mds,
-                                n_init=num_mds_init,                                                           
+                                n_init=num_mds_init,
                             )
                             for dist_map in dm_generator
                         ]
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
-                )                        
+                )
             else:
                 raise Exception("Should not have gotten here. Method not implemented.")
 
             # make an mdtraj.Trajectory object and then use that to initailize a SOURSOP SSTrajectory object
-            self.__trajectory = SSTrajectory(TRJ=create_ca_topology_from_coords(self.sequence, coordinates)).proteinTrajectoryList[0]
+            self.__trajectory = SSTrajectory(
+                TRJ=create_ca_topology_from_coords(self.sequence, coordinates)
+            ).proteinTrajectoryList[0]
 
         return self.__trajectory
-    
+
     @property
     def trajectory(self):
         """
@@ -514,13 +523,14 @@ class Ensemble:
             self.build_ensemble_trajectory()
         return self.__trajectory
 
-
-    def save(self, 
-             filename_prefix, 
-             compress=False, 
-             reduce_precision=None, 
-             compression_algorithm='lzma',
-             verbose = True):
+    def save(
+        self,
+        filename_prefix,
+        compress=False,
+        reduce_precision=None,
+        compression_algorithm="lzma",
+        verbose=True,
+    ):
         """
         Save the ensemble to a file in the STARLING format. Note this
         will add the .starling extension to the filename if not provided
@@ -537,35 +547,37 @@ class Ensemble:
             Whether to compress the file or not. Default is False.
 
         reduce_precision : bool
-            Whether to reduce the precision of the distance map to a 
-            single decimal point and cast to float16 if possible. 
-            Default is None, and then sets to False if compression is 
+            Whether to reduce the precision of the distance map to a
+            single decimal point and cast to float16 if possible.
+            Default is None, and then sets to False if compression is
             False, but True if compression is True. However it can be
             manually over-ridden.
-            
+
         compression_algorithm : str
             The compression algorithm to use. Options are 'gzip' and 'lzma'.
             `lzma` gives better compression if reduce_precision is set to True,
             but actually 'gzip' is better if reduce_precision is False. 'lzma'
-            is also slower than 'gzip'. Default is 'lzma'.             
+            is also slower than 'gzip'. Default is 'lzma'.
 
         verbose : bool
             Flag to define how noisy we should be
 
 
         """
-        utilities.write_starling_ensemble(self, 
-                                          filename_prefix, 
-                                          compress=compress, 
-                                          reduce_precision=reduce_precision,
-                                          compression_algorithm=compression_algorithm,
-                                          verbose=verbose)
-    
+        utilities.write_starling_ensemble(
+            self,
+            filename_prefix,
+            compress=compress,
+            reduce_precision=reduce_precision,
+            compression_algorithm=compression_algorithm,
+            verbose=verbose,
+        )
+
     def save_trajectory(self, filename_prefix, pdb_trajectory=False):
         """
         Save the ensemble trajectory to a file. This ONLY saves the
         3D structural ensemble but does not save the STARLING-generated
-        distance maps. We recommend using save() instead to save the 
+        distance maps. We recommend using save() instead to save the
         full STARLING object.
 
         Parameters
@@ -576,7 +588,7 @@ class Ensemble:
 
         pdb_trajectory : bool
             If set to True, the output trajectory is ONLY saved as a PDB
-            file. If set to false, it is saved as a single PDB structure 
+            file. If set to false, it is saved as a single PDB structure
             for topology and then the actual trajectory as an XTC file.
 
         """
@@ -588,8 +600,7 @@ class Ensemble:
         else:
             traj[0].save_pdb(filename_prefix + ".pdb")
             traj.save_xtc(filename_prefix + ".xtc")
-        
-        
+
     def __len__(self):
         """
         Return the number of conformations in the ensemble.
@@ -601,9 +612,9 @@ class Ensemble:
         Return a string representation of the ensemble.
         """
         if self.__trajectory is not None:
-            marker = '[X]' 
+            marker = "[X]"
         else:
-            marker = '[ ]'         
+            marker = "[ ]"
         return f"ENSEMBLE | len={len(self.sequence)}, ensemble_size={len(self)}, structures={marker}"
 
     def __repr__(self):
@@ -611,10 +622,11 @@ class Ensemble:
         Return a string representation of the ensemble.
         """
         return self.__str__()
-    
-## ------------------------------------------ END OF CLASS DEFINITION  
 
-    
+
+## ------------------------------------------ END OF CLASS DEFINITION
+
+
 def load_ensemble(filename):
     """
     Function to read in a STARLING ensemble from a file and return the
@@ -623,40 +635,39 @@ def load_ensemble(filename):
     Parameters
     ---------------
     filename : str
-        The filename to read the ensemble from (should be a .starling 
+        The filename to read the ensemble from (should be a .starling
         file generated by STARLING)
     """
-    
+
     # note there's exception handling in the utilities.py file, and we automatically
     # detect the compression algorithm based on the file extension
-    return_dict =  utilities.read_starling_ensemble(filename)
-    
+    return_dict = utilities.read_starling_ensemble(filename)
+
     # make sure we can extract out the core components
     try:
-        sequence = return_dict['sequence']
-        distance_maps = return_dict['distance_maps']
-        traj = return_dict['traj']
-        DEFAULT_ENCODER_WEIGHTS_PATH = return_dict['DEFAULT_ENCODER_WEIGHTS_PATH']
-        DEFAULT_DDPM_WEIGHTS_PATH = return_dict['DEFAULT_DDPM_WEIGHTS_PATH']
-        VERSION = return_dict['VERSION']
-        DATE = return_dict['DATE']
+        sequence = return_dict["sequence"]
+        distance_maps = return_dict["distance_maps"]
+        traj = return_dict["traj"]
+        DEFAULT_ENCODER_WEIGHTS_PATH = return_dict["DEFAULT_ENCODER_WEIGHTS_PATH"]
+        DEFAULT_DDPM_WEIGHTS_PATH = return_dict["DEFAULT_DDPM_WEIGHTS_PATH"]
+        VERSION = return_dict["VERSION"]
+        DATE = return_dict["DATE"]
     except Exception as e:
-        raise Exception(f"Error parsing STARLING ensemble data: {filename} [error 2]; error {e}")
+        raise Exception(
+            f"Error parsing STARLING ensemble data: {filename} [error 2]; error {e}"
+        )
 
     try:
         E = Ensemble(distance_maps, sequence, traj)
     except Exception as e:
-        raise Exception(f"Error initializing STARLING ensemble: {filename} [error 3]; error {e}")
-    
+        raise Exception(
+            f"Error initializing STARLING ensemble: {filename} [error 3]; error {e}"
+        )
+
     # finally we over-write the metadata
-    E._Ensemble__metadata['DEFAULT_ENCODER_WEIGHTS_PATH'] = DEFAULT_ENCODER_WEIGHTS_PATH
-    E._Ensemble__metadata['DEFAULT_DDPM_WEIGHTS_PATH'] = DEFAULT_DDPM_WEIGHTS_PATH
-    E._Ensemble__metadata['VERSION'] = VERSION
-    E._Ensemble__metadata['DATE'] = DATE
+    E._Ensemble__metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = DEFAULT_ENCODER_WEIGHTS_PATH
+    E._Ensemble__metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = DEFAULT_DDPM_WEIGHTS_PATH
+    E._Ensemble__metadata["VERSION"] = VERSION
+    E._Ensemble__metadata["DATE"] = DATE
 
     return E
-
-
-
-
-

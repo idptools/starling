@@ -1,4 +1,5 @@
 import os
+import time
 
 import mdtraj as md
 import numpy as np
@@ -6,9 +7,8 @@ import torch
 import torch.optim as optim
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
-from starling import configs
 
-import time
+from starling import configs
 
 
 def get_tensor_dtype(device):
@@ -19,7 +19,7 @@ def get_tensor_dtype(device):
     them to be cast to float32. This is an internal
     function that really only ends up being relevant
     for gradien descent reconstruction.
-    
+
     Parameters
     ---------------
     device : torch.device
@@ -28,12 +28,12 @@ def get_tensor_dtype(device):
     returns
     --------------------
     torch.dtype
-        Returns the type 
-    
+        Returns the type
+
     """
-    
+
     # as of 2024-11 mps does not support float64
-    if str(device) == 'mps':
+    if str(device) == "mps":
         tensor_dtype = torch.float32
     else:
         tensor_dtype = torch.float64
@@ -57,44 +57,25 @@ def compute_pairwise_distances(coords):
     return torch.cdist(coords, coords)
 
 
-# def loss_function(original_distance_matrix, coords):
-#    """Function to compute the loss between the original distance matrix and the computed distance matrix.
-#
-#    Parameters
-#    ----------
-#    original_distance_matrix : torch.Tensor
-#        A tensor of shape (n, n) containing the original pairwise distances between n points.
-#    coords : torch.Tensor
-#        A tensor of shape (n, 3) containing the 3D coordinates of n points.
-#
-#    Returns
-#    -------
-#    torch.Tensor
-#        The mean squared error between the original and computed distance matrices.
-#    """
-#    computed_distances = compute_pairwise_distances(coords)
-#    return torch.nn.functional.mse_loss(computed_distances, original_distance_matrix)
-
-
 def loss_function(original_distance_matrix, coords):
     """
-    Function to compute the loss between the original distance 
+    Function to compute the loss between the original distance
     matrix and the computed distance matrix.
 
     Parameters
     ----------
     original_distance_matrix : torch.Tensor
-        A tensor of shape (n, n) containing the original pairwise 
+        A tensor of shape (n, n) containing the original pairwise
         distances between n points.
 
     coords : torch.Tensor
-        A tensor of shape (n, 3) containing the 3D coordinates 
+        A tensor of shape (n, 3) containing the 3D coordinates
         of n points.
 
     Returns
     -------
     torch.Tensor
-        The mean squared error between the original and computed 
+        The mean squared error between the original and computed
         distance matrices, considering only the upper triangle.
 
     """
@@ -119,8 +100,10 @@ def create_incremental_coordinates(n_points, distance, device):
     """
     TO DO: Add docstring
     """
-    
-    coordinates = torch.zeros((n_points, 3), dtype=get_tensor_dtype(device), device=device)
+
+    coordinates = torch.zeros(
+        (n_points, 3), dtype=get_tensor_dtype(device), device=device
+    )
 
     # Start the first coordinate at (0, 0, 0)
     for i in range(1, n_points):
@@ -134,6 +117,86 @@ def create_incremental_coordinates(n_points, distance, device):
         coordinates[i] = new_coordinate
 
     return torch.nn.Parameter(coordinates)
+
+
+def distance_matrix_to_3d_structure_torch_mds(
+    target_distances, batch=None, n_iter=300, tol=1e-4, device="cuda"
+):
+    """
+    SMACOF implementation using PyTorch.
+
+    Args:
+        target_distances: tensor of shape (batch, n_points, n_points)
+        n_iter: maximum number of iterations
+        tol: convergence tolerance
+        device: computation device
+    Returns:
+        X: tensor of shape (batch, n_points, 3)
+        stress_history: tensor of shape (batch, n_iter)
+    """
+    batch_size = target_distances.shape[0] if batch is None else batch
+    n_points = target_distances.shape[1]
+    dim = 3
+    eps = 1e-12
+
+    # Move target distances to device and convert to float32
+    target = torch.tensor(target_distances, dtype=torch.float32, device=device)
+
+    # Initialize random coordinates for all samples in batch
+    X = torch.randn(batch_size, n_points, dim, dtype=torch.float32, device=device)
+
+    # Center each sample's coordinates independently
+    X = X - X.mean(dim=1, keepdim=True)
+
+    # Initialize stress tracking
+    stress_history = torch.zeros(batch_size, n_iter, dtype=torch.float32, device=device)
+    old_stress = torch.full(
+        (batch_size,), float("inf"), dtype=torch.float32, device=device
+    )
+
+    # Track convergence per sample
+    converged = torch.zeros(batch_size, dtype=torch.bool, device=device)
+
+    for it in range(n_iter):
+        # Compute pairwise distances for all samples simultaneously
+        # Results in tensor of shape (batch, n_points, n_points)
+        diff = X.unsqueeze(2) - X.unsqueeze(
+            1
+        )  # Shape: (batch, n_points, n_points, dim)
+        D = torch.norm(diff, dim=3) + eps  # Add eps for numerical stability
+
+        # Compute stress for each sample independently
+        stress = torch.sum((D - target) ** 2, dim=(1, 2))
+        stress_history[:, it] = stress
+
+        # Check convergence for each sample
+        converged = converged | (torch.abs(old_stress - stress) < tol)
+        if torch.all(converged):
+            stress_history = stress_history[:, : it + 1]
+            break
+
+        # Compute B matrices for all samples simultaneously
+        B = torch.zeros_like(D)
+        mask = D > eps
+        B[mask] = -target[mask] / D[mask]
+
+        # Set diagonal of B matrices to -row_sums
+        row_sums = B.sum(dim=2)
+        B.diagonal(dim1=1, dim2=2).copy_(-row_sums)
+
+        # Update configurations for non-converged samples
+        # Shape: (batch, n_points, dim)
+        X_new = torch.bmm(B, X) / n_points
+
+        # Only update non-converged samples
+        X[~converged] = X_new[~converged]
+
+        # Center each non-converged sample independently
+        X[~converged] = X[~converged] - X[~converged].mean(dim=1, keepdim=True)
+
+        old_stress = stress
+
+    return X.cpu().numpy(), stress_history.cpu().numpy()
 
 
 def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
@@ -157,24 +220,24 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
         A 2D tensor representing the distance matrix.
 
     kwargs : dict
-        Keyword arguments to pass to scikit-learn's MDS 
+        Keyword arguments to pass to scikit-learn's MDS
         algorithm.
 
     Returns
     -------
     torch.Tensor
-        A 3D tensor representing the coordinates of the 
+        A 3D tensor representing the coordinates of the
         atoms.
 
     """
-    
+
     # Set the default values for n_init and n_jobs if not provided in kwargs
     # this matches the default values in scikit-learn's MDS
     n_init = kwargs.pop("n_init", configs.DEFAULT_MDS_NUM_INIT)
     n_jobs = kwargs.pop("n_jobs", configs.DEFAULT_CPU_COUNT_MDS)
-    
+
     # Initialize MDS with 3 components (for 3D) and the specified parameters
-    # nb: normalized_stress = 'auto' explicitly as this is the default 
+    # nb: normalized_stress = 'auto' explicitly as this is the default
     # value in sci-kit learn >1.4 , but before that it was False, so this just
     # ensures version-independent behavior in the MDS call
     mds = MDS(
@@ -182,13 +245,13 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
         dissimilarity="precomputed",
         n_init=n_init,
         n_jobs=n_jobs,
-        normalized_stress='auto',
+        normalized_stress="auto",
         **kwargs,
     )
 
     # Fit the MDS model to the distance matrix
-    coords = mds.fit_transform(distance_matrix.cpu())
-    
+    coords = mds.fit_transform(distance_matrix)
+
     return coords
 
 
@@ -200,7 +263,7 @@ def distance_matrix_to_3d_structure_gd(
     verbose=True,
 ):
     """
-    Function to reconstruct a 3D structure from a 
+    Function to reconstruct a 3D structure from a
     distance matrix using gradient descent.
 
     Parameters
@@ -216,7 +279,7 @@ def distance_matrix_to_3d_structure_gd(
 
     device : str, optional
         Device to which tensors are moved, by default "cuda:0".
-        
+
     verbose : bool, optional
         Whether to print progress, by default True.
 
@@ -231,17 +294,16 @@ def distance_matrix_to_3d_structure_gd(
     it and/or it gets faster in the future...
 
     """
-        
+
     if isinstance(original_distance_matrix, torch.Tensor):
         original_distance_matrix = original_distance_matrix.to(
             device, dtype=get_tensor_dtype(device)
         )
-            
+
     else:
         original_distance_matrix = torch.tensor(
             original_distance_matrix, dtype=get_tensor_dtype(device), device=device
         )
-        
 
     coords = create_incremental_coordinates(
         original_distance_matrix.shape[0], 3.6, device=device
@@ -268,7 +330,7 @@ def distance_matrix_to_3d_structure_gd(
 
 def compare_distance_matrices(original_distance_matrix, coords, return_abs_diff=True):
     """
-    Function to compare the original distance matrix with the 
+    Function to compare the original distance matrix with the
     computed distance matrix.
 
     Parameters
@@ -280,15 +342,15 @@ def compare_distance_matrices(original_distance_matrix, coords, return_abs_diff=
         The computed 3D coordinates.
 
     return_abs_diff : bool
-        Whether to return the absolute difference between the 
+        Whether to return the absolute difference between the
         original and computed distance matrices, or the signed
         difference (original - computed), by default True.
 
-    Returns 
+    Returns
     -------
     tuple (np.ndarray, np.ndarray)
         [0] - The distance matrix computed from the 3D coordinates.
-        [1] - The absolute difference between the original and computed 
+        [1] - The absolute difference between the original and computed
               distance matrices.
     """
 
@@ -297,7 +359,7 @@ def compare_distance_matrices(original_distance_matrix, coords, return_abs_diff=
     computed_distance_matrix = distance_matrix(coords, coords)
 
     # calculate the difference between the original distance map and the distance map
-    # derived from the input 3D structure    
+    # derived from the input 3D structure
     difference_matrix = original_distance_matrix - computed_distance_matrix
 
     if return_abs_diff:
@@ -331,7 +393,7 @@ def create_ca_topology_from_coords(sequence, coords):
     # Add a chain to the topology
     chain = topology.add_chain()
 
-    # -- topology construction loop    
+    # -- topology construction loop
 
     for i, res in enumerate(sequence):
         try:
@@ -340,7 +402,6 @@ def create_ca_topology_from_coords(sequence, coords):
             raise ValueError(f"Invalid amino acid: {res}")
 
         residue = topology.add_residue(res_three_letter, chain)
-        # residue = topology.add_residue(res, chain)
 
         # Add a CA atom to the residue
         ca_atom = topology.add_atom("CA", md.element.carbon, residue)
@@ -356,7 +417,7 @@ def create_ca_topology_from_coords(sequence, coords):
         coords = coords[np.newaxis, :, :]
 
     # commented out for now
-    #else:
+    # else:
     #    print(coords.shape)
 
     # Create an MDTraj trajectory object with the topology and coordinates

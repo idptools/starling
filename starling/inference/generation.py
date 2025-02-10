@@ -15,6 +15,7 @@ from starling.structure.coordinates import (
     create_ca_topology_from_coords,
     distance_matrix_to_3d_structure_gd,
     distance_matrix_to_3d_structure_mds,
+    distance_matrix_to_3d_structure_torch_mds,
 )
 from starling.structure.ensemble import Ensemble
 
@@ -64,7 +65,6 @@ def generate_backend(
     conformations,
     device,
     steps,
-    method,
     ddim,
     return_structures,
     batch_size,
@@ -99,9 +99,6 @@ def generate_backend(
 
     steps : int
         The number of steps to run the DDPM model.
-
-    method : str
-        The method to use for generating the 3D structure.
 
     ddim : bool
         Whether to use DDIM for sampling.
@@ -249,24 +246,7 @@ def generate_backend(
         end_time_structure_generation = time.time()
 
         if return_structures:
-            if method == "gd":
-                coordinates = (
-                    np.array(
-                        [
-                            distance_matrix_to_3d_structure_gd(
-                                dist_map,
-                                num_iterations=10000,
-                                learning_rate=0.05,
-                                device=device,
-                                verbose=False,
-                            )
-                            for dist_map in sym_distance_maps
-                        ]
-                    )
-                    / configs.CONVERT_ANGSTROM_TO_NM
-                )
-
-            elif method == "mds":
+            if device == "cpu":
                 coordinates = (
                     np.array(
                         [
@@ -280,10 +260,19 @@ def generate_backend(
                     )
                     / configs.CONVERT_ANGSTROM_TO_NM
                 )
-
             else:
-                raise NotImplementedError(
-                    "Method not implemented! We shouldn't have gotten this far."
+                coordinates = (
+                    np.array(
+                        [
+                            distance_matrix_to_3d_structure_torch_mds(
+                                dist_map,
+                                batch=batch_size,
+                                device=device,
+                            )
+                            for dist_map in sym_distance_maps
+                        ]
+                    )
+                    / configs.CONVERT_ANGSTROM_TO_NM
                 )
 
             # make traj as an sstrajectory object and extract out the ssprotein object
