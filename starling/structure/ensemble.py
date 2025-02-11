@@ -462,6 +462,21 @@ class Ensemble:
         return self.__trajectory
 
     @property
+    def has_structures(self):
+        """
+        Check if the ensemble has 3D structures.
+
+        Returns
+        -------
+        bool
+            True if the ensemble has 3D structures, False otherwise.
+
+        """
+        if self.__trajectory is None:
+            return False
+        return True
+    
+    @property
     def trajectory(self):
         """
         Return the ensemble trajectory.
@@ -564,7 +579,7 @@ class Ensemble:
         """
         Return a string representation of the ensemble.
         """
-        if self.__trajectory is not None:
+        if self.has_structures:        
             marker = "[X]"
         else:
             marker = "[ ]"
