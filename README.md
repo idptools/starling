@@ -16,13 +16,6 @@ git clone git@github.com:idptools/starling.git
 cd starling
 pip install -e .
 ```
-
-## Required model location
-**Note: We plan to change this in the future...**
-To use STARLING, you currently need to have the models located at ``~/.starling``. The models *currently* are:
-``encoder`` = model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
-``ddpm`` = model-kernel-epoch=08-epoch_val_loss=0.03.ckpt
-
 ## Potential Pytorch / CUDA version issues
 If you are on an older version of CUDA, a torch version that *does not have the correct CUDA version* will be installed. This can cause a segfault when running metapredict. To fix this, you need to install torch for your specific CUDA version. For example, to install PyTorch on Linux using pip with a CUDA version of 12.1, you would run:
 
