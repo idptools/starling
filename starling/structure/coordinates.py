@@ -162,7 +162,6 @@ def distance_matrix_to_3d_structure_torch_mds(
         [1] pytorch.Tensor; A tensor of shape (total_samples, n_iter)
         
     """
-
     # if we passed in a numpy array, convert it to a torch tensor
     # on the correct device        
     if isinstance(target_distances, np.ndarray):        
@@ -276,7 +275,7 @@ def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
         A 3D tensor representing the coordinates of the
         atoms.
 
-    """    
+    """
     # Set the default values for n_init and n_jobs if not provided in kwargs
     # this matches the default values in scikit-learn's MDS
     n_init = kwargs.pop("n_init", configs.DEFAULT_MDS_NUM_INIT)
@@ -546,32 +545,24 @@ def generate_3d_coordinates_from_distances(device,
 
         ## NB: It seemed like we needed to do this at one point, but
         ## maybe not anymore? Leaving here in case we need it later
+        
         # if we passed in a numpy array, convert it to a torch tensor
         # on the correct device (note if we're here we're on CPU)
         #if isinstance(distance_maps, np.ndarray):
         #    distance_maps = torch.from_numpy(distance_maps).to('cpu')
 
         # open a progress bar if requested
-        if progress_bar == True:
-            dm_generator = tqdm(distance_maps)
+        # Open a progress bar if requested
+        dm_generator = tqdm(distance_maps, total=len(distance_maps)) if progress_bar else distance_maps
 
-        coordinates = (
-            np.array(
-                [
-                    distance_matrix_to_3d_structure_mds(
-                        dist_map,
-                        n_jobs=num_cpus_mds,
-                        n_init=num_mds_init,
-                    )
-                    for dist_map in dm_generator
-                ]
-            )
-            / configs.CONVERT_ANGSTROM_TO_NM
-        )
+        # loop over each distance map
+        coordinates = []
+        for dist_map in dm_generator:
+            coord = distance_matrix_to_3d_structure_mds(dist_map, n_jobs=num_cpus_mds, n_init=num_mds_init)            
+            coordinates.append(coord)
 
-        # close the progress bar if opened
-        if progress_bar == True:
-            dm_generator.close()
+        # cast to array and convert to nm
+        coordinates = np.array(coordinates) / configs.CONVERT_ANGSTROM_TO_NM
     else:
 
         # call the torch MDS implementation
