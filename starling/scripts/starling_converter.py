@@ -14,8 +14,8 @@ from starling.utilities import parse_output_path, symmetrize_distance_maps
 def starling2xtc():
     # Initialize the argument parser
     parser = ArgumentParser(
-        description="Convert .starling ensembles to a PDB topology file and XTC trajectory"
-    )
+        description="Convert .starling ensembles to a PDB topology file and XTC trajectory. Note if the structure reconstruction has not already been run, this will reconstruct a structural ensemble.")
+    
 
     # Add command-line arguments corresponding to the parameters of the generate function
     parser.add_argument(
@@ -54,7 +54,7 @@ def starling2xtc():
 
 def starling2pdb():
     # Initialize the argument parser
-    parser = ArgumentParser(description="Convert .starling files to a PDB trajectory")
+    parser = ArgumentParser(description="Convert .starling files to a PDB trajectory. Note if the structure reconstruction has not already been run, this will reconstruct a structural ensemble.")
 
     # Add command-line arguments corresponding to the parameters of the generate function
     parser.add_argument(
@@ -68,12 +68,23 @@ def starling2pdb():
         help="Directory and/or filename to save output (default: '.')",
     )
 
+    parser.add_argument(        
+        "--device",
+        type=str,
+        default=None,
+        help="Device we run conversion on (default: None)",
+    )
+
+
     # Parse the command-line arguments
     args = parser.parse_args()
     outname = parse_output_path(args)
 
     # build an ensemble from the starling file
     E = ensemble.load_ensemble(args.input_file)
+
+    # build with specified device
+    E.build_ensemble_trajectory(device=args.device)
 
     # save the ensemble as a pdb trajectory
     E.save_trajectory(outname, pdb_trajectory=True)
@@ -147,6 +158,13 @@ def starling2info():
     # build an ensemble from the starling file
     E = ensemble.load_ensemble(args.input_file)
 
+    
+    if E.has_structures:
+        marker = "[X] ({} structures)".format(len(E))        
+    else:
+        marker = "[ ]"
+        
+
     print("-------------------------------")
     print("STARLING Generated ensemble")
     print("-------------------------------")
@@ -161,7 +179,8 @@ def starling2info():
     )
     print(f"Average radius of gyration  : {E.radius_of_gyration(return_mean=True)}")
     print(f"Average end-to-end distance : {E.end_to_end_distance(return_mean=True)}")
-    print(f"Sequence: {E.sequence}")
+    print(f"Sequence                    : {E.sequence}")
+    print(f"Structures?                 : {marker}")
     print("-------------------------------")
 
 

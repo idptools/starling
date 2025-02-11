@@ -13,6 +13,7 @@ import starling
 
 from starling import generate, load_ensemble
 from starling.structure.ensemble import Ensemble
+from starling import utilities
 
 from soursop.sstrajectory import SSTrajectory
 
@@ -241,33 +242,140 @@ def test_ensemble_generation_cuda():
     # check we can write a trajectory
     E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
     
-
-def test_ensemble_generation_gd():
-
-    # define sequence
-    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
-
-    
-    C = generate(seq,conformations=5, verbose=False, show_progress_bar=False, return_data=True, return_structures=False)
-    E = C['sequence_1']
-    
-    # check we can build a 
-    t = E.build_ensemble_trajectory(method='gd')
-    np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
-
-    # check we can write a trajectory
-    E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
-
-
-def test_ensemble_reconstruction():
+def test_ensemble_reconstruction_re():
     seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
     C = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=True)
     
     E = C['sequence_1']
     p = E.trajectory
     
-    assert np.all(np.isclose(p.get_end_to_end_distance(), E.end_to_end_distance(), atol=1, rtol=1))
+    # absolute tollerance of 10 Angstroms
+    assert np.all(np.isclose(p.get_end_to_end_distance(), E.end_to_end_distance(), atol=10, rtol=0))
+
+def test_ensemble_reconstruction_dm():
+    #
+    # MDS reconstruction is hard, so our tolerance here is ~5% of frames can have ONE OR MORE distance that 
+    # is off by more than 10 Angstroms. This translates to a very low average error, but we do want to do
+    # the full comparison to get a sense of the 'true' error here...
+    #
+
+    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
+    n_confs = 100
+    E = generate(seq,conformations=n_confs, verbose=False, show_progress_bar=False, return_single_ensemble=True, return_structures=True)
+
+    P = E.trajectory
+
+    # all structural distance maps ("reconstruction")
+    A = utilities.symmetrize_distance_maps(P.get_distance_map(return_instantaneous_maps=True, verbose=False)[0])
+
+    # all STARLING distance maps ("truth")
+    B = E.distance_maps()
+
+    # the code below finds the number of frames where 1 or more i-j distances are off by more than 10 angstroms
+    mask = np.isclose(A, B, atol=10, rtol=0)  # Boolean array
+    offending_indices = np.where(~mask)  # Indices where values are NOT clos
+    bad_frames = len(set(offending_indices[0]))
+
+    # 5% of frames are allowed to be bad
+    assert bad_frames <= (1+int(n_confs)*0.05)  
     
+
+def test_ensemble_reconstruction_dm_CPU():
+    #
+    # MDS reconstruction is hard, so our tolerance here is ~10% of frames can have ONE OR MORE distance that 
+    # is off by more than 10 Angstroms. This translates to a very low average error, but we do want to do
+    # the full comparison to get a sense of the 'true' error here...
+    #
+
+    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
+    n_confs = 100
+    E = generate(seq,conformations=n_confs, verbose=False, show_progress_bar=False, return_single_ensemble=True)
+
+    # specifically build with CPU regardless of what was used for generation...
+    E.build_ensemble_trajectory(device='cpu')
+
+    P = E.trajectory
+
+    # all structural distance maps ("reconstruction")
+    A = utilities.symmetrize_distance_maps(P.get_distance_map(return_instantaneous_maps=True, verbose=False)[0])
+
+    # all STARLING distance maps ("truth")
+    B = E.distance_maps()
+
+    # the code below finds the number of frames where 1 or more i-j distances are off by more than 10 angstroms
+    mask = np.isclose(A, B, atol=10, rtol=0)  # Boolean array
+    offending_indices = np.where(~mask)  # Indices where values are NOT clos
+    bad_frames = len(set(offending_indices[0]))
+
+    # ~10% of frames are allowed to be bad
+    assert bad_frames <= (1+int(n_confs)*0.10)  
+
+
+def test_ensemble_reconstruction_dm_mps():
+    #
+    # MDS reconstruction is hard, so our tolerance here is ~10% of frames can have ONE OR MORE distance that 
+    # is off by more than 10 Angstroms. This translates to a very low average error, but we do want to do
+    # the full comparison to get a sense of the 'true' error here...
+    #
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS not available")
+
+    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
+    n_confs = 100
+    E = generate(seq,conformations=n_confs, verbose=False, show_progress_bar=False, return_single_ensemble=True)
+
+    # specifically build with CPU regardless of what was used for generation...
+    E.build_ensemble_trajectory(device='mps')
+
+    P = E.trajectory
+
+    # all structural distance maps ("reconstruction")
+    A = utilities.symmetrize_distance_maps(P.get_distance_map(return_instantaneous_maps=True, verbose=False)[0])
+
+    # all STARLING distance maps ("truth")
+    B = E.distance_maps()
+
+    # the code below finds the number of frames where 1 or more i-j distances are off by more than 10 angstroms
+    mask = np.isclose(A, B, atol=10, rtol=0)  # Boolean array
+    offending_indices = np.where(~mask)  # Indices where values are NOT clos
+    bad_frames = len(set(offending_indices[0]))
+
+    # ~10% of frames are allowed to be bad
+    assert bad_frames <= (1+int(n_confs)*0.10)  
+
+def test_ensemble_reconstruction_dm_cuda():
+    #
+    # MDS reconstruction is hard, so our tolerance here is ~10% of frames can have ONE OR MORE distance that 
+    # is off by more than 10 Angstroms. This translates to a very low average error, but we do want to do
+    # the full comparison to get a sense of the 'true' error here...
+    #
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
+
+    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
+    n_confs = 100
+    E = generate(seq,conformations=n_confs, verbose=False, show_progress_bar=False, return_single_ensemble=True)
+
+    # specifically build with CPU regardless of what was used for generation...
+    E.build_ensemble_trajectory(device='cuda')
+
+    P = E.trajectory
+
+    # all structural distance maps ("reconstruction")
+    A = utilities.symmetrize_distance_maps(P.get_distance_map(return_instantaneous_maps=True, verbose=False)[0])
+
+    # all STARLING distance maps ("truth")
+    B = E.distance_maps()
+
+    # the code below finds the number of frames where 1 or more i-j distances are off by more than 10 angstroms
+    mask = np.isclose(A, B, atol=10, rtol=0)  # Boolean array
+    offending_indices = np.where(~mask)  # Indices where values are NOT clos
+    bad_frames = len(set(offending_indices[0]))
+
+    # ~10% of frames are allowed to be bad
+    assert bad_frames <= (1+int(n_confs)*0.10)  
+
 
 def test_skip_long_seqs():
     """
