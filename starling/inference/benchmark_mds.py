@@ -213,22 +213,21 @@ def plot_timing_comparison(timing_results, n_conformers):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
     # Modern blue and green
-    colors = ["#3498db", "#2ecc71"]  
+    colors = ["#3498db", "#2ecc71"]
 
     # Create violin plot
     parts = ax1.violinplot(
-        [timing_results["scipy_times"], timing_results["torch_times"]],
-        showmeans=True
+        [timing_results["scipy_times"], timing_results["torch_times"]], showmeans=True
     )
 
     # Set colors for individual violins
-    for i, body in enumerate(parts['bodies']):
+    for i, body in enumerate(parts["bodies"]):
         body.set_facecolor(colors[i])
         body.set_edgecolor(colors[i])
         body.set_alpha(0.7)  # Optional transparency for better visibility
 
     # Set the mean line color to red
-    parts['cmeans'].set_color("#e74c3c")
+    parts["cmeans"].set_color("#e74c3c")
 
     ax1.set_xticks([1, 2])
     ax1.set_xticklabels(["Scipy MDS", "Torch SMACOF"])
@@ -321,17 +320,22 @@ def run_benchmark_comparison(dms, n_iter=100, tol=1e-4, n_repeats=5):
     heatmap_fig.savefig(
         "mds_comparison_sample_heatmaps.pdf", dpi=300, bbox_inches="tight"
     )
+    heatmap_fig.savefig(
+        "mds_comparison_sample_heatmaps.png", dpi=300, bbox_inches="tight"
+    )
     dist_fig.savefig("mds_mean_error_distribution.pdf", dpi=300, bbox_inches="tight")
+    dist_fig.savefig("mds_mean_error_distribution.png", dpi=300, bbox_inches="tight")
     timing_fig.savefig("mds_timing_comparison.pdf", dpi=300, bbox_inches="tight")
+    timing_fig.savefig("mds_timing_comparison.png", dpi=300, bbox_inches="tight")
 
     return heatmap_fig, dist_fig, timing_fig, timing_results
 
 
 if __name__ == "__main__":
     # shape (200, 384, 384)
-    ens = generate("PKGS"+"PLKE"*95)
+    ens = generate("PKGS" + "PLKE" * 95)
     dms = ens["sequence_1"].distance_maps()
 
     heatmap_fig, dist_fig, timing_fig, timing_results = run_benchmark_comparison(
-        dms, n_iter=300, tol=1e-4, n_repeats=5
+        dms, n_iter=300, tol=1e-4, n_repeats=10
     )
