@@ -12,10 +12,7 @@ from starling import configs
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
-    create_ca_topology_from_coords,
-    distance_matrix_to_3d_structure_gd,
-    distance_matrix_to_3d_structure_mds,
-    distance_matrix_to_3d_structure_torch_mds,
+    create_ca_topology_from_coords,     
     generate_3d_coordinates_from_distances,
 )
 from starling.structure.ensemble import Ensemble
@@ -248,8 +245,8 @@ def generate_backend(
 
         if return_structures:
             coordinates = generate_3d_coordinates_from_distances(
-                device, batch_size, num_cpus_mds, num_mds_init, sym_distance_maps
-            )
+                device, batch_size, num_cpus_mds, num_mds_init, 
+                sym_distance_maps, progress_bar=show_progress_bar)
 
             # make traj as an sstrajectory object and extract out the ssprotein object
             ssprotein = SSTrajectory(

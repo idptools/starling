@@ -8,6 +8,7 @@ import lzma
 import os
 import pickle
 import warnings
+import platform
 
 import numpy as np
 import torch
@@ -120,6 +121,28 @@ def parse_output_path(args):
     outname = os.path.splitext(outname)[0]
 
     return outname
+
+def get_macOS_version():
+    """
+    Function to check the macOS version.
+
+    Returns
+    ---------------
+    int
+        Returns -1 or the major macOS version.
+    
+    """
+    # get the macOS version
+    macos_version = platform.mac_ver()[0]
+
+    if len(macos_version) == 0:
+        return -1
+    else:
+        try:
+            return int(macos_version.split('.')[0])
+        except ValueError:
+            return -1
+
 
 
 def check_device(use_device, default_device="gpu"):

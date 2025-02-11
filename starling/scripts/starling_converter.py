@@ -21,6 +21,7 @@ def starling2xtc():
     parser.add_argument(
         "input_file", type=str, help="Input starling file", default=None
     )
+
     parser.add_argument(
         "-o",
         "--output",
@@ -29,6 +30,13 @@ def starling2xtc():
         help="Directory and/or filename to save output (default: '.')",
     )
 
+    parser.add_argument(        
+        "--device",
+        type=str,
+        default=None,
+        help="Device we run conversion on (default: None)",
+    )
+    
     # Parse the command-line arguments
     args = parser.parse_args()
 
@@ -36,7 +44,11 @@ def starling2xtc():
 
     # build an ensemble from the starling file
     E = ensemble.load_ensemble(args.input_file)
+    
+    # build with specified device
+    E.build_ensemble_trajectory(device=args.device)
 
+    # save
     E.save_trajectory(outname)
 
 

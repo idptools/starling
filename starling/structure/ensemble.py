@@ -11,9 +11,7 @@ from starling._version import (
     __version__,
 )
 from starling.structure.coordinates import (
-    create_ca_topology_from_coords,
-    distance_matrix_to_3d_structure_gd,
-    distance_matrix_to_3d_structure_mds,
+    create_ca_topology_from_coords,        
     generate_3d_coordinates_from_distances,
 )
 
@@ -446,18 +444,15 @@ class Ensemble:
 
         """
 
-        # define and sanitize the device
-        device = utilities.check_device(device)
-
+        # define and sanitize the device (we cast to string to ensure its a string cos 
+        # generate_3d_coordinates_from_distances expects a string
+        device = str(utilities.check_device(device))
+        
         # if no traj yet or we're focing to recompute...
         if self.__trajectory is None or force_recompute:
-            # initialize progress bar
-            if progress_bar == True:
-                dm_generator = tqdm(self.__distance_maps)
 
-            coordinates = generate_3d_coordinates_from_distances(
-                device, batch_size, num_cpus_mds, num_mds_init, self.__distance_maps
-            )
+            # build the 3D coordinates
+            coordinates = generate_3d_coordinates_from_distances(device, batch_size, num_cpus_mds, num_mds_init, self.__distance_maps, progress_bar=progress_bar)
 
             # make an mdtraj.Trajectory object and then use that to initailize a SOURSOP SSTrajectory object
             self.__trajectory = SSTrajectory(
