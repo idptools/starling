@@ -254,8 +254,8 @@ def measure_runtime(
         device_name = device
 
     # initialize matrices to store runtime and radius of gyration
-    runtime_matrix = np.zeros((len(conformations_list), 1))
-    rg_matrix = np.zeros((len(conformations_list), 1))
+    runtime_matrix = np.zeros((len(conformations_list), 2))
+    rg_matrix = np.zeros((len(conformations_list), 2))
 
     # iterate over conformations and steps
     for i, conf in enumerate(conformations_list):
@@ -272,23 +272,24 @@ def measure_runtime(
         )
         end_time = time.perf_counter()
 
-        #
-        runtime_matrix[i] = end_time - start_time
-        rg_matrix[i] = data.radius_of_gyration(return_mean=True)
+        runtime_matrix[i,0] = conf
+        runtime_matrix[i,1] = end_time - start_time
+
+        rg_matrix[i, 0] = conf
+        rg_matrix[i, 1] = data.radius_of_gyration(return_mean=True)
 
         np.savetxt(
-            f"rg_matrix_{conf}_confs_{steps}_steps_{device_name}_{batch_size}_batchsize.csv",
+            f"rg_matrix_{steps}_steps_{device_name}_{batch_size}_batchsize.csv",
             rg_matrix,
             delimiter=", ",
         )
         np.savetxt(
-            f"runtime_matrix_{conf}_confs_{steps}_steps_{device_name}_{batch_size}_batchsize.csv",
+            f"runtime_matrix_{steps}_steps_{device_name}_{batch_size}_batchsize.csv",
             runtime_matrix,
             delimiter=", ",
         )
 
-        # have a snoozle to cool down the hardware (could use -80 alternatively? TBD).
-        print(len(conformations_list) - 1)
+        # have a snoozle to cool down the hardware (could use -80 alternatively? TBD).        
         if i != len(conformations_list) - 1:
             time.sleep(cooltime)
 
