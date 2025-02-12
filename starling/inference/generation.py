@@ -12,7 +12,7 @@ from starling import configs
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
-    create_ca_topology_from_coords,     
+    create_ca_topology_from_coords,
     generate_3d_coordinates_from_distances,
 )
 from starling.structure.ensemble import Ensemble
@@ -73,6 +73,7 @@ def generate_backend(
     verbose,
     show_progress_bar,
     show_per_step_progress_bar,
+    pdb_trajectory,
     model_manager=model_manager,
 ):
     """
@@ -136,6 +137,8 @@ def generate_backend(
 
     show_per_step_progress_bar : bool, optional
         whether to show progress bar per step.
+    pdb_trajectory: bool
+        Whether to save the trajectory as a PDB file. Default is False.
 
     model_manager : ModelManager
         A ModelManager object to manage loaded models.
@@ -245,8 +248,13 @@ def generate_backend(
 
         if return_structures:
             coordinates = generate_3d_coordinates_from_distances(
-                device, batch_size, num_cpus_mds, num_mds_init, 
-                sym_distance_maps, progress_bar=show_progress_bar)
+                device,
+                batch_size,
+                num_cpus_mds,
+                num_mds_init,
+                sym_distance_maps,
+                progress_bar=show_progress_bar,
+            )
 
             # make traj as an sstrajectory object and extract out the ssprotein object
             ssprotein = SSTrajectory(
@@ -280,7 +288,8 @@ def generate_backend(
                 E.save_trajectory(
                     filename_prefix=os.path.join(
                         output_directory, seq_name + "_STARLING"
-                    )
+                    ),
+                    pdb_trajectory=pdb_trajectory,
                 )
 
             # save full ensemble

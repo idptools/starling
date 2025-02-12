@@ -171,6 +171,7 @@ def generate(
     verbose=False,
     show_progress_bar=True,
     show_per_step_progress_bar=True,
+    pdb_trajectory=False,
     return_single_ensemble=False,
 ):
     """
@@ -276,6 +277,9 @@ def generate(
     show_per_step_progress_bar : bool, optional
         Whether to show progress bar per step.
         Default is True
+    pdb_trajectory : bool
+        Whether to save the trajectory as a pdb file.
+        Default is False.
 
     return_single_ensemble : bool
         If True, will return a single starling.structure.ensemble.Ensemble
@@ -429,6 +433,7 @@ def generate(
         verbose,
         show_progress_bar,
         show_per_step_progress_bar,
+        pdb_trajectory,
     )
 
     # if this is true we KNOW there is only one Ensemble in the return dict because
