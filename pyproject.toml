@@ -39,6 +39,7 @@ dependencies = [
 	'pandas',
 	'pytest',
 	'protfasta',
+	'soursop',
 	'hdf5plugin',
 	'mdtraj',
 	'metapredict',
