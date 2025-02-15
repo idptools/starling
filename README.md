@@ -21,15 +21,15 @@ conda activate starling
 You can then install STARLING from GitHub directly using pip:
 
 ```bash
-pip install git+https://github.com/idptools/starling.git
+pip install idptools-starling
 ```
 
-Or you can clone and install locally as
+Or you can clone and install the bleeding-edge version locally as
 	
 ```bash
 git clone git@github.com:idptools/starling.git
 cd starling
-pip install -e .
+pip install .
 ```
 ### NB: Potential Pytorch / CUDA version issues
 If you are on an older version of CUDA, a torch version that *does not have the correct CUDA version* will be installed. This can cause a segfault when running STARLING. To fix this, you need to install torch for your specific CUDA version. For example, to install PyTorch on Linux using pip with a CUDA version of 12.1, you would run:
@@ -228,7 +228,7 @@ Ensemble.build_ensemble_trajectory(batch_size=100,
         force_recompute=False,
         progress_bar=True,
 ```
-Allows you to build 
+Allows you to build either a pdb file with multiple model entries or a trajectory file (.xtc file) 
 
 
 ## `load_ensemble` Function Documentation
