@@ -1,9 +1,12 @@
 from typing import Tuple
 
 import numpy as np
+import sys
 import torch
 from torch import nn
-from tqdm import tqdm
+#from tqdm import tqdm
+from tqdm.auto import tqdm
+
 
 from starling.data.data_wrangler import one_hot_encode
 
@@ -157,7 +160,7 @@ class DDIMSampler(nn.Module):
 
         # initialize progress bar if we want to show it
         if show_per_step_progress_bar:
-            pbar = tqdm(len(time_steps))
+            pbar = tqdm(total=len(time_steps))
 
         # Denoise the initial latent
         for i, step in enumerate(time_steps):

@@ -7,7 +7,7 @@ import torch
 import torch.optim as optim
 from scipy.spatial import distance_matrix
 from sklearn.manifold import MDS
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from starling import configs, utilities
 
@@ -554,8 +554,7 @@ def generate_3d_coordinates_from_distances(
         # if isinstance(distance_maps, np.ndarray):
         #    distance_maps = torch.from_numpy(distance_maps).to('cpu')
 
-        # open a progress bar if requested
-        # Open a progress bar if requested
+        # open a progress bar if requested        
         dm_generator = tqdm(distance_maps, total=len(distance_maps)) if progress_bar else distance_maps
 
         # loop over each distance map
