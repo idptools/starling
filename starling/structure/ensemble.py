@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from soursop.ssprotein import SSProtein
 from soursop.sstrajectory import SSTrajectory
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from starling import configs, utilities
 from starling._version import (
@@ -53,7 +53,8 @@ class Ensemble:
         self.sequence_length = len(sequence)
 
         # initailize and then compute as needed
-        self._rg_vals = []
+        self.__rg_vals = []
+        self.__rh_vals = []
 
         if ssprot_ensemble is None:
             self.__trajectory = None
@@ -175,7 +176,8 @@ class Ensemble:
                 self.__distance_maps = np.delete(
                     self.__distance_maps, bad_frames, axis=0
                 )
-                self._rg_vals = []
+                self.__rg_vals = []
+                self.__rh_vals = []
                 self.number_of_conformations = len(self.__distance_maps)
 
                 if self.__trajectory is not None:
@@ -313,8 +315,7 @@ class Ensemble:
             return np.array(dm < contact_thresh, dtype=int)
 
     def radius_of_gyration(
-        self, return_mean=False, force_recompute=False, use_slow=False
-    ):
+        self, return_mean=False, force_recompute=False):
         """
         Compute the radius of gyration of the protein chain
         for each conformation in the ensemble.
@@ -330,7 +331,6 @@ class Ensemble:
             uses the cached value if previously computed.
             Default is False.
 
-
         Returns
         -------
         np.array or float
@@ -338,18 +338,18 @@ class Ensemble:
             If return_mean is set to true returns the mean value as a float
 
         """
-        if len(self._rg_vals) == 0 or force_recompute == True:
+        if len(self.__rg_vals) == 0 or force_recompute == True:
             for d in self.__distance_maps:
                 distances = np.sum(np.square(d))
                 rg_val = np.sqrt(distances / (2 * np.power(self.sequence_length, 2)))
-                self._rg_vals.append(rg_val)
+                self.__rg_vals.append(rg_val)
 
-            self._rg_vals = np.array(self._rg_vals)
+            self.__rg_vals = np.array(self.__rg_vals)
 
         if return_mean:
-            return np.mean(self._rg_vals)
+            return np.mean(self.__rg_vals)
         else:
-            return self._rg_vals
+            return self.__rg_vals
 
     def local_radius_of_gyration(self, start, end, return_mean=False):
         """
@@ -386,6 +386,64 @@ class Ensemble:
         if return_mean:
             return np.mean(local_rg)
         return local_rg
+
+    def hydrodynamic_radius(
+        self,
+        return_mean=False, 
+        implementation='fast',
+        force_recompute=False):
+        """
+        Compute the hydrodynamic radius of each conformation
+        using the Kirkwood-Riseman equation.
+        
+        Parameters
+        ----------
+        return_mean : bool
+            If True, returns the mean hydrodynamic radius of the 
+            ensemble. Default is False.
+
+        force_recompute : bool
+            If True, forces recomputation of the hydrodynamic radius, 
+            otherwise uses the cached value if previously computed.
+            Default is False.
+            
+        Returns
+        -------
+        np.array or float
+            Array of hydrodynamic radii for each conformation in the ensemble.
+            If return_mean is set to true returns the mean value as a float
+
+        """
+
+        if len(self.__rh_vals) == 0 or force_recompute:
+
+
+            all_rij = []
+            # build empty lists associated with each frame
+            for _ in range(len(self)):
+                all_rij.append([])
+
+
+            for i in range(len(self.sequence)):
+                tmp = []
+                for j in range(i+1, len(self.sequence)):
+                    tmp.append(self.rij(i,j))
+
+                tmp = np.array(tmp).T
+
+                for idx, f in enumerate(tmp):
+                    all_rij[idx].extend((1/f).tolist())
+
+            Rh = np.reciprocal(np.mean(all_rij, axis=1).astype(float))
+
+        else:
+            Rh = self.__rh_vals
+
+        if return_mean:
+            return np.mean(Rh)
+        else:   
+            return Rh
+    
 
     def build_ensemble_trajectory(
         self,
