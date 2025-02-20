@@ -180,6 +180,11 @@ def generate_backend(
     # dictionary to hold distance maps and structures if applicable.
     output_dict = {}
 
+    # we don't need a progress bar if we only have a single sequence,
+    # so we override this here.
+    if len(sequence_dict) == 0:
+        show_progress_bar = False
+
     # see if a progress bar is wanted. If it is, set it up.
     if show_progress_bar:
         pbar = tqdm(total=len(sequence_dict))
@@ -232,20 +237,13 @@ def generate_backend(
 
         end_time_prediction = time.time()
 
-        ##
-        ## NB: We keep the ensemble reconstruction code here for now because
-        ## at this point the distance maps are still tensors, not np.arrays
-        ## so we avoid unnecessary conversions by using the tensor versions
-        ## here.
-        ##
-        # if return_structures is True, generate 3D structure
-
         # set time at which we start structure generation to 0
         start_time_structure_generation = time.time()
 
         # we initialize this to 0 and will update as needed (or not)
         end_time_structure_generation = time.time()
 
+        # do ensemble reconstruction if requested
         if return_structures:
             coordinates = generate_3d_coordinates_from_distances(
                 device,

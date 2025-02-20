@@ -1,10 +1,7 @@
 import os
-
 import numpy as np
 import protfasta
-from tqdm import tqdm
 
-#
 from starling import configs, utilities
 from starling.inference import generation
 
