@@ -73,14 +73,7 @@ def main():
         type=int,
         default=configs.DEFAULT_STEPS,
         help=f"Number of steps to run the DDPM model (default: {configs.DEFAULT_STEPS})",
-    )
-    parser.add_argument(
-        "-m",
-        "--method",
-        type=str,
-        default="mds",
-        help=f"Method to use for generating 3D structures. Options are 'gd' or 'mds'. (default: {configs.DEFAULT_STRUCTURE_GEN})",
-    )
+    )    
     parser.add_argument(
         "-b",
         "--batch_size",
@@ -296,7 +289,7 @@ def measure_runtime(
 
 def starling_benchmark():
     parser = argparse.ArgumentParser(
-        description="Run Starling conformational generation with specified parameters."
+        description="Benchmark STARLING performance based on various tweakable parameters."
     )
 
     parser.add_argument(
