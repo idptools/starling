@@ -4,7 +4,6 @@ import numpy as np
 import sys
 import torch
 from torch import nn
-#from tqdm import tqdm
 from tqdm.auto import tqdm
 
 
@@ -118,6 +117,8 @@ class DDIMSampler(nn.Module):
         repeat_noise: bool = False,
         temperature: float = 1.0,
         show_per_step_progress_bar: bool = True,
+        batch_count: int = 1,
+        max_batch_count: int = 1,
     ) -> torch.Tensor:
         """
         Sample the generative process using the DDIM model.
@@ -126,14 +127,24 @@ class DDIMSampler(nn.Module):
         ----------
         num_conformations : int
             Number of conformations to generate.
+
         labels : torch.Tensor
             The labels to condition the generative process on.
+
         repeat_noise : bool, optional
             _description_, by default False
+
         temperature : float, optional
             _description_, by default 1.0
+
         show_per_step_progress_bar : bool, optional
             whether to show progress bar per step.
+
+        batch_count : int, optional
+            The batch count for the progress bar, by default 1
+
+        max_batch_count : int, optional
+            The maximum batch count for the progress bar, by default 1
 
         Returns
         -------
@@ -160,7 +171,7 @@ class DDIMSampler(nn.Module):
 
         # initialize progress bar if we want to show it
         if show_per_step_progress_bar:
-            pbar = tqdm(total=len(time_steps))
+            pbar_inner = tqdm(total=len(time_steps), position=1, leave=False, desc=f"DDPM steps (batch {batch_count} of {max_batch_count})")
 
         # Denoise the initial latent
         for i, step in enumerate(time_steps):
@@ -181,11 +192,11 @@ class DDIMSampler(nn.Module):
             )
             # update progress bar if we are showing it
             if show_per_step_progress_bar:
-                pbar.update(1)
+                pbar_inner.update(1)
 
         # if we have progress bar, close after finishing the steps.
         if show_per_step_progress_bar:
-            pbar.close()
+            pbar_inner.close()
 
         # Scale the latents back to the original scale
         x = (1 / self.ddpm_model.latent_space_scaling_factor) * x

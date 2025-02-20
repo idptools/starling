@@ -16,7 +16,6 @@ def starling2xtc():
     parser = ArgumentParser(
         description="Convert .starling ensembles to a PDB topology file and XTC trajectory. Note if the structure reconstruction has not already been run, this will reconstruct a structural ensemble.")
     
-
     # Add command-line arguments corresponding to the parameters of the generate function
     parser.add_argument(
         "input_file", type=str, help="Input starling file", default=None
