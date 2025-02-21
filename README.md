@@ -4,12 +4,20 @@ STARLING
 [//]: # (Badges)
 [![GitHub Actions Build Status](https://github.com/idptools/starling/workflows/CI/badge.svg)](https://github.com/idptools/starling/actions?query=workflow%3ACI)
 [![codecov](https://codecov.io/gh/idptools/starling/branch/main/graph/badge.svg)](https://codecov.io/gh/idptools/starling/branch/main)
+<br>
+<img src="starling_logo-1.png" alt="My Image" width="150"/>
+<br>
 
+# About
+STARLING (con**ST**ruction of intrinsic**A**lly diso**R**dered proteins ensembles efficient**L**y v**I**a multi-dime**N**sional **G**enerative models) is a latent-space probabilistic denoising diffusion model for predicting coarse-grained ensembles of intrinsically disordered regions.  
 
-Construction of intrinsically disordered protein ensembles through multiscale generative models
+STARLING was developed by **Borna Novak** and **Jeff Lotthammer** in the [Holehouse lab](https://www.holehouselab.com/) (with some occasional help from Ryan and Alex, as is their wont). 
+
+For more information, plase take a look at our preprint!<br>
+**Accurate predictions of conformational ensembles of disordered proteins with STARLING.** Novak, B., Lotthammer, J. M., Emenecker, R. J. & Holehouse, A. S. ***bioRxiv*** [2025.02.14.638373 Preprint at https://doi.org/10.1101/2025.02.14.638373 (2025)](https://www.biorxiv.org/content/10.1101/2025.02.14.638373v1)
 
 # Installation
-STARLING is currently only available on Github. 
+STARLING is available on GitHub (bleeding edge) and on PyPi (stable). 
 
 We recommend creating a fresh conda environment for STARLING (although in principle there's nothing special about the STARLING environment)
 
@@ -24,28 +32,18 @@ You can then install STARLING from GitHub directly using pip:
 pip install idptools-starling
 ```
 
-Or you can clone and install the bleeding-edge version locally as
+Or you can clone and install the bleeding-edge version from GitHub
 	
 ```bash
 git clone git@github.com:idptools/starling.git
 cd starling
 pip install .
 ```
-### NB: Potential Pytorch / CUDA version issues
-If you are on an older version of CUDA, a torch version that *does not have the correct CUDA version* will be installed. This can cause a segfault when running STARLING. To fix this, you need to install torch for your specific CUDA version. For example, to install PyTorch on Linux using pip with a CUDA version of 12.1, you would run:
 
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
-  
-To figure out which version of CUDA you currently have (assuming you have a CUDA-enabled GPU that is set up correctly), you need to run:
-```bash
-nvidia-smi
-```
-Which should return information about your GPU, NVIDIA driver version, and your CUDA version at the top.
+To check STARLING has installed correctly run
 
-Please see the [PyTorch install instructions](https://pytorch.org/get-started/locally/) for more info. 
-  
+	starling --help
+
 
 # Quickstart
 The easiest way to use STARLING is the `starling` command-line tool.
@@ -262,10 +260,25 @@ or if you're on an Intel mac and torch > 2.2.2 is not available, downgrade numpy
 
 	pip install numpy==1.26.1	
 
-### Copyright
+#### Potential Pytorch / CUDA version issues
+If you are on an older version of CUDA, a torch version that *does not have the correct CUDA version* will be installed. This can cause a segfault when running STARLING. To fix this, you need to install torch for your specific CUDA version. For example, to install PyTorch on Linux using pip with a CUDA version of 12.1, you would run:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+  
+To figure out which version of CUDA you currently have (assuming you have a CUDA-enabled GPU that is set up correctly), you need to run:
+```bash
+nvidia-smi
+```
+Which should return information about your GPU, NVIDIA driver version, and your CUDA version at the top.
+
+Please see the [PyTorch install instructions](https://pytorch.org/get-started/locally/) for more info. 
+
+## Copyright
 Copyright (c) 2024-2025, Borna Novak, Jeffrey Lotthammer, Alex Holehouse
 
 
-#### Acknowledgements 
+### Acknowledgements 
 Project based on the 
 [Computational Molecular Science Python Cookiecutter](https://github.com/molssi/cookiecutter-cms) version 1.1.
