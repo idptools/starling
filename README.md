@@ -2,8 +2,8 @@
 STARLING
 ==============================
 [//]: # (Badges)
-[![GitHub Actions Build Status](https://github.com/REPLACE_WITH_OWNER_ACCOUNT/starling/workflows/CI/badge.svg)](https://github.com/REPLACE_WITH_OWNER_ACCOUNT/starling/actions?query=workflow%3ACI)
-[![codecov](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/starling/branch/main/graph/badge.svg)](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/starling/branch/main)
+[![GitHub Actions Build Status](https://github.com/idptools/starling/workflows/CI/badge.svg)](https://github.com/idptools/starling/actions?query=workflow%3ACI)
+[![codecov](https://codecov.io/gh/idptools/starling/branch/main/graph/badge.svg)](https://codecov.io/gh/idptools/starling/branch/main)
 
 
 Construction of intrinsically disordered protein ensembles through multiscale generative models
