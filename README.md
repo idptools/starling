@@ -239,6 +239,29 @@ from starling import load_ensemble
 ensemble = load_ensemble('path/to/my_favorite_ensemble.starling')
 ```
 
+## FAQS/Help
+
+#### I get a numpy compilation warning error!?
+Oh no! You get the following error message:
+ 
+	A module that was compiled using NumPy 1.x cannot be run in
+	NumPy 2.2.3 as it may crash. To support both 1.x and 2.x
+	versions of NumPy, modules must be compiled with NumPy 2.0.
+	Some module may need to rebuild instead e.g. with 'pybind11>=2.12'.
+	
+	If you are a user of the module, the easiest solution will be to
+	downgrade to 'numpy<2' or try to upgrade the affected module.
+	We expect that some modules will need time to support NumPy 2.
+	
+We have seen this if folks are trying to install on Intel Macs because (Py)Torch stopped supporting Intel Macs after torch=2.2.2. If you're NOT on an Intel mac, the recommended way to resolve us by upgrading torch:
+
+	# recomemended, but ANY version above 2.2.2 should work
+	pip install torch==2.6.0	
+	
+or if you're on an Intel mac and torch > 2.2.2 is not available, downgrade numpy:
+
+	pip install numpy==1.26.1	
+
 ### Copyright
 Copyright (c) 2024-2025, Borna Novak, Jeffrey Lotthammer, Alex Holehouse
 
