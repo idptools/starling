@@ -23,7 +23,7 @@ classifiers = [
 requires-python = ">=3.8"
 # Declare any run-time dependencies that should be installed with the package.
 dependencies = [
-	'numpy>=1.8.3',
+	'numpy>=1.26',
 	'torch',
 	'scipy',
 	'cython',
