@@ -23,7 +23,7 @@ classifiers = [
 requires-python = ">=3.8"
 # Declare any run-time dependencies that should be installed with the package.
 dependencies = [
-	'numpy',
+	'numpy>=1.8.3',
 	'torch',
 	'scipy',
 	'cython',
@@ -41,8 +41,8 @@ dependencies = [
 	'protfasta',
 	'soursop',
 	'hdf5plugin',
-	'mdtraj',
-	'metapredict',
+	'mdtraj>=1.9.7',
+	'metapredict>=3.0',
     ]
 	#'finches @ git+https://git@github.com/idptools/finches@main#egg=finches',
 	#'sparrow @ git+https://git@github.com/idptools/sparrow.git@main#egg=sparrow.git']
