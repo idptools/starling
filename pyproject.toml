@@ -26,7 +26,7 @@ dependencies = [
 	'numpy>=1.26',
 	'torch',
 	'scipy',
-	'cython',
+	'cython>=3.0.0',
 	'matplotlib',
 	'jupyter',
 	'ipython',
