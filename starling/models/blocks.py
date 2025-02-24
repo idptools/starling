@@ -76,32 +76,31 @@ class ResizeConv2d(nn.Module):
         mode: str = "nearest",
     ):
         """
-        Instead of ConvTranspose2d, this module uses F.interpolate to upsample the input
-        tensor and then applies a convolutional layer. This is useful when the output of
-        the upsampled tensor is not the same as the input tensor. This module can be used
-        in the decoder part of the network. This type of upsampling is known to fix checkerboard
-        artifacts that are common in ConvTranspose2d (https://distill.pub/2016/deconv-checkerboard/).
+        This module uses F.interpolate for upsampling followed by a convolutional layer,
+        instead of ConvTranspose2d. This approach helps to avoid checkerboard artifacts
+        that are common with ConvTranspose2d (https://distill.pub/2016/deconv-checkerboard/).
+        It is particularly useful in the decoder part of the network.
 
         Parameters
         ----------
         in_channels : int
-            The number of input channels
+            Number of input channels.
         out_channels : int
-            The number of output channels
+            Number of output channels.
         kernel_size : int
-            The size of the kernel for the convolutional layer
+            Size of the convolutional kernel.
         norm : torch.nn.Module
-            The normalization layer to use. Pass in the class of the normalization layer (example nn.InstanceNorm2d)
+            Normalization layer to use (e.g., nn.InstanceNorm2d).
         activation : str
-            The activation function to use. Pass in the class of the activation function (example nn.ReLU)
+            Activation function to use (e.g., nn.ReLU).
         padding : int
-            The padding to use for the convolutional layer
+            Padding for the convolutional layer.
         size : int, optional
-            The spatial size of the output tensor. If None, the scale_factor is used, by default None
+            Spatial size of the output tensor. If None, scale_factor is used. Default is None.
         scale_factor : int, optional
-            The scale factor to use for the upsampling, by default None
+            Scale factor for upsampling. Default is None.
         mode : str, optional
-            The mode to use for the upsampling, by default "nearest"
+            Mode for upsampling. Default is "nearest".
         """
         super().__init__()
         self.size = size
@@ -142,29 +141,28 @@ class ResBlockEncBasic(nn.Module):
         kernel_size: int = 3,
     ) -> None:
         """
-        A basic residual block. This block is often used in the ResNet architecture,
-        specifically in ResNet18 and ResNet34. It consists of two convolutional layers
-        with a ReLU activation function in between. The input is added to the output of
-        the second convolutional layer. The output is then passed through another ReLU
-        activation function. The block can also be conditioned on some class labels or
-        other information that is summed to the output of first convolutional output before
-        the normalization and activation function.
+        A basic residual block commonly used in ResNet architectures like ResNet18 and ResNet34.
+        It consists of two convolutional layers with a ReLU activation function in between.
+        The input is added to the output of the second convolutional layer, followed by a
+        ReLU activation function. Optionally, the block can be conditioned on class labels or
+        other information, which is added to the output of the first convolution before normalization
+        and activation.
 
         Parameters
         ----------
         in_channels : int
-            The number of input channels
+            Number of input channels.
         out_channels : int
-            The number of output channels
+            Number of output channels.
         stride : int
-            The stride of the first convolutional layer
+            Stride of the first convolutional layer.
         norm : str
-            The normalization layer to use. Options are "batch", "instance", "layer", "rms" and "group"
+            Normalization layer to use. Options are "batch", "instance", "layer", "rms", and "group".
         timestep : int, optional
-            The dimension of the class labels/timesteps to condition the block on, if None no
-            conditioning is done, by default None
+            Dimension of class labels/timesteps for conditioning. If None, no conditioning is applied.
+            Default is None.
         kernel_size : int, optional
-            The size of the kernel for convolutional layers, by default 3
+            Kernel size for convolutional layers. Default is 3.
         """
         super().__init__()
 
@@ -263,13 +261,33 @@ class ResBlockDecBasic(nn.Module):
 
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        stride,
-        norm,
+        in_channels: int,
+        out_channels: int,
+        stride: int,
+        norm: str,
         last_layer=None,
-        kernel_size=None,
+        kernel_size: int = None,
     ) -> None:
+        """
+        A basic residual block commonly used in ResNet architectures like ResNet18 and ResNet34.
+        It consists of an interpolation layer (upsampling) and two convolutional layers
+        with a ReLU activation function in between. The input is added to the output of the second convolutional layer,
+        followed by a ReLU activation function. This block is used in the decoder part of the network.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+        out_channels : int
+            Number of output channels.
+        stride : int
+            Stride of the first convolutional layer.
+        norm : str
+            Normalization layer to use. Options are "batch", "instance", "layer", and "group".
+        kernel_size : int, optional
+            Kernel size for convolutional layers. Default is None.
+        """
+
         super().__init__()
 
         kernel_size = 3 if kernel_size is None else kernel_size
