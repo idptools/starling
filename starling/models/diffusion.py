@@ -32,21 +32,21 @@ def extract(
     constants: torch.Tensor, timestamps: torch.Tensor, shape: int
 ) -> torch.Tensor:
     """
-    A function to extract values from a tensor based on the timestamps
+    Extract values from a tensor based on given timestamps.
 
     Parameters
     ----------
     constants : torch.Tensor
-        A tensor to extract values from
+        The tensor to extract values from.
     timestamps : torch.Tensor
-        A 1D tensor containing the indices to extract from the constants tensor
+        A 1D tensor containing the indices for extraction.
     shape : int
-        Desired shape of the output tensor
+        The desired shape of the output tensor.
 
     Returns
     -------
     torch.Tensor
-        Returns the extracted values from the constants tensor
+        The tensor with extracted values.
     """
     batch_size = timestamps.shape[0]
     out = constants.gather(-1, timestamps)
@@ -74,10 +74,8 @@ class DiffusionModel(pl.LightningModule):
         config_scheduler: str = "LinearWarmupCosineAnnealingLR",
     ) -> None:
         """
-        Denoising-diffusion model framework for latent space diffusion models. This
-        class is a PyTorch Lightning module that can be used to train a diffusion model
-        on a given dataset. The model can be used to sample from the trained model
-        and generate new samples.
+        A discrete-time denoising-diffusion model framework for latent space diffusion models.
+        The model is based on the work of Sohl-Dickstein et al. [1], Ho et al. [2], and Rombach et al. [3].
 
         References
         ----------
@@ -95,11 +93,11 @@ class DiffusionModel(pl.LightningModule):
         Parameters
         ----------
         model : nn.Module
-            A U-Net model that takes in an image, a timestamp, and optionally labels to condition on
+            A neural network model that takes in an image, a timestamp, and optionally labels to condition on
             and outputs the predicted noise
         encoder_model : nn.Module
-            A VAE model that takes in an image (distance map) and outputs the latent space that the
-            diffusion model is trained in
+            A VAE model that takes in the data (e.g., a distance map) and outputs the compressed representation of
+            the data (e.g., a latent space). The denoising-diffusion model is then trained to denoise the latent space.
         image_size : int
             The size of the latent space (height and width)
         beta_scheduler : str, optional
@@ -560,37 +558,6 @@ class DiffusionModel(pl.LightningModule):
 
         return loss
 
-    @torch.inference_mode()
-    def timestep_tests(self, latent_encoding, sequence) -> torch.Tensor:
-        # Scale the latent encoding to have unit std
-        latent_encoding = self.latent_space_scaling_factor * latent_encoding
-
-        t = torch.arange(0, self.num_timesteps, device=self.device)
-
-        noise = torch.randn_like(latent_encoding)
-        x_noised = self.q_sample(latent_encoding, t, noise=noise)
-
-        # nn.Embedding is 0-indexes, so we subtract 1 from the lengths
-        lengths = list(map(lambda label: len(label) - 1, [sequence]))
-
-        length_labels = torch.tensor(
-            lengths,
-            device=latent_encoding.device,
-            dtype=torch.long,
-        )
-        with torch.no_grad():
-            length_labels = self.embed_length(length_labels)
-            # length_labels = self.length_mlp(length_labels)
-            labels = self.sequence2labels([sequence])
-            labels = self.mlp(labels)
-            labels += length_labels
-            predicted_noise = self.model(x_noised, t, labels)[0]
-
-        loss = abs(noise - predicted_noise)
-        # loss = loss.mean(dim=0)
-
-        return x_noised
-
     def configure_optimizers(self):
         """
         Configure the optimizer and the learning rate scheduler for the model.
@@ -682,24 +649,3 @@ class DiffusionModel(pl.LightningModule):
             raise ValueError(f"{self.config_scheduler} lr_scheduler is not implemented")
 
         return [optimizer], [lr_scheduler]
-
-
-def reduce_sampling_steps(T, K):
-    # Calculate the spacing between each sample
-    spacing = (T - 1) / (K - 1)
-
-    # Initialize an empty list to store the rounded numbers
-    samples = []
-
-    # Generate K evenly spaced real numbers between 1 and T (inclusive)
-    for i in range(K):
-        # Calculate the current sample
-        sample = 1 + spacing * i
-
-        # Round the sample to the nearest integer
-        rounded_sample = round(sample)
-
-        # Append the rounded sample to the list
-        samples.append(rounded_sample)
-
-    return samples
