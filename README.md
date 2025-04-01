@@ -195,7 +195,7 @@ Ensemble.radius_of_gyration(return_mean=False)
 ```
 Returns the radius of gyration, either all instantaneous values or the average in `return_mean=False` is set to True.
 
-#### `.loacl_radius_of_gyration()`
+#### `.local_radius_of_gyration()`
 ```python
 Ensemble.local_radius_of_gyration(start, end, return_mean=False)
 ```
