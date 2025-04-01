@@ -174,7 +174,12 @@ class DDIMSampler(nn.Module):
 
         # initialize progress bar if we want to show it
         if show_per_step_progress_bar:
-            pbar_inner = tqdm(total=len(time_steps), position=1, leave=False, desc=f"DDPM steps (batch {batch_count} of {max_batch_count})")
+            pbar_inner = tqdm(
+                total=len(time_steps),
+                position=1,
+                leave=False,
+                desc=f"DDPM steps (batch {batch_count} of {max_batch_count})",
+            )
 
         # Denoise the initial latent
         for i, step in enumerate(time_steps):
