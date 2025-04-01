@@ -1,11 +1,10 @@
+import sys
 from typing import Tuple
 
 import numpy as np
-import sys
 import torch
 from torch import nn
 from tqdm.auto import tqdm
-
 
 from starling.data.data_wrangler import one_hot_encode
 
@@ -19,25 +18,29 @@ class DDIMSampler(nn.Module):
         ddim_eta: float = 0.0,
     ):
         """
-        An efficient sampler that can output samples 10x to 100x faster than the DDPM model.
-        Denosing diffusion implicit models (DDIM) do not require to sample the entire diffusion process to generate samples.
-        The forward process is parameterized using non-Markovian diffusion processes, which leads to short generative Markov chains
-        that can be simulated in a small number of steps.
+        An efficient sampler that generates samples 10x to 100x faster than the DDPM model.
+        Denoising diffusion implicit models (DDIM) do not require sampling the entire diffusion process to generate samples.
+        The forward process is parameterized using non-Markovian diffusion processes, leading to short generative Markov chains
+        that can be simulated in fewer steps.
 
+        References
+        ----------
+        [1] Ho, J., Jaini, P., Hariharan, B., Abbeel, P., & Duan, Y. (2020).
+        Denoising diffusion implicit models. arXiv preprint arXiv:2012.02142.
 
         Parameters
         ----------
         ddpm_model : _type_
             The trained DDPM model.
         n_steps : int
-            The number of steps to simulate the generative process. Smaller than the number of steps used to train the DDPM model.
+            The number of steps to simulate the generative process, smaller than the number of steps used to train the DDPM model.
         ddim_discretize : str, optional
-            The discretization method to use for the generative process, by default "uniform"
+            The discretization method for the generative process, by default "uniform".
         ddim_eta : float, optional
             The noise level for the generative process, a number between 0.0 and 1.0.
             0.0 adds no noise to the generative process, 1.0 adds the maximum noise.
             This number interpolates between deterministic and stochastic generative processes,
-            by default 0.0
+            by default 0.0.
 
         Raises
         ------
