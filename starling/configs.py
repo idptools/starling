@@ -18,6 +18,19 @@ DEFAULT_STRUCTURE_GEN = "mds"
 CONVERT_ANGSTROM_TO_NM = 10
 MAX_SEQUENCE_LENGTH = 384  # set longest sequence the model can work on
 
+# Model compilation settings
+
+# Model compilation settings
+TORCH_COMPILATION = {
+    "enabled": False,
+    "options": {
+        "mode": "default",  # Options: "default", "reduce-overhead", "max-autotune"
+        "fullgraph": True,  # Whether to use the full graph for compilation
+        "backend": "inductor",  # Default PyTorch backend
+        "dynamic": None,  # Whether to handle dynamic shapes
+    },
+}
+
 
 # model model-kernel-epoch=47-epoch_val_loss=0.03.ckpt has  a UNET_LABELS_DIM of 512
 # model model-kernel-epoch=47-epoch_val_loss=0.03.ckpt has a UNET_LABELS_DIM of 384
