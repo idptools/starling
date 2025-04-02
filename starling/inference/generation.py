@@ -180,7 +180,7 @@ def generate_backend(
     if remaining_samples > 0:
         real_batch_count = num_batches + 1
     else:
-        real_batch_count = num_batches 
+        real_batch_count = num_batches
 
     # dictionary to hold distance maps and structures if applicable.
     output_dict = {}
@@ -188,7 +188,12 @@ def generate_backend(
     # see if a progress bar is wanted. If it is, set it up.
     # position here is 0, so it will be the first progress bar
     if show_progress_bar:
-        pbar = tqdm(total=len(sequence_dict), position=0, desc="Progress through sequences", leave=True)
+        pbar = tqdm(
+            total=len(sequence_dict),
+            position=0,
+            desc="Progress through sequences",
+            leave=True,
+        )
 
     # iterate over sequence_dict
     for num, seq_name in enumerate(sequence_dict):
@@ -203,16 +208,14 @@ def generate_backend(
         # get sequence
         sequence = sequence_dict[seq_name]
 
-        
-
         # iterate over batches for actual DDIM sampling
         for batch in range(num_batches):
             distance_maps = sampler.sample(
                 batch_size,
                 labels=sequence,
                 show_per_step_progress_bar=show_per_step_progress_bar,
-                batch_count = batch + 1,
-                max_batch_count = real_batch_count
+                batch_count=batch + 1,
+                max_batch_count=real_batch_count,
             )
             starling_dm.append(
                 [
@@ -225,10 +228,10 @@ def generate_backend(
         if remaining_samples > 0:
             distance_maps = sampler.sample(
                 remaining_samples,
-                labels = sequence,
-                show_per_step_progress_bar = show_per_step_progress_bar,
-                batch_count = real_batch_count,
-                max_batch_count = real_batch_count
+                labels=sequence,
+                show_per_step_progress_bar=show_per_step_progress_bar,
+                batch_count=real_batch_count,
+                max_batch_count=real_batch_count,
             )
             starling_dm.append(
                 [
