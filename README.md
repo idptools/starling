@@ -168,6 +168,22 @@ E_dict = generate(sequences)
 - **`show_progress_bar`** : `bool`  
     If `True`, displays a progress bar during generation. Default is `True`.
 
+## Speed up STARLING by compiling the torch models
+
+If you intend to use STARLING repeatedly in your computational workflow, consider calling torch.compile to optimize the kernels within the STARLING models. While this adds some overhead during the initial model loading, it improves the performance of subsequent runs by approximately 40% (tested on an NVIDIA A5000 GPU). To compile STARLING, include the following code block in your script:
+
+```python
+import starling
+
+# The following line enables compiling
+starling.set_compilation_options(enabled=True)
+
+# To change any compilation options use 
+starling.set_compilation_options(mode='',...)
+```
+
+Utilizing the above functionality is particularly useful in scenarios where models are repeatedly called within loops, batch processing, or iterative inference, as it enhances execution speed, reduces overhead, and ensures more efficient memory usage.
+
 ## Using an Ensemble class object
 
 ### Overview
