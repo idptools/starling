@@ -1,0 +1,31 @@
+data:
+  batch_size: 256
+  test_data: null
+  train_data: /home/bnovak/projects/sequence2ensemble/continuous_starling/data/70k_seqs/train.tsv
+  val_data: /home/bnovak/projects/sequence2ensemble/continuous_starling/data/70k_seqs/validation.tsv
+
+device:
+  cuda: [0]
+  nodes: 1
+
+unet:
+  in_channels: 1
+  out_channels: 1
+  base: 64
+  norm: group
+  blocks: [2, 2, 2]
+  middle_blocks: 2
+  labels_dim: 384
+
+diffusion:
+  encoder_path: /home/bnovak/projects/continuous_starling/encoder/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
+  noise_schedule: karras
+  set_lr: 0.001
+  min_snr_loss_weight: True
+  min_snr_gamma: 5
+  config_scheduler: LinearWarmupCosineAnnealingLR
+
+training:
+  num_epochs: 50
+  output_path: continuous-diffusion
+  project_name: starling-continuous-diffusion
