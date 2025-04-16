@@ -53,9 +53,7 @@ dependencies = [
 #"Documentation" = "https://starling.readthedocs.io/"
 
 [project.scripts]
-starling-train = "starling.training.vae_train:train_vae"
-starling-sample = "starling.training.vae_generate:vae_generate"
-ae-train = "starling.training.ae_train:train_ae"
+starling-train = "starling.training.diffusion_train:train_model"
 
 starling = "starling.scripts.starling_main_cli:main"
 starling-benchmark = "starling.scripts.starling_main_cli:starling_benchmark"
