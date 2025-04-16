@@ -1,11 +1,12 @@
 data:
-  batch_size: 256
+  batch_size: 16
   test_data: null
-  train_data: /home/bnovak/projects/sequence2ensemble/continuous_starling/data/70k_seqs/train.tsv
-  val_data: /home/bnovak/projects/sequence2ensemble/continuous_starling/data/70k_seqs/validation.tsv
+  train_data: /home/borna/projects/starling/continuous_starling/data/70k_seqs/train.tsv
+  val_data: /home/borna/projects/starling/continuous_starling/data/70k_seqs/validation.tsv
 
 device:
-  cuda: [0]
+  # cuda: [0]
+  cuda: auto
   nodes: 1
 
 unet:
@@ -18,14 +19,16 @@ unet:
   labels_dim: 384
 
 diffusion:
-  encoder_path: /home/bnovak/projects/continuous_starling/encoder/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
+  encoder_path: /home/borna/projects/starling/continuous_starling/encoder/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
   noise_schedule: karras
-  set_lr: 0.001
-  min_snr_loss_weight: True
+  set_lr: 0.0001
+  min_snr_loss_weight: False
   min_snr_gamma: 5
   config_scheduler: LinearWarmupCosineAnnealingLR
+  labels: learned-embeddings
 
 training:
-  num_epochs: 50
+  num_epochs: 1
+  gradient_clip_val: 1.0
   output_path: continuous-diffusion
   project_name: starling-continuous-diffusion
