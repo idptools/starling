@@ -77,24 +77,36 @@ def karras_log_snr(t, sigma_min=0.002, sigma_max=80.0, rho=7.0):
     return -2 * torch.log(sigma)
 
 
-class ContinuousDiffusion(nn.Module):
+class ContinuousDiffusion(pl.LightningModule):
     def __init__(
         self,
         model,
         encoder_model,
         set_lr,
+        config_scheduler,
         features=512,
         noise_schedule="karras",
         min_snr_loss_weight=False,
         min_snr_gamma=5,
+        labels="None",
     ):
         super().__init__()
 
+        # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
+        self.save_hyperparameters(ignore=["encoder_model", "model"])
+
         self.model = model
-        self.encoder_model = model
+        self.encoder_model = encoder_model
+
+        for param in self.encoder_model.parameters():
+            param.requires_grad = False
+        self.encoder_model.eval()
 
         self.features = features
         self.set_lr = set_lr
+        self.config_scheduler = config_scheduler
+
+        self.monitor = "epoch_val_loss"
 
         # continuous noise schedule related stuff
 
