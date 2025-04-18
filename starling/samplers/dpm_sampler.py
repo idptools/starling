@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -11,42 +11,66 @@ from starling.data.data_wrangler import one_hot_encode
 
 
 class DPMSampler(nn.Module):
-    def __init__(self, ddpm_model, n_steps: int, sampler="full"):
+    """
+    Denoising Probabilistic Model (DPM) Sampler for generating protein conformations.
+
+    This class implements the sampling process for a pre-trained diffusion model,
+    allowing generation of new protein structures conditioned on sequence information.
+    """
+
+    def __init__(
+        self, ddpm_model: nn.Module, n_steps: int, sampler: Literal["full"] = "full"
+    ) -> None:
+        """
+        Initialize the DPM sampler.
+
+        Parameters
+        ----------
+        ddpm_model : nn.Module
+            The pre-trained diffusion model
+        n_steps : int
+            Number of denoising steps
+        sampler : str, default="full"
+            Sampling strategy to use
+        """
         super(DPMSampler, self).__init__()
         self.ddpm_model = ddpm_model
-        # Noise schedule used in the model
-        self.log_snr = ddpm_model.log_snr
+        self.log_snr = ddpm_model.log_snr  # Noise schedule used in the model
         self.sampler = sampler
 
+        # Create timestep schedule from 1.0 to 0.0
         self.timesteps = torch.linspace(
             1.0, 0.0, n_steps + 1, device=self.ddpm_model.device
         )
 
-    def generate_labels(self, labels: str) -> torch.Tensor:
+    def generate_labels(self, sequence: str) -> torch.Tensor:
         """
         Generate labels to condition the generative process on.
 
         Parameters
         ----------
-        labels : str
-            A sequence to generate labels from.
+        sequence : str
+            A protein sequence to generate labels from
 
         Returns
         -------
         torch.Tensor
-            The labels to condition the generative process on.
+            The labels to condition the generative process on
         """
-        labels = (
-            torch.argmax(
-                torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
-            )
-            .to(torch.int64)
-            .squeeze()
-            .to(self.ddpm_model.device)
-        )
+        # Pad sequence to fixed length of 384
+        padded_sequence = sequence.ljust(384, "0")
 
-        labels = self.ddpm_model.sequence2labels(labels)
+        # One-hot encode the sequence
+        one_hot = torch.from_numpy(one_hot_encode(padded_sequence))
 
+        # Convert to indices and move to device
+        sequence_indices = torch.argmax(one_hot, dim=-1).to(torch.int64).squeeze()
+        sequence_indices = sequence_indices.to(self.ddpm_model.device)
+
+        # Convert sequence indices to model-specific labels
+        labels = self.ddpm_model.sequence2labels(sequence_indices)
+
+        # Add batch dimension
         labels = labels.unsqueeze(0)
 
         return labels
@@ -58,23 +82,51 @@ class DPMSampler(nn.Module):
         time_next: torch.Tensor,
         labels: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Calculate posterior mean and variance for the denoising step.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Current noisy samples
+        time : torch.Tensor
+            Current timestep
+        time_next : torch.Tensor
+            Next timestep
+        labels : torch.Tensor
+            Conditioning labels
+
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor]
+            Posterior mean and variance
+        """
+        # Get signal-to-noise ratios
         log_snr = self.log_snr(time)
         log_snr_next = self.log_snr(time_next)
+
+        # Coefficient for noise prediction
         c = -expm1(log_snr - log_snr_next)
 
-        squared_alpha, squared_alpha_next = log_snr.sigmoid(), log_snr_next.sigmoid()
-        squared_sigma, squared_sigma_next = (
-            (-log_snr).sigmoid(),
-            (-log_snr_next).sigmoid(),
-        )
+        # Calculate alpha and sigma terms from log_snr
+        squared_alpha = log_snr.sigmoid()
+        squared_alpha_next = log_snr_next.sigmoid()
+        squared_sigma = (-log_snr).sigmoid()
+        squared_sigma_next = (-log_snr_next).sigmoid()
 
-        alpha, sigma, alpha_next = map(
-            sqrt, (squared_alpha, squared_sigma, squared_alpha_next)
-        )
+        # Get square roots for the update equation
+        alpha = squared_alpha.sqrt()
+        sigma = squared_sigma.sqrt()
+        alpha_next = squared_alpha_next.sqrt()
 
-        batch_log_snr = repeat(log_snr, " -> b", b=x.shape[0])
+        # Prepare log_snr for batch processing
+        batch_size = x.shape[0]
+        batch_log_snr = repeat(log_snr, " -> b", b=batch_size)
+
+        # Predict noise using the model
         pred_noise = self.ddpm_model.model(x, batch_log_snr, labels)
 
+        # Calculate posterior mean and variance
         model_mean = alpha_next / alpha * (x - c * sigma * pred_noise)
         posterior_variance = squared_sigma_next * c
 
@@ -86,79 +138,122 @@ class DPMSampler(nn.Module):
         time: torch.Tensor,
         time_next: torch.Tensor,
         labels: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Perform a single sampling step.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Current noisy samples
+        time : torch.Tensor
+            Current timestep
+        time_next : torch.Tensor
+            Next timestep
+        labels : torch.Tensor
+            Conditioning labels
+
+        Returns
+        -------
+        Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+            Denoised sample and noise (if not the final step), or just denoised sample
+        """
         model_mean, posterior_variance = self.p_mean_variance(
             x, time, time_next, labels
         )
 
+        # For the final step, just return the mean without adding noise
         if time == 0:
             return model_mean
 
+        # Add noise scaled by the posterior variance
         noise = torch.randn_like(x)
-        x = model_mean + sqrt(posterior_variance) * noise
+        noised_mean = model_mean + posterior_variance.sqrt() * noise
 
-        return x, noise
+        return noised_mean, noise
 
     @torch.no_grad()
     def full_ddpm_loop(
         self,
         num_conformations: int,
-        labels: torch.Tensor,
+        labels: str,
         repeat_noise: bool = False,
         temperature: float = 1.0,
         show_per_step_progress_bar: bool = True,
         batch_count: int = 1,
         max_batch_count: int = 1,
     ) -> torch.Tensor:
+        """
+        Run the complete denoising process to generate protein conformations.
+
+        Parameters
+        ----------
+        num_conformations : int
+            Number of conformations to generate
+        labels : str
+            Protein sequence to condition on
+        repeat_noise : bool, default=False
+            Whether to use the same noise across samples
+        temperature : float, default=1.0
+            Sampling temperature
+        show_per_step_progress_bar : bool, default=True
+            Whether to display a progress bar for denoising steps
+        batch_count : int, default=1
+            Current batch number (for progress display)
+        max_batch_count : int, default=1
+            Total number of batches (for progress display)
+
+        Returns
+        -------
+        torch.Tensor
+            Generated protein conformations as distance maps
+        """
         device = self.ddpm_model.device
 
-        # Initialize the latents with noise
-        x = torch.randn(
-            [
-                num_conformations,
-                self.ddpm_model.in_channels,
-                self.ddpm_model.image_size,
-                self.ddpm_model.image_size,
-            ],
+        # Initialize latents with random noise
+        latents = torch.randn(
+            [num_conformations, 1, 24, 24],
             device=device,
         )
 
-        # Get the labels to condition the generative process on
-        labels = self.generate_labels(labels)
+        # Process input sequence to get conditioning labels
+        conditioning_labels = self.generate_labels(labels)
 
-        # initialize progress bar if we want to show it
+        # Set up progress tracking if requested
+        progress_bar = None
         if show_per_step_progress_bar:
-            pbar_inner = tqdm(
-                total=len(self.timesteps),
+            progress_bar = tqdm(
+                total=len(self.timesteps) - 1,
                 position=1,
                 leave=False,
                 desc=f"DDPM steps (batch {batch_count} of {max_batch_count})",
             )
 
-        # Denoise the initial latent
-        for i, step in enumerate(self.timesteps):
+        # Iteratively denoise the latents
+        for i in range(len(self.timesteps) - 1):
             time = self.timesteps[i]
             time_next = self.timesteps[i + 1]
 
-            # Sample the generative process
-            x, *_ = self.p_sample(
-                x,
+            # Perform a single denoising step
+            latents, _ = self.p_sample(
+                latents,
                 time,
                 time_next,
-                labels,
+                conditioning_labels,
             )
-            # update progress bar if we are showing it
-            if show_per_step_progress_bar:
-                pbar_inner.update(1)
 
-        # if we have progress bar, close after finishing the steps.
-        if show_per_step_progress_bar:
-            pbar_inner.close()
+            # Update progress display
+            if progress_bar is not None:
+                progress_bar.update(1)
 
-        # Scale the latents back to the original scale
-        x = (1 / self.ddpm_model.latent_space_scaling_factor) * x
+        # Clean up progress bar
+        if progress_bar is not None:
+            progress_bar.close()
 
-        # Decode the latents to get the distance maps
-        x = self.ddpm_model.encoder_model.decode(x)
+        # Rescale the latents to the original scale
+        scaled_latents = latents / self.ddpm_model.latent_space_scaling_factor
 
-        return x
+        # Decode the latents to get the final distance maps
+        distance_maps = self.ddpm_model.encoder_model.decode(scaled_latents)
+
+        return distance_maps
