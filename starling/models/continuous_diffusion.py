@@ -262,7 +262,17 @@ class ContinuousDiffusion(pl.LightningModule):
         # the first batch of the data. This is to scale it to have unit variance
         # stabilizes denoising-diffusion training
         if self.global_step == 0 and batch_idx == 0:
-            latent_space_scaling_factor = 1 / latent_encoding.std()
+            # Calculate local scaling factor
+            local_std = latent_encoding.std()
+
+            # Gather from all processes and compute global std
+            gathered_std = self.all_gather(local_std)
+
+            # Average across all GPUs to get consistent value
+            mean_std = gathered_std.mean()
+
+            # Set the same scaling factor on all GPUs
+            latent_space_scaling_factor = 1 / mean_std
             self.latent_space_scaling_factor = latent_space_scaling_factor.float().to(
                 self.device
             )
@@ -272,6 +282,7 @@ class ContinuousDiffusion(pl.LightningModule):
 
         loss = self.forward(latent_encoding, labels=sequences)
 
+        # If multi-GPU training; this only shows loss for GPU 0 (not synced across all GPUs)
         self.log("train_loss", loss, prog_bar=True, batch_size=data.size(0))
 
         return loss
