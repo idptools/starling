@@ -55,6 +55,7 @@ class Ensemble:
         # initailize and then compute as needed
         self.__rg_vals = []
         self.__rh_vals = []
+        self.__rh_mode_used = None
 
         if ssprot_ensemble is None:
             self.__trajectory = None
@@ -389,12 +390,48 @@ class Ensemble:
 
     def hydrodynamic_radius(
         self,
-        return_mean=False, 
-        implementation='fast',
-        force_recompute=False):
+        return_mean=False,         
+        force_recompute=False,
+        mode='nygaard', 
+        alpha1=0.216, 
+        alpha2=4.06, 
+        alpha3=0.821):
         """
-        Compute the hydrodynamic radius of each conformation
-        using the Kirkwood-Riseman equation.
+        Compute the hydrodynamic radius of each conformation using either the
+        Kirkwood-Riseman (mode='kr') or Nygaard (mode='nygaard') equation (default)
+        is Nygaard. 
+
+        The Kirkwood-Riseman [1] equation may be more accurate when computing
+        the Rh for comparison with NMR-derived Rh values, as reported by Pesce
+        et al. [2]. The Nygaard equation is a more general form of the 
+        Kirkwood-Riseman equation, and may offer better agreement with
+        values obtained from dynamic light scattering (DLS) experiments [3]. 
+          
+        For 'kr' (Kirkwood-Riseman mode), the alpha1/2/3 arguments are
+        ignored, as these are only used with the Nygaard mode.
+        
+        For 'nygaard' mode, the arguments (alpha1/2/3) are used, and should
+        not be altered to recapitulate behaviour defined by Nygaard et al.
+        Default values here are alpha1=0.216, alpha2=4.06 and alpha3=0.821.
+
+        NB: If an Rh value is computed and then re-requested with the same
+        mode, the cached value is returned. This is to avoid recomputing
+        the Rh value if it has already been computed. If you want to
+        recompute the Rh value, set force_recompute=True. Also, if Rh with
+        a different mode is requested, the cached value is recomputed 
+        automatically. This is to avoid a situation where you request Rh
+        for one mode but actually get a (cached) value for another mode.
+
+        [1]  Kirkwood & Riseman,(1948). The Intrinsic Viscosities
+        and Diffusion Constants of Flexible Macromolecules in Solution.
+        The Journal of Chemical Physics, 16(6), 565-573.
+
+        [2] Pesce et al. Assessment of models for calculating the hydrodynamic 
+        radius of intrinsically disordered proteins. Biophys. J. 122, 
+        310-321 (2023).
+
+        [3] Nygaard et al.  An Efficient Method for Estimating the Hydrodynamic 
+        Radius of Disordered Protein Conformations. Biophys J. 2017;113: 550-557.
         
         Parameters
         ----------
@@ -406,36 +443,84 @@ class Ensemble:
             If True, forces recomputation of the hydrodynamic radius, 
             otherwise uses the cached value if previously computed.
             Default is False.
+
+        mode : str
+            The mode to use for computing the hydrodynamic radius.
+            Options are 'kr' (Kirkwood-Riseman) or 'nygaard' (Nygaard).
+            Default is 'nygaard'.
             
+        alpha1 : float
+           First parameter in equation (7) from Nygaard et al. Default = 0.216
+
+        alpha2 : float
+           Second parameter in equation (7) from Nygaard et al. Default = 4.06
+
+        alpha3 : float
+           Third parameter in equation (7) from Nygaard et al. Default = 0.821
+
         Returns
         -------
         np.array or float
             Array of hydrodynamic radii for each conformation in the ensemble.
             If return_mean is set to true returns the mean value as a float
-
         """
 
-        if len(self.__rh_vals) == 0 or force_recompute:
+        # check the mode
+        mode = mode.lower()
+        if mode not in ['kr', 'nygaard']:
+            raise ValueError("mode must be either 'kr' or 'nygaard'")
+
+        # if we want to recompute...
+        if len(self.__rh_vals) == 0 or force_recompute or mode != self.__rh_mode_used:
+
+            # Nygaard mode
+            if mode == 'nygaard':
+
+                # first compute the rg
+                rg = self.radius_of_gyration()
+
+                # precompute                
+                N_033 = np.power(len(self.sequence), 0.33) 
+                N_060 = np.power(len(self.sequence), 0.60)
+
+                Rg_over_Rh = ((alpha1*(rg - alpha2*N_033)) / (N_060 - N_033)) + alpha3
+
+                Rh = (1/Rg_over_Rh)*rg
+
+                # assign the values to the class
+                self.__rh_vals = Rh
+                self.__rh_mode_used = mode
 
 
-            all_rij = []
-            # build empty lists associated with each frame
-            for _ in range(len(self)):
-                all_rij.append([])
+            # Kirkwood-Riseman mode
+            elif mode == 'kr':
+                all_rij = []
+                # build empty lists associated with each frame
+                for _ in range(len(self)):
+                    all_rij.append([])
 
 
-            for i in range(len(self.sequence)):
-                tmp = []
-                for j in range(i+1, len(self.sequence)):
-                    tmp.append(self.rij(i,j))
+                for i in range(len(self.sequence)):
+                    tmp = []
+                    for j in range(i+1, len(self.sequence)):
+                        tmp.append(self.rij(i,j))
 
-                tmp = np.array(tmp).T
+                    tmp = np.array(tmp).T
 
-                for idx, f in enumerate(tmp):
-                    all_rij[idx].extend((1/f).tolist())
+                    for idx, f in enumerate(tmp):
+                        all_rij[idx].extend((1/f).tolist())
 
-            Rh = np.reciprocal(np.mean(all_rij, axis=1).astype(float))
+                Rh = np.reciprocal(np.mean(all_rij, axis=1).astype(float))
 
+                # assign the values to the class
+                self.__rh_vals = Rh
+                self.__rh_mode_used = mode
+
+            # read from precomputed values
+            else:
+                raise Exception("Invalid mode specified. Must be 'kr' or 'nygaard'")
+            
+        # else use the precomputed values
         else:
             Rh = self.__rh_vals
 
