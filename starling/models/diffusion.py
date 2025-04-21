@@ -185,7 +185,7 @@ class DiffusionModel(pl.LightningModule):
             self.register_buffer(name, buffer)
 
         # Store timesteps information
-        self.num_timesteps = self.sampling_timesteps = int(betas.shape[0])
+        self.num_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
 
         # Set up sequence embedding if using learned embeddings
