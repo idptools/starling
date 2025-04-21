@@ -184,105 +184,134 @@ class ContinuousDiffusion(pl.LightningModule):
     def p_losses(
         self,
         x_start: torch.Tensor,
-        t: int,
+        t: torch.Tensor,
         labels: torch.Tensor = None,
         noise: torch.Tensor = None,
         masks: torch.Tensor = None,
     ) -> torch.Tensor:
         """
-        A function that runs the model and calculates the loss based on the
-        predicted noise and the actual noise. The loss can either be L1 or L2.
+        Calculate model loss based on predicted vs actual noise.
 
         Parameters
         ----------
         x_start : torch.Tensor
-            The starting image tensor
-        t : int
-            The timestep along the denoising-diffusion process
+            The starting tensor to denoise
+        t : torch.Tensor
+            Timesteps along the denoising-diffusion process
         labels : torch.Tensor, optional
-            Labels to condition the model on, by default None
+            Condition labels for the model
         noise : torch.Tensor, optional
-            Sampled noise from N(0,I), by default None
-        loss_type : str, optional
-            The type of loss to calculate between the
-            amount of added noise and predicted noise, by default "l2"
+            Optional pre-defined noise, otherwise sampled from N(0,I)
+        masks : torch.Tensor, optional
+            Optional masks for conditional generation
 
         Returns
         -------
         torch.Tensor
-            Returns the loss
-
-        Raises
-        ------
-        ValueError
-            If the loss type is not one of the two options (l1, l2)
+            Mean MSE loss between predicted and actual noise
         """
-        if noise is None:
-            noise = torch.randn_like(x_start)
-            # Offset noise that seems to improve the inference
-            # According to https://www.crosslabs.org/blog/diffusion-with-offset-noise
-            # noise += 0.1 * torch.randn(
-            #     x_start.shape[0], x_start.shape[1], 1, 1, device=self.device
-            # )
+        # Use standard normal distribution if no noise provided
+        noise = torch.randn_like(x_start) if noise is None else noise
 
-        # Noise the input data
-        x, log_snr = self.q_sample(x_start=x_start, times=t, noise=noise)
+        # Apply noise according to timestep
+        noised_input, log_snr = self.q_sample(x_start=x_start, times=t, noise=noise)
 
-        # Get the labels to condition the model on
-        labels = self.sequence2labels(labels)
+        # Prepare condition labels
+        condition_labels = self.sequence2labels(labels)
 
-        # Run the model to predict the noise
-        predicted_noise = self.model(x, log_snr, labels)
+        # Predict the noise
+        predicted_noise = self.model(noised_input, log_snr, condition_labels)
 
-        losses = F.mse_loss(predicted_noise, noise, reduction="none")
-        losses = reduce(losses, "b ... -> b", "mean")
+        # Calculate per-element loss and reduce to per-batch loss
+        per_element_loss = F.mse_loss(predicted_noise, noise, reduction="none")
+        per_batch_loss = reduce(per_element_loss, "b ... -> b", "mean")
 
+        # Apply minimum SNR loss weighting if enabled
         if self.min_snr_loss_weight:
             snr = log_snr.exp()
             loss_weight = snr.clamp(min=self.min_snr_gamma) / snr
-            losses = losses * loss_weight
+            per_batch_loss = per_batch_loss * loss_weight
 
-        return losses.mean()
+        return per_batch_loss.mean()
 
-    def forward(self, x, labels, masks=None):
-        b = x.shape[0]
+    def forward(
+        self, x: torch.Tensor, labels: torch.Tensor, masks: torch.Tensor = None
+    ) -> torch.Tensor:
+        """
+        Forward pass that samples random timesteps and calculates loss.
 
-        times = self.random_times(b)
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor
+        labels : torch.Tensor
+            Condition labels
+        masks : torch.Tensor, optional
+            Optional masks
 
-        return self.p_losses(x, times, labels, masks)
+        Returns
+        -------
+        torch.Tensor
+            Loss value
+        """
+        batch_size = x.shape[0]
+        random_timesteps = self.random_times(batch_size)
+
+        return self.p_losses(x, random_timesteps, labels, masks=masks)
+
+    def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
+        """
+        Initialize the latent space scaling factor using the first batch.
+
+        Parameters
+        ----------
+        latent_encoding : torch.Tensor
+            Batch of encoded latent vectors
+        """
+        # Calculate local standard deviation
+        local_std = latent_encoding.std()
+
+        # Gather from all processes and compute global standard deviation
+        gathered_std = self.all_gather(local_std)
+        mean_std = gathered_std.mean()
+
+        # Set consistent scaling factor across all GPUs
+        scaling_factor = 1 / mean_std
+        self.latent_space_scaling_factor = scaling_factor.float().to(self.device)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        """
+        Training step that encodes inputs and calculates diffusion loss.
+
+        Parameters
+        ----------
+        batch : torch.Tensor
+            Batch containing data and sequence labels
+        batch_idx : int
+            Index of the current batch
+
+        Returns
+        -------
+        torch.Tensor
+            Training loss
+        """
         data, sequences = batch
 
+        # Encode input data to latent space
         with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(data)
-            latent_encoding = latent_encoding.sample()
+            latent_encoding = self.encoder_model.encode(data).sample()
 
-        # Figure out the standard deviation of the latent space using
-        # the first batch of the data. This is to scale it to have unit variance
-        # stabilizes denoising-diffusion training
+        # Initialize scaling factor on first batch
         if self.global_step == 0 and batch_idx == 0:
-            # Calculate local scaling factor
-            local_std = latent_encoding.std()
+            self._initialize_latent_scaling(latent_encoding)
 
-            # Gather from all processes and compute global std
-            gathered_std = self.all_gather(local_std)
+        # Scale latent vectors to have unit standard deviation
+        normalized_latents = self.latent_space_scaling_factor * latent_encoding
 
-            # Average across all GPUs to get consistent value
-            mean_std = gathered_std.mean()
+        # Calculate diffusion loss
+        loss = self.forward(normalized_latents, labels=sequences)
 
-            # Set the same scaling factor on all GPUs
-            latent_space_scaling_factor = 1 / mean_std
-            self.latent_space_scaling_factor = latent_space_scaling_factor.float().to(
-                self.device
-            )
-
-        # Scale the latent encoding to have unit std
-        latent_encoding = self.latent_space_scaling_factor * latent_encoding
-
-        loss = self.forward(latent_encoding, labels=sequences)
-
-        # If multi-GPU training; this only shows loss for GPU 0 (not synced across all GPUs)
+        # Log the training loss
         self.log("train_loss", loss, prog_bar=True, batch_size=data.size(0))
 
         return loss
@@ -291,8 +320,7 @@ class ContinuousDiffusion(pl.LightningModule):
         data, sequences = batch
 
         with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(data)
-            latent_encoding = latent_encoding.sample()
+            latent_encoding = self.encoder_model.encode(data).sample()
 
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
