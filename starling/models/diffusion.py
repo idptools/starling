@@ -54,6 +54,15 @@ def extract(
 
 
 class DiffusionModel(pl.LightningModule):
+    """
+    Denoising diffusion probabilistic model for latent space generation.
+
+    Implements the diffusion process described in:
+    - Sohl-Dickstein et al. (2015): Nonequilibrium Thermodynamics
+    - Ho et al. (2020): Denoising Diffusion Probabilistic Models
+    - Rombach et al. (2021): High-resolution image synthesis with latent diffusion
+    """
+
     SCHEDULER_MAPPING = {
         "linear": linear_beta_schedule,
         "cosine": cosine_beta_schedule,
@@ -146,15 +155,13 @@ class DiffusionModel(pl.LightningModule):
         if schedule_fn_kwargs is None:
             schedule_fn_kwargs = {}
 
-        # This will be calculated later on during the first global step
-        # Need to register here so pytorch_lightning doesn't freak out
-        # Assuming the expected shape for the buffer is [1]
-        # This is used to scale the latent space to have unit variance (see reference #3)
-        latent_space_scaling_factor = torch.tensor(1.0, dtype=torch.float32)
+        # Register scaling factor buffer (calculated during first training step)
+        # Used to normalize latent space to unit variance per Reference #3
+        self.register_buffer(
+            "latent_space_scaling_factor", torch.tensor(1.0, dtype=torch.float32)
+        )
 
-        # Register the buffer
-        self.register_buffer("latent_space_scaling_factor", latent_space_scaling_factor)
-
+        # Calculate diffusion process parameters
         betas = self.beta_scheduler_fn(timesteps, **schedule_fn_kwargs)
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -163,24 +170,25 @@ class DiffusionModel(pl.LightningModule):
             betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         )
 
-        # Register the buffers for the model
-        self.register_buffer("betas", betas)
-        self.register_buffer("alphas_cumprod", alphas_cumprod)
-        self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
-        self.register_buffer("sqrt_recip_alphas", torch.sqrt(1.0 / alphas))
-        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
-        self.register_buffer(
-            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
-        )
-        self.register_buffer("posterior_variance", posterior_variance)
+        # Register diffusion process buffers
+        buffers = {
+            "betas": betas,
+            "alphas_cumprod": alphas_cumprod,
+            "alphas_cumprod_prev": alphas_cumprod_prev,
+            "sqrt_recip_alphas": torch.sqrt(1.0 / alphas),
+            "sqrt_alphas_cumprod": torch.sqrt(alphas_cumprod),
+            "sqrt_one_minus_alphas_cumprod": torch.sqrt(1.0 - alphas_cumprod),
+            "posterior_variance": posterior_variance,
+        }
 
-        timesteps, *_ = betas.shape
-        self.num_timesteps = int(timesteps)
+        for name, buffer in buffers.items():
+            self.register_buffer(name, buffer)
 
-        self.sampling_timesteps = timesteps
-
+        # Store timesteps information
+        self.num_timesteps = self.sampling_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
 
+        # Set up sequence embedding if using learned embeddings
         if self.labels == "learned-embeddings":
             self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
 
