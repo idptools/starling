@@ -268,18 +268,34 @@ class DDPMSampler(nn.Module):
 
     def helix_guidance_loss(self, D_pred, start=50, end=150):
         helix_pairs = [(1, 3.8), (2, 5.4), (3, 6.0), (4, 5.4)]
-        loss = 0.0
-        count = 0
+        batch_size = D_pred.shape[0]
         D_pred = D_pred.squeeze()
+
+        # Initialize per-sample losses
+        per_sample_loss = torch.zeros(batch_size, device=D_pred.device)
+        count = 0
+
         for i in range(start, end):
             for offset, target in helix_pairs:
                 j = i + offset
                 if j <= end:
                     dist = D_pred[:, i, j]  # (B,) distance values
-                    loss += ((dist - target) ** 2).mean()
+                    per_sample_loss += (dist - target) ** 2  # Add to per-sample loss
                     count += 1
 
-        return loss / count if count > 0 else 0.0
+        # Normalize by count for each sample
+        if count > 0:
+            per_sample_loss = per_sample_loss / count
+
+        # For backward compatibility, also return mean loss
+        total_loss = per_sample_loss.mean()
+
+        return total_loss, per_sample_loss
+
+    def cosine_weight(self, timestep, total_steps=1000, s=0.008):
+        t = timestep / total_steps
+        f_t = np.cos((t + s) / (1 + s) * np.pi / 2) ** 2
+        return f_t
 
     def sample_with_helicity_constraint(
         self,
@@ -289,10 +305,11 @@ class DDPMSampler(nn.Module):
         batch_count: int = 1,
         max_batch_count: int = 1,
         return_all_timesteps: bool = False,
-        resid_start: int = 20,
-        resid_end: int = 60,
+        resid_start: int = 40,
+        resid_end: int = 80,
         constraint_weight: float = 0.5,
-        guidance_scale: float = 5.0,
+        guidance_scale: float = 1.0,
+        guidance_schedule="linear",
     ):
         """
         Sample conformations with gradient-based helicity guidance in a specified region.
@@ -331,14 +348,15 @@ class DDPMSampler(nn.Module):
         # Generate reference helix distance map
         helix_ref = torch.from_numpy(helix_dm(L=384)).to(self.device)
 
-        # mask = torch.zeros((384, 384), device=self.device)
-        # mask[resid_start:resid_end, resid_start:resid_end] = 1.0
-
         # Create mask for the constrained region
         region = torch.ones((resid_end - resid_start, resid_end - resid_start))
         upper_tri = torch.triu(region, diagonal=1)
         mask = torch.zeros((384, 384), device=self.device)
         mask[resid_start:resid_end, resid_start:resid_end] = upper_tri
+
+        # Create weights inversely proportional to the reference distances
+        # Small epsilon prevents division by zero
+        weights = 1.0 / (helix_ref + 1e-2)
 
         # Track denoising trajectory if requested
         denoising_trajectory = [] if return_all_timesteps else None
@@ -359,7 +377,7 @@ class DDPMSampler(nn.Module):
             # Perform single denoising step
             latents = self.p_sample(latents, timestep, labels)
 
-            if timestep != 0:
+            if timestep < 50:
                 # Apply gradient-based guidance
                 with torch.inference_mode(False):
                     # Create a fresh copy rather than detaching the inference tensor
@@ -369,21 +387,26 @@ class DDPMSampler(nn.Module):
                     scaled_latents = latents_copy / self.latent_space_scaling_factor
                     distance_maps = self.encoder_model.decode(scaled_latents)
 
-                    # # Calculate per-conformation loss
-                    region_loss = ((distance_maps - helix_ref) ** 2) * mask
-                    per_batch_loss = region_loss.sum(dim=(1, 2, 3)) / mask.sum()
+                    # Calculate per-conformation loss
+                    region_loss = ((distance_maps - helix_ref) ** 2) * weights * mask
+                    per_batch_loss = (
+                        region_loss.sum(dim=(1, 2, 3)) / (weights * mask).sum()
+                    )
 
-                    # # Sum all losses to get gradients for all conformations
+                    # Sum all losses to get gradients for all conformations
                     total_loss = per_batch_loss.mean()
 
-                    total_loss.backward()
+                    # total_loss, per_batch_loss = self.helix_guidance_loss(
+                    #     distance_maps, start=resid_start, end=resid_end
+                    # )
 
-                    # or??
-                    # grad = torch.autograd.grad(total_loss, latents_copy)[0]
+                    base_grad = torch.autograd.grad(total_loss, latents_copy)[0]
 
-                    # Get the base gradients
-                    base_grad = latents_copy.grad
+                    time_scale = self.cosine_weight(
+                        timestep, total_steps=self.n_steps, s=0.008
+                    )
 
+                    print("Time_scale:", time_scale)
                     print("Total loss:", total_loss.item())
                     print("Base gradient:", base_grad.norm().item())
 
@@ -397,12 +420,13 @@ class DDPMSampler(nn.Module):
                             -guidance_scale
                             * constraint_weight
                             * conformation_scale
+                            * time_scale
                             * base_grad[i]
                         )
 
                     # Add gradient norm monitoring
                     update_norm = scaled_update.norm().item()
-                    if update_norm > 1.0:  # Prevent too large updates
+                    if update_norm > 1:  # Prevent too large updates
                         scaled_update = scaled_update * (1.0 / update_norm)
 
                     # Update original latents with individually scaled gradients
