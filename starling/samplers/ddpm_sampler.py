@@ -309,7 +309,9 @@ class DDPMSampler(nn.Module):
         resid_end: int = 80,
         constraint_weight: float = 0.5,
         guidance_scale: float = 1.0,
-        guidance_schedule="linear",
+        guidance_schedule: str = "cosine",
+        guidance_start_timestep: int = 50,
+        verbose: bool = False,
     ):
         """
         Sample conformations with gradient-based helicity guidance in a specified region.
@@ -318,125 +320,92 @@ class DDPMSampler(nn.Module):
         ----------
         num_conformations : int
             The number of conformations to sample
-        sequence : str
+        labels : str
             The protein sequence to condition on
+        show_per_step_progress_bar : bool, optional
+            Whether to show progress bar, by default True
+        batch_count : int, optional
+            Current batch count for logging, by default 1
+        max_batch_count : int, optional
+            Maximum batch count for logging, by default 1
+        return_all_timesteps : bool, optional
+            Whether to return the full trajectory of denoising, by default False
         resid_start, resid_end : int
             The start and end residue indices for the helical constraint
         constraint_weight : float
             Strength of the helicity constraint
         guidance_scale : float
             Scale factor for gradient guidance strength
+        guidance_schedule : str, optional
+            Type of guidance schedule to use ("linear" or "cosine"), by default "linear"
+        guidance_start_timestep : int, optional
+            Timestep to start applying guidance, by default 50
+        verbose : bool, optional
+            Whether to print debug information, by default False
 
         Returns
         -------
         torch.Tensor
             Distance maps representing protein conformations with helical regions
         """
+        # Setup latent space and labels
         latent_shape = (
             num_conformations,
             self.in_channels,
             self.image_size,
             self.image_size,
         )
-
-        # Convert sequence to model-compatible label format
-        labels = self.generate_labels(labels)
-
-        # Initialize noise for latent representation
+        model_labels = self.generate_labels(labels)
         latents = torch.randn(latent_shape, device=self.device)
 
         # Generate reference helix distance map
         helix_ref = torch.from_numpy(helix_dm(L=384)).to(self.device)
 
-        # Create mask for the constrained region
-        region = torch.ones((resid_end - resid_start, resid_end - resid_start))
-        upper_tri = torch.triu(region, diagonal=1)
+        # Create mask for the constrained region - upper triangular part only
         mask = torch.zeros((384, 384), device=self.device)
-        mask[resid_start:resid_end, resid_start:resid_end] = upper_tri
+        mask[resid_start:resid_end, resid_start:resid_end] = torch.triu(
+            torch.ones((resid_end - resid_start, resid_end - resid_start)), diagonal=1
+        )
 
         # Create weights inversely proportional to the reference distances
-        # Small epsilon prevents division by zero
         weights = 1.0 / (helix_ref + 1e-2)
 
-        # Track denoising trajectory if requested
+        # Setup for tracking denoising trajectory
         denoising_trajectory = [] if return_all_timesteps else None
 
-        # Use all timesteps
-        timesteps = torch.arange(0, self.n_steps)
-
-        # Reverse timesteps to go from noisy to clean
+        # Process all timesteps in reverse order (from noisy to clean)
         for timestep in tqdm(
-            reversed(timesteps),
+            reversed(range(self.n_steps)),
             desc="Denoising with helicity guidance",
-            total=len(timesteps),
+            total=self.n_steps,
+            disable=not show_per_step_progress_bar,
         ):
             # Store current state if tracking trajectory
             if return_all_timesteps:
                 denoising_trajectory.append(latents.clone())
 
-            # Perform single denoising step
-            latents = self.p_sample(latents, timestep, labels)
+            # Perform standard denoising step
+            latents = self.p_sample(latents, timestep, model_labels)
 
-            if timestep < 50:
-                # Apply gradient-based guidance
-                with torch.inference_mode(False):
-                    # Create a fresh copy rather than detaching the inference tensor
-                    latents_copy = latents.clone().requires_grad_(True)
-
-                    # Get current distance maps
-                    scaled_latents = latents_copy / self.latent_space_scaling_factor
-                    distance_maps = self.encoder_model.decode(scaled_latents)
-
-                    # Calculate per-conformation loss
-                    region_loss = ((distance_maps - helix_ref) ** 2) * weights * mask
-                    per_batch_loss = (
-                        region_loss.sum(dim=(1, 2, 3)) / (weights * mask).sum()
-                    )
-
-                    # Sum all losses to get gradients for all conformations
-                    total_loss = per_batch_loss.mean()
-
-                    # total_loss, per_batch_loss = self.helix_guidance_loss(
-                    #     distance_maps, start=resid_start, end=resid_end
-                    # )
-
-                    base_grad = torch.autograd.grad(total_loss, latents_copy)[0]
-
-                    time_scale = self.cosine_weight(
-                        timestep, total_steps=self.n_steps, s=0.008
-                    )
-
-                    print("Time_scale:", time_scale)
-                    print("Total loss:", total_loss.item())
-                    print("Base gradient:", base_grad.norm().item())
-
-                    # Apply different scaling to each conformation based on its loss
-                    scaled_update = torch.zeros_like(latents)
-                    for i in range(num_conformations):
-                        # Scale gradient by the relative magnitude of this conformation's loss
-                        # Higher loss = stronger gradient correction
-                        conformation_scale = per_batch_loss[i] / per_batch_loss.mean()
-                        scaled_update[i] = (
-                            -guidance_scale
-                            * constraint_weight
-                            * conformation_scale
-                            * time_scale
-                            * base_grad[i]
-                        )
-
-                    # Add gradient norm monitoring
-                    update_norm = scaled_update.norm().item()
-                    if update_norm > 1:  # Prevent too large updates
-                        scaled_update = scaled_update * (1.0 / update_norm)
-
-                    # Update original latents with individually scaled gradients
-                    latents = latents + scaled_update.detach()
+            # Apply gradient-based guidance at specific timesteps
+            if timestep < guidance_start_timestep:
+                latents = self._apply_helicity_guidance(
+                    latents=latents,
+                    helix_ref=helix_ref,
+                    mask=mask,
+                    weights=weights,
+                    timestep=timestep,
+                    constraint_weight=constraint_weight,
+                    guidance_scale=guidance_scale,
+                    guidance_schedule=guidance_schedule,
+                    verbose=verbose,
+                )
 
         # Final step: Get the distance maps from the guided latents
         scaled_latents = latents.detach() / self.latent_space_scaling_factor
         distance_maps = self.encoder_model.decode(scaled_latents)
 
-        # Return full trajectory if requested
+        # Return appropriate result based on tracking option
         if return_all_timesteps:
             trajectory_latents = (
                 torch.stack(denoising_trajectory, dim=1)
@@ -445,3 +414,98 @@ class DDPMSampler(nn.Module):
             return self.encoder_model.decode(trajectory_latents)
 
         return distance_maps
+
+    def _apply_helicity_guidance(
+        self,
+        latents: torch.Tensor,
+        helix_ref: torch.Tensor,
+        mask: torch.Tensor,
+        weights: torch.Tensor,
+        timestep: int,
+        constraint_weight: float,
+        guidance_scale: float,
+        guidance_schedule: str = "cosine",
+        verbose: bool = False,
+    ) -> torch.Tensor:
+        """Apply gradient-based helicity guidance to the latent vectors.
+
+        Parameters
+        ----------
+        latents : torch.Tensor
+            Current latent vectors to update
+        helix_ref : torch.Tensor
+            Reference helix distance map
+        mask : torch.Tensor
+            Mask for the constrained region
+        weights : torch.Tensor
+            Per-position weight factors
+        timestep : int
+            Current timestep
+        constraint_weight : float
+            Overall strength of the helicity constraint
+        guidance_scale : float
+            Scale factor for guidance strength
+        guidance_schedule : str, optional
+            Type of schedule to use, by default "linear"
+        verbose : bool, optional
+            Whether to print debug info, by default False
+
+        Returns
+        -------
+        torch.Tensor
+            Updated latent vectors
+        """
+        with torch.inference_mode(False):
+            # Create a fresh copy with gradient tracking
+            latents_copy = latents.clone().requires_grad_(True)
+
+            # Decode to get current distance maps
+            scaled_latents = latents_copy / self.latent_space_scaling_factor
+            distance_maps = self.encoder_model.decode(scaled_latents)
+
+            # Calculate loss in the target region
+            region_loss = ((distance_maps - helix_ref) ** 2) * weights * mask
+            normalization_factor = (weights * mask).sum()
+            per_batch_loss = region_loss.sum(dim=(1, 2, 3)) / normalization_factor
+
+            # Get total loss and compute gradients
+            total_loss = per_batch_loss.mean()
+            base_grad = torch.autograd.grad(total_loss, latents_copy)[0]
+
+            # Determine time-dependent guidance strength
+            if guidance_schedule == "cosine":
+                time_scale = self.cosine_weight(
+                    timestep, total_steps=self.n_steps, s=0.008
+                )
+            else:  # linear or any other default
+                time_scale = 1.0 - (timestep / self.n_steps)
+
+            if verbose:
+                print(
+                    f"Time scale: {time_scale:.4f}, Loss: {total_loss.item():.4f}, "
+                    f"Gradient norm: {base_grad.norm().item():.4f}"
+                )
+
+            # Calculate per-sample loss scaling (vectorized)
+            # Each conformation gets scaled by how much its loss differs from the mean
+            loss_scale = per_batch_loss / per_batch_loss.mean()
+
+            # Match dimensions for broadcasting
+            loss_scale = loss_scale.view(-1, 1, 1, 1)
+
+            # Apply all scaling factors at once
+            scaled_update = (
+                -guidance_scale
+                * constraint_weight
+                * time_scale
+                * loss_scale
+                * base_grad
+            )
+
+            # Clip gradient update if too large
+            update_norm = scaled_update.norm().item()
+            if update_norm > 1.0:
+                scaled_update = scaled_update * (1.0 / update_norm)
+
+            # Apply the gradient update
+            return latents + scaled_update.detach()
