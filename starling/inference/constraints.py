@@ -1,5 +1,4 @@
 import math
-import time
 from abc import ABC
 from typing import Tuple
 
@@ -10,7 +9,7 @@ from starling.utilities import helix_dm
 
 
 class Constraint(ABC):
-    def __init__(self, encoder_model, latent_space_scaling_factor, n_steps):
+    def __init__(self, constraint_weight=1.0, schedule="cosine", verbose=True):
         """Initialize base constraint with common parameters.
 
         Parameters
@@ -22,14 +21,48 @@ class Constraint(ABC):
         n_steps : int
             Total number of diffusion steps
         """
+
+        # These will be set by the sampler
+        self.encoder_model = None
+        self.latent_space_scaling_factor = None
+        self.n_steps = None
+        self.device = None
+
+        # User-controlled parameters
+        self.constraint_weight = constraint_weight
+        self.schedule = schedule
+        self.verbose = verbose
+
+    def _setup_constraint(self):
+        """Set up constraint-specific resources."""
+        pass  # Implemented by subclasses
+
+    def initialize(
+        self, encoder_model, latent_space_scaling_factor, n_steps, sequence_length
+    ):
+        """Called by the sampler to set model parameters."""
         self.encoder_model = encoder_model
         self.latent_space_scaling_factor = latent_space_scaling_factor
         self.n_steps = n_steps
+        self.device = encoder_model.device
+        self.sequence_length = sequence_length
+        self._setup_constraint()
+        return self
 
     def cosine_weight(self, t, total_steps, s=0.008):
         """Cosine schedule for time-dependent guidance strength."""
         t_scaled = t / total_steps
         return math.cos(t_scaled * math.pi / 2) ** 2
+
+    def get_adaptive_clip_threshold(self, timestep):
+        """Get an adaptive clipping threshold that follows a cosine schedule."""
+        max_threshold = 5.0  # Maximum threshold at beginning
+        min_threshold = 1.0  # Minimum threshold at end
+
+        # Cosine decay from max_threshold to min_threshold
+        fraction_complete = 1 - (timestep / self.n_steps)
+        cosine_factor = math.cos(fraction_complete * math.pi / 2)
+        return min_threshold + cosine_factor**2 * (max_threshold - min_threshold)
 
     def compute_loss(
         self, distance_maps: torch.Tensor
@@ -49,7 +82,7 @@ class Constraint(ABC):
         """
         raise NotImplementedError("Subclasses should implement compute_loss")
 
-    def apply(self, latents: torch.Tensor, timestep: int) -> torch.Tensor:
+    def apply(self, latents: torch.Tensor, timestep: int, logger=None) -> torch.Tensor:
         """Apply the constraint to the given latents."""
         with torch.inference_mode(False):
             latents_copy = latents.clone().requires_grad_(True)
@@ -69,28 +102,32 @@ class Constraint(ABC):
             loss_scale = per_batch_loss / per_batch_loss.mean()
             loss_scale = loss_scale.view(-1, 1, 1, 1)
 
-            base_grad_norm = base_grad.norm().item()
-            print(f"[{self.__class__.__name__}] Timestep: {timestep}/{self.n_steps}")
-            print(f"  - Loss: {loss.item():.6f}")
-            print(f"  - Base gradient norm: {base_grad_norm:.6f}")
-            print(f"  - Time scale: {time_scale:.4f}")
-            print(
-                f"  - Min/Max loss scale: {loss_scale.min().item():.4f}/{loss_scale.max().item():.4f}"
-            )
-
             # Apply all scaling factors
             scaled_update = (
-                -self.guidance_scale
-                * self.constraint_weight
-                * time_scale
-                * loss_scale
-                * base_grad
+                -self.constraint_weight * time_scale * loss_scale * base_grad
             )
 
             # Clip gradient update if too large
             update_norm = scaled_update.norm().item()
-            if update_norm > 1.0:
-                scaled_update = scaled_update * (1.0 / update_norm)
+            max_grad_norm = self.get_adaptive_clip_threshold(timestep)
+            if update_norm > max_grad_norm:
+                scaled_update = scaled_update * (max_grad_norm / update_norm)
+
+            # Log if logger is provided
+            if logger is not None and self.verbose:
+                logger.update(
+                    timestep,
+                    self.__class__.__name__,
+                    {
+                        "loss": loss.item(),
+                        "grad_norm": scaled_update.norm().item(),
+                        # "update_norm": update_norm,
+                        "time_scale": time_scale,
+                        "min_loss_scale": loss_scale.min().item(),
+                        "max_loss_scale": loss_scale.max().item(),
+                        # "clipped": update_norm > 1.0,
+                    },
+                )
 
             return latents + scaled_update.detach()
 
@@ -102,35 +139,138 @@ class Constraint(ABC):
             return 1.0 - (timestep / self.n_steps)
 
 
-class HelicityConstraint(Constraint):
+class BondConstraint(Constraint):
     def __init__(
-        self,
-        encoder_model,
-        latent_space_scaling_factor,
-        resid_start,
-        resid_end,
-        n_steps,
-        constraint_weight,
-        guidance_scale,
-        schedule="cosine",
-        verbose=False,
+        self, bond_length=3.81, tolerance=1.0, force_constant=2.0, constraint_weight=1.0
     ):
-        super().__init__(encoder_model, latent_space_scaling_factor, n_steps)
-        self.helix_ref = torch.from_numpy(helix_dm(L=384)).to(encoder_model.device)
+        super().__init__(constraint_weight=constraint_weight)
+        self.bond_length = bond_length
+        self.tolerance = tolerance
+        self.force_constant = force_constant
 
-        # Create mask for the constrained region - upper triangular part only
-        self.mask = torch.zeros((384, 384), device=encoder_model.device)
-        self.mask[resid_start:resid_end, resid_start:resid_end] = torch.triu(
-            torch.ones((resid_end - resid_start, resid_end - resid_start)), diagonal=1
+    def compute_loss(
+        self, distance_maps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute bond loss based on distance maps.
+        This loss penalizes deviations from the ideal bond length of 3.81 Å
+        and applies a flat-bottom potential for deviations beyond 1.0 Å.
+
+        Parameters
+        ----------
+        distance_maps : torch.Tensor
+            Pre-computed distance maps from the latents
+
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor]
+            Per-batch loss and mean loss
+        """
+
+        distance_maps = distance_maps[
+            :, :, : self.sequence_length, : self.sequence_length
+        ].squeeze()
+
+        # Take the one off diagonal
+        bonds = torch.diagonal(distance_maps, offset=1, dim1=1, dim2=2)
+
+        # Calculate deviation from the ideal bond length
+        deviation = torch.abs(bonds - self.bond_length)
+
+        # Apply flat-bottom: only penalize deviations beyond tolerance
+        excess = torch.nn.functional.relu(deviation - self.tolerance)
+
+        # Calculate harmonic potential for the excess deviation
+        per_batch_loss = (0.5 * self.force_constant * excess**2).mean(dim=1)
+
+        return per_batch_loss, per_batch_loss.mean()
+
+
+class StericClashConstraint(Constraint):
+    def __init__(
+        self, steric_clash_definition=5.0, force_constant=2.0, constraint_weight=1.0
+    ):
+        super().__init__(constraint_weight=constraint_weight)
+        self.steric_clash_definition = steric_clash_definition
+        self.force_constant = force_constant
+
+    def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
+        """
+        Compute steric clash loss based on distance maps.
+        This loss penalizes distances below a certain threshold (default 5.0 Å)
+        and applies a flat-bottom potential for distances below this threshold.
+
+        Parameters
+        ----------
+        distance_maps : torch.Tensor
+            Pre-computed distance maps from the latents
+
+        Returns
+        -------
+        torch.Tensor
+            Per-batch loss and mean loss
+        """
+        mask = torch.triu(
+            torch.ones(
+                self.sequence_length, self.sequence_length, device=distance_maps.device
+            ),
+            diagonal=2,
         )
 
-        # Create weights inversely proportional to the reference distances
-        self.weights = 1.0 / (self.helix_ref + 1e-2)
+        distance_maps = distance_maps[
+            :, :, : self.sequence_length, : self.sequence_length
+        ]
 
-        self.constraint_weight = constraint_weight
-        self.guidance_scale = guidance_scale
-        self.schedule = schedule
-        self.verbose = verbose
+        # Calculate the deviation from steric_clash_definition (only when distances are smaller)
+        deviation = torch.relu(self.steric_clash_definition - distance_maps)
+
+        # Apply harmonic potential formula: 0.5 * force_constant * deviation^2
+        steric_clash = 0.5 * self.force_constant * deviation**2
+
+        # Apply mask to consider only upper triangle without diagonals
+        steric_clash = steric_clash * mask
+
+        # Sum across all residue pairs and normalize
+        steric_clash = steric_clash.sum(dim=(1, 2, 3))
+        normalization_factor = mask.sum()
+        per_batch_loss = steric_clash / normalization_factor
+
+        return per_batch_loss, per_batch_loss.mean()
+
+
+class HelicityConstraint(Constraint):
+    def __init__(self, resid_start, resid_end, constraint_weight=1.0):
+        super().__init__(constraint_weight=constraint_weight)
+
+        self.resid_start = resid_start
+        self.resid_end = resid_end
+
+        # These will be initialized when the model is available
+        self.helix_ref = None
+        self.mask = None
+        self.weights = None
+
+    def _setup_constraint(self):
+        """Set up device-specific tensors."""
+        if not self.encoder_model:
+            return
+
+        # Create helix reference
+        self.helix_ref = torch.from_numpy(helix_dm(L=384)).to(self.device)
+
+        # Create mask
+        self.mask = torch.zeros((384, 384), device=self.device)
+        self.mask[
+            self.resid_start : self.resid_end, self.resid_start : self.resid_end
+        ] = torch.triu(
+            torch.ones(
+                (self.resid_end - self.resid_start, self.resid_end - self.resid_start)
+            ),
+            diagonal=1,
+        )
+
+        # Create weights
+        self.weights = 1.0 / (self.helix_ref + 1e-2)
 
     def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
         # Calculate loss in the target region
@@ -146,193 +286,138 @@ class HelicityConstraint(Constraint):
 class DistanceConstraint(Constraint):
     def __init__(
         self,
-        encoder_model,
-        latent_space_scaling_factor,
-        n_steps,
-        resid1,
-        resid2,
-        target_distances,
-        constraint_weight,
-        guidance_scale,
-        schedule="cosine",
+        resid1,  # Make this a list of integers
+        resid2,  # Make this a list of integers
+        target,  # Make this a list of floats
+        tolerance=0.0,  # Make this a list of floats
+        force_constant=1.0,  # Make this a list of floats
+        constraint_weight=1.0,
     ):
-        super().__init__(encoder_model, latent_space_scaling_factor, n_steps)
-        self.target_distances = target_distances
-        self.constraint_weight = constraint_weight
-        self.guidance_scale = guidance_scale
-        self.schedule = schedule
-
+        """Create constraint for distance between two residues."""
+        super().__init__(constraint_weight=constraint_weight)
         self.resid1 = resid1
         self.resid2 = resid2
+        self.target = target
+        self.tolerance = tolerance
+        self.force_constant = force_constant
 
-    def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
-        # Calculate loss in the target region
-        per_batch_loss = (
-            distance_maps[:, :, self.resid1, self.resid2] - self.target_distances
-        ) ** 2
+    def compute_loss(
+        self, distance_maps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Extract distances between specified residues
+        distances = distance_maps[:, :, self.resid1, self.resid2]
 
-        # Return mean loss
+        # Calculate deviation from target
+        deviation = torch.abs(distances - self.target)
+
+        # Apply flat-bottom: only penalize deviations beyond tolerance
+        excess = torch.nn.functional.relu(deviation - self.tolerance)
+
+        # Calculate harmonic potential for the excess deviation
+        per_batch_loss = 0.5 * self.force_constant * excess**2
+
         return per_batch_loss, per_batch_loss.mean()
 
 
 class RgConstraint(Constraint):
-    def __init__(
-        self,
-        encoder_model,
-        latent_space_scaling_factor,
-        n_steps,
-        target_distances,
-        mask,
-        weights,
-        constraint_weight,
-        guidance_scale,
-        schedule="cosine",
-    ):
-        super().__init__(encoder_model, latent_space_scaling_factor, n_steps)
-        self.target_distances = target_distances
-        self.mask = mask
-        self.weights = weights
-        self.constraint_weight = constraint_weight
-        self.guidance_scale = guidance_scale
-        self.schedule = schedule
+    def __init__(self, target, sequence_length, constraint_weight=1.0):
+        super().__init__(constraint_weight=constraint_weight)
+        self.target = target
+        self.sequence_length = torch.tensor(sequence_length)
 
+    def __compute_rg(self, distance_maps: torch.Tensor) -> torch.Tensor:
+        distance_maps = distance_maps[
+            :, :, : self.sequence_length, : self.sequence_length
+        ]
+        distances = torch.sum(torch.square(distance_maps), axis=(1, 2, 3))
+        rg_vals = torch.sqrt(distances / (2 * torch.pow(self.sequence_length, 2)))
 
-class ReConstraint(Constraint):
-    def __init__(
-        self,
-        encoder_model,
-        latent_space_scaling_factor,
-        n_steps,
-        target_distances,
-        mask,
-        weights,
-        constraint_weight,
-        guidance_scale,
-        schedule="cosine",
-    ):
-        super().__init__(encoder_model, latent_space_scaling_factor, n_steps)
-        self.target_distances = target_distances
-        self.mask = mask
-        self.weights = weights
-        self.constraint_weight = constraint_weight
-        self.guidance_scale = guidance_scale
-        self.schedule = schedule
+        return rg_vals
+
+    def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
+        predicted_rg = self.__compute_rg(distance_maps)
+        per_batch_loss = (predicted_rg - self.target) ** 2
+
+        return per_batch_loss, per_batch_loss.mean()
 
 
 class MultiConstraint(Constraint):
     """Combines multiple constraints into a single optimization step."""
 
-    def __init__(
-        self,
-        encoder_model,
-        latent_space_scaling_factor,
-        n_steps,
-        constraints,
-        constraint_weights=None,
-        verbose=False,
-    ):
+    def __init__(self, constraints, schedule="cosine", verbose=True):
         """
         Parameters
         ----------
-        encoder_model : nn.Module
-            The encoder model used to decode latents
-        latent_space_scaling_factor : float
-            Scaling factor for latent space
-        n_steps : int
-            Total number of diffusion steps
         constraints : list
             List of constraint objects to combine
         constraint_weights : list, optional
             Relative weights for each constraint (defaults to equal weights)
-        verbose : bool, optional
+        guidance_scale : float
+            Overall guidance scale for the combined constraint
+        schedule : str
+            Time schedule for constraint application ("cosine" or "linear")
+        verbose : bool
             Whether to print debug info
         """
-        super().__init__(encoder_model, latent_space_scaling_factor, n_steps)
+        super().__init__(schedule=schedule, verbose=verbose)
         self.constraints = constraints
+        self.constraint_weights = [
+            constraint.constraint_weight for constraint in constraints
+        ]
 
-        # Set default weights if not provided
-        if constraint_weights is None:
-            self.constraint_weights = [1.0] * len(constraints)
-        else:
-            self.constraint_weights = constraint_weights
+    def initialize(
+        self, encoder_model, latent_space_scaling_factor, n_steps, sequence_length
+    ):
+        """Initialize all constraints with the model parameters."""
+        super().initialize(
+            encoder_model, latent_space_scaling_factor, n_steps, sequence_length
+        )
 
-        self.verbose = verbose
+        # Initialize all subconstraints
+        for constraint in self.constraints:
+            constraint.initialize(
+                encoder_model, latent_space_scaling_factor, n_steps, sequence_length
+            )
 
-    def apply(self, latents: torch.Tensor, timestep: int) -> torch.Tensor:
-        with torch.inference_mode(False):
-            # Create a copy with gradient tracking
-            latents_copy = latents.clone().requires_grad_(True)
+        return self
 
-            # Decode latents once to get distance maps
-            scaled_latents = latents_copy / self.latent_space_scaling_factor
-            distance_maps = self.encoder_model.decode(scaled_latents)
+    def compute_loss(
+        self, distance_maps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute weighted combination of all constraint losses."""
+        total_per_batch_loss = None
+        total_loss = 0.0
 
-            # Compute loss for each constraint
-            total_loss = 0.0
-            losses = []
+        for i, (constraint, weight) in enumerate(
+            zip(self.constraints, self.constraint_weights)
+        ):
+            # Get per-batch and mean loss from each constraint
+            per_batch_loss, mean_loss = constraint.compute_loss(distance_maps)
 
-            for i, (constraint, weight) in enumerate(
-                zip(self.constraints, self.constraint_weights)
-            ):
-                # Each constraint should have a compute_loss method instead of applying gradients directly
-                constraint_loss = constraint.compute_loss(
-                    latents_copy, distance_maps, timestep
-                )
-                weighted_loss = weight * constraint_loss
-                total_loss += weighted_loss
-                losses.append(constraint_loss.item())
+            # Apply weight to both
+            weighted_per_batch = weight * per_batch_loss
+            weighted_loss = weight * mean_loss
 
-            # Compute gradients once for the combined loss
-            base_grad = torch.autograd.grad(total_loss, latents_copy)[0]
+            # Accumulate
+            if total_per_batch_loss is None:
+                total_per_batch_loss = weighted_per_batch
+            else:
+                total_per_batch_loss = total_per_batch_loss + weighted_per_batch
 
-            # Determine time-dependent guidance strength (could be constraint-specific)
-            time_scale = self.cosine_weight(timestep, total_steps=self.n_steps)
+            total_loss += weighted_loss
 
-            if self.verbose:
-                constraint_names = [type(c).__name__ for c in self.constraints]
-                loss_info = ", ".join(
-                    [
-                        f"{name}: {loss:.4f}"
-                        for name, loss in zip(constraint_names, losses)
-                    ]
-                )
-                print(
-                    f"Time step: {timestep}, {loss_info}, Combined loss: {total_loss.item():.4f}"
-                )
-
-            # Apply all scaling factors at once
-            scaled_update = -time_scale * base_grad
-
-            # Clip gradient update if too large
-            update_norm = scaled_update.norm().item()
-            if update_norm > 1.0:
-                scaled_update = scaled_update * (1.0 / update_norm)
-
-            # Apply the gradient update
-            return latents + scaled_update.detach()
+        return total_per_batch_loss, total_loss
 
 
 class ConstraintLogger:
-    """Logger that updates constraint metrics in-place using tqdm."""
-
     def __init__(self, n_steps, verbose=True, update_freq=1):
-        """Initialize logger.
-
-        Parameters
-        ----------
-        n_steps : int
-            Total number of steps
-        verbose : bool
-            Whether to log
-        update_freq : int
-            How often to update display (in steps)
-        """
         self.n_steps = n_steps
         self.verbose = verbose
         self.update_freq = update_freq
         self.constraint_data = {}
         self.progress_bar = None
         self.start_time = None
+        self.steps_applied = 0  # Add a counter for steps where constraint was applied
 
     def setup(self):
         """Set up the progress bar."""
@@ -340,40 +425,36 @@ class ConstraintLogger:
             self.progress_bar = tqdm(
                 total=self.n_steps,
                 desc="Applying constraints",
-                position=1,  # Position below main progress bar
-                leave=False,  # Don't leave the progress bar
+                position=1,
+                leave=False,
             )
-            self.start_time = time.time()
 
     def update(self, timestep, constraint_name, metrics):
         """Update logger with new constraint metrics."""
-        if not self.verbose:
+        if not self.verbose or self.progress_bar is None:
             return
+
+        # Increment our internal counter of steps where constraint was applied
+        self.steps_applied += 1
 
         # Store most recent data
         self.constraint_data[constraint_name] = metrics
 
-        # Update progress bar every update_freq steps or at the end
-        if timestep % self.update_freq == 0 or timestep == self.n_steps - 1:
-            # Create status message
-            status_parts = []
+        # Update the progress bar's position directly
+        self.progress_bar.n = self.steps_applied
 
-            # Add elapsed time
-            elapsed = time.time() - self.start_time
-            status_parts.append(f"elapsed: {elapsed:.1f}s")
+        # Create status message
+        status_parts = []
 
-            # Add constraint info
-            for name, data in self.constraint_data.items():
-                loss = data.get("loss", 0)
-                grad_norm = data.get("grad_norm", 0)
-                update_norm = data.get("update_norm", 0)
-                status_parts.append(
-                    f"{name[:3]} loss: {loss:.4f} grad: {grad_norm:.2f}"
-                )
+        # Add constraint info
+        for name, data in self.constraint_data.items():
+            loss = data.get("loss", 0)
+            grad_norm = data.get("grad_norm", 0)
+            status_parts.append(f"{name[:3]} loss: {loss:.4f} grad: {grad_norm:.2f}")
 
-            # Update progress bar
-            self.progress_bar.set_postfix_str(" | ".join(status_parts))
-            self.progress_bar.update(self.update_freq)
+        # Update status text and refresh
+        self.progress_bar.set_postfix_str(" | ".join(status_parts))
+        self.progress_bar.refresh()
 
     def close(self):
         """Close the logger."""
