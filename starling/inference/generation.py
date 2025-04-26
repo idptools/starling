@@ -76,6 +76,7 @@ def generate_backend(
     show_per_step_progress_bar,
     pdb_trajectory,
     model_manager=model_manager,
+    constraint=None,
 ):
     """
     Backend function for generating the distance maps using STARLING.
@@ -217,6 +218,7 @@ def generate_backend(
                 show_per_step_progress_bar=show_per_step_progress_bar,
                 batch_count=batch + 1,
                 max_batch_count=real_batch_count,
+                constraint=constraint,
             )
             starling_dm.append(
                 [
@@ -233,6 +235,7 @@ def generate_backend(
                 show_per_step_progress_bar=show_per_step_progress_bar,
                 batch_count=real_batch_count,
                 max_batch_count=real_batch_count,
+                constraint=constraint,
             )
             starling_dm.append(
                 [
