@@ -1,4 +1,5 @@
 import os
+
 import numpy as np
 import protfasta
 
@@ -170,6 +171,7 @@ def generate(
     show_per_step_progress_bar=True,
     pdb_trajectory=False,
     return_single_ensemble=False,
+    constraint=None,
 ):
     """
     Main function for generating the distance maps using STARLING. Allows
@@ -431,6 +433,7 @@ def generate(
         show_progress_bar,
         show_per_step_progress_bar,
         pdb_trajectory,
+        constraint=constraint,
     )
 
     # if this is true we KNOW there is only one Ensemble in the return dict because
