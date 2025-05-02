@@ -199,7 +199,9 @@ class StericClashConstraint(Constraint):
         self.steric_clash_definition = steric_clash_definition
         self.force_constant = force_constant
 
-    def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
+    def compute_loss(
+        self, distance_maps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Compute steric clash loss based on distance maps.
         This loss penalizes distances below a certain threshold (default 5.0 Å)
@@ -286,7 +288,9 @@ class HelicityConstraint(Constraint):
         # Create weights
         self.weights = 1.0 / (self.helix_ref + 1e-2)
 
-    def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
+    def compute_loss(
+        self, distance_maps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Calculate deviation from reference helix
         deviation = torch.abs(distance_maps - self.helix_ref)
 
@@ -355,7 +359,9 @@ class RgConstraint(Constraint):
 
         return rg_vals
 
-    def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
+    def compute_loss(
+        self, distance_maps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         predicted_rg = self.__compute_rg(distance_maps)
 
         # Calculate deviation from target
@@ -377,7 +383,9 @@ class ReConstraint(Constraint):
         self.tolerance = tolerance
         self.force_constant = force_constant
 
-    def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
+    def compute_loss(
+        self, distance_maps: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         distances = distance_maps[:, :, 0, self.sequence_length]
 
         # Calculate deviation from target
