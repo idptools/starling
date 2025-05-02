@@ -340,10 +340,11 @@ class DistanceConstraint(Constraint):
 
 
 class RgConstraint(Constraint):
-    def __init__(self, target, sequence_length, constraint_weight=1.0):
+    def __init__(self, target, tolerance, force_constant=2.0, constraint_weight=1.0):
         super().__init__(constraint_weight=constraint_weight)
         self.target = target
-        self.sequence_length = torch.tensor(sequence_length)
+        self.tolerance = tolerance
+        self.force_constant = force_constant
 
     def __compute_rg(self, distance_maps: torch.Tensor) -> torch.Tensor:
         distance_maps = distance_maps[
@@ -356,7 +357,15 @@ class RgConstraint(Constraint):
 
     def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
         predicted_rg = self.__compute_rg(distance_maps)
-        per_batch_loss = (predicted_rg - self.target) ** 2
+
+        # Calculate deviation from target
+        deviation = torch.abs(predicted_rg - self.target)
+
+        # Apply flat-bottom: only penalize deviations beyond tolerance
+        excess = torch.nn.functional.relu(deviation - self.tolerance)
+
+        # Calculate harmonic potential for the excess deviation
+        per_batch_loss = 0.5 * self.force_constant * excess**2
 
         return per_batch_loss, per_batch_loss.mean()
 
