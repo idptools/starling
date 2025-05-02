@@ -2,6 +2,7 @@ import os
 
 import torch
 
+import starling
 from starling import configs
 
 # local imports
@@ -93,6 +94,35 @@ class ModelManager:
             self.encoder_model, self.diffusion_model = self.load_models(
                 encoder_path, ddpm_path, device
             )
+            if configs.TORCH_COMPILATION["enabled"]:
+                # Compile the models if requested
+                self.encoder_model, self.diffusion_model = self.compile()
 
         # Return the already-loaded models
+        return self.encoder_model, self.diffusion_model
+
+    def compile(self):
+        """
+        Compile the models using PyTorch's compile function.
+        This is a placeholder for the actual compilation logic.
+        """
+        compile_kwargs = configs.TORCH_COMPILATION["options"].copy()
+
+        self.diffusion_model.model = torch.compile(
+            self.diffusion_model.model, **compile_kwargs
+        )
+        self.diffusion_model.encoder_model.decoder = torch.compile(
+            self.diffusion_model.encoder_model.decoder, **compile_kwargs
+        )
+
+        print(
+            "\nCompiling the diffusion model for faster inference, this may take a while..."
+        )
+        print(
+            "This is a one-time operation, subsequent inferences will be MUCH faster.\n"
+        )
+        print("Compiling with the following options:")
+        for key, value in compile_kwargs.items():
+            print(f"  {key}: {value}")
+
         return self.encoder_model, self.diffusion_model
