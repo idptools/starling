@@ -92,7 +92,6 @@ class Constraint(ABC):
 
             # Get per-sample losses and total loss
             per_batch_loss, loss = self.compute_loss(distance_maps)
-            # print("loss:", loss.item())
 
             # Compute gradients
             base_grad = torch.autograd.grad(loss, latents_copy)[0]
@@ -136,49 +135,6 @@ class Constraint(ABC):
                 )
 
             return latents + update.detach()
-
-    # def apply(self, latents: torch.Tensor, timestep: int, logger=None) -> torch.Tensor:
-    #     """Apply the constraint to the given latents."""
-    #     with torch.inference_mode(False):
-    #         latents_copy = latents.clone().requires_grad_(True)
-    #         scaled_latents = latents_copy / self.latent_space_scaling_factor
-    #         distance_maps = self.encoder_model.decode(scaled_latents)
-
-    #         # Get per-sample losses and total loss
-    #         per_batch_loss, loss = self.compute_loss(distance_maps)
-
-    #         # Compute gradients
-    #         base_grad = torch.autograd.grad(loss, latents_copy)[0]
-
-    #         # Time-dependent scaling
-    #         time_scale = self.get_time_scale(timestep)
-
-    #         # Now apply meaningful scaling
-    #         update = -self.constraint_weight * time_scale * base_grad
-
-    #         # Clip the gradients
-    #         update_norm = update.norm().item()
-    #         max_allowed_grad_norm = 1.0
-    #         if update_norm > max_allowed_grad_norm:
-    #             update = update * (max_allowed_grad_norm / update_norm)
-
-    #         # Log if logger is provided
-    #         if logger is not None and self.verbose:
-    #             logger.update(
-    #                 timestep,
-    #                 self.__class__.__name__,
-    #                 {
-    #                     "loss": loss.item(),
-    #                     "grad_norm": update.norm().item(),
-    #                     # "update_norm": update_norm,
-    #                     # "time_scale": time_scale,
-    #                     # "min_loss_scale": loss_scale.min().item(),
-    #                     # "max_loss_scale": loss_scale.max().item(),
-    #                     # "clipped": update_norm > 1.0,
-    #                 },
-    #             )
-
-    #         return latents + update.detach()
 
     def get_time_scale(self, timestep: int) -> float:
         """Get the time-dependent scaling factor."""
