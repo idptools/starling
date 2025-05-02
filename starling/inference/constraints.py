@@ -3,6 +3,7 @@ from abc import ABC
 from typing import Tuple
 
 import torch
+from einops import rearrange
 from tqdm import tqdm
 
 from starling.utilities import helix_dm
@@ -56,7 +57,7 @@ class Constraint(ABC):
 
     def get_adaptive_clip_threshold(self, timestep):
         """Get an adaptive clipping threshold that follows a cosine schedule."""
-        max_threshold = 5.0  # Maximum threshold at beginning
+        max_threshold = 2.0  # Maximum threshold at beginning
         min_threshold = 1.0  # Minimum threshold at end
 
         # Cosine decay from max_threshold to min_threshold
@@ -91,6 +92,7 @@ class Constraint(ABC):
 
             # Get per-sample losses and total loss
             per_batch_loss, loss = self.compute_loss(distance_maps)
+            # print("loss:", loss.item())
 
             # Compute gradients
             base_grad = torch.autograd.grad(loss, latents_copy)[0]
@@ -100,18 +102,22 @@ class Constraint(ABC):
 
             # Calculate per-sample loss scaling
             loss_scale = per_batch_loss / per_batch_loss.mean()
-            loss_scale = loss_scale.view(-1, 1, 1, 1)
+            loss_scale = rearrange(loss_scale, "b 1 -> b 1 1 1")
 
-            # Apply all scaling factors
-            scaled_update = (
-                -self.constraint_weight * time_scale * loss_scale * base_grad
-            )
+            # Now apply meaningful scaling
+            update = -self.constraint_weight * time_scale * loss_scale * base_grad
 
-            # Clip gradient update if too large
-            update_norm = scaled_update.norm().item()
-            max_grad_norm = self.get_adaptive_clip_threshold(timestep)
-            if update_norm > max_grad_norm:
-                scaled_update = scaled_update * (max_grad_norm / update_norm)
+            # Per-sample gradient norms
+            grad_flat = rearrange(update, "b c h w -> b (c h w)")
+            grad_norms = grad_flat.norm(dim=1, keepdim=True)
+
+            # Compute per-sample clipping factors
+            max_allowed_grad_norm = 1.0
+            clip_factors = (max_allowed_grad_norm / (grad_norms + 1e-6)).clamp(max=1.0)
+            clip_factors = rearrange(clip_factors, "b 1 -> b 1 1 1")
+
+            # Apply clipping
+            update = update * clip_factors
 
             # Log if logger is provided
             if logger is not None and self.verbose:
@@ -120,7 +126,7 @@ class Constraint(ABC):
                     self.__class__.__name__,
                     {
                         "loss": loss.item(),
-                        "grad_norm": scaled_update.norm().item(),
+                        "grad_norm": update.norm().item(),
                         # "update_norm": update_norm,
                         "time_scale": time_scale,
                         "min_loss_scale": loss_scale.min().item(),
@@ -129,7 +135,50 @@ class Constraint(ABC):
                     },
                 )
 
-            return latents + scaled_update.detach()
+            return latents + update.detach()
+
+    # def apply(self, latents: torch.Tensor, timestep: int, logger=None) -> torch.Tensor:
+    #     """Apply the constraint to the given latents."""
+    #     with torch.inference_mode(False):
+    #         latents_copy = latents.clone().requires_grad_(True)
+    #         scaled_latents = latents_copy / self.latent_space_scaling_factor
+    #         distance_maps = self.encoder_model.decode(scaled_latents)
+
+    #         # Get per-sample losses and total loss
+    #         per_batch_loss, loss = self.compute_loss(distance_maps)
+
+    #         # Compute gradients
+    #         base_grad = torch.autograd.grad(loss, latents_copy)[0]
+
+    #         # Time-dependent scaling
+    #         time_scale = self.get_time_scale(timestep)
+
+    #         # Now apply meaningful scaling
+    #         update = -self.constraint_weight * time_scale * base_grad
+
+    #         # Clip the gradients
+    #         update_norm = update.norm().item()
+    #         max_allowed_grad_norm = 1.0
+    #         if update_norm > max_allowed_grad_norm:
+    #             update = update * (max_allowed_grad_norm / update_norm)
+
+    #         # Log if logger is provided
+    #         if logger is not None and self.verbose:
+    #             logger.update(
+    #                 timestep,
+    #                 self.__class__.__name__,
+    #                 {
+    #                     "loss": loss.item(),
+    #                     "grad_norm": update.norm().item(),
+    #                     # "update_norm": update_norm,
+    #                     # "time_scale": time_scale,
+    #                     # "min_loss_scale": loss_scale.min().item(),
+    #                     # "max_loss_scale": loss_scale.max().item(),
+    #                     # "clipped": update_norm > 1.0,
+    #                 },
+    #             )
+
+    #         return latents + update.detach()
 
     def get_time_scale(self, timestep: int) -> float:
         """Get the time-dependent scaling factor."""
@@ -141,7 +190,7 @@ class Constraint(ABC):
 
 class BondConstraint(Constraint):
     def __init__(
-        self, bond_length=3.81, tolerance=1.0, force_constant=2.0, constraint_weight=1.0
+        self, bond_length=3.81, tolerance=0.0, force_constant=2.0, constraint_weight=1.0
     ):
         super().__init__(constraint_weight=constraint_weight)
         self.bond_length = bond_length
@@ -239,11 +288,20 @@ class StericClashConstraint(Constraint):
 
 
 class HelicityConstraint(Constraint):
-    def __init__(self, resid_start, resid_end, constraint_weight=1.0):
+    def __init__(
+        self,
+        resid_start,
+        resid_end,
+        tolerance=0.0,
+        force_constant=2.0,
+        constraint_weight=1.0,
+    ):
         super().__init__(constraint_weight=constraint_weight)
 
         self.resid_start = resid_start
         self.resid_end = resid_end
+        self.tolerance = tolerance
+        self.force_constant = force_constant
 
         # These will be initialized when the model is available
         self.helix_ref = None
@@ -273,13 +331,19 @@ class HelicityConstraint(Constraint):
         self.weights = 1.0 / (self.helix_ref + 1e-2)
 
     def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
-        # Calculate loss in the target region
+        # Calculate deviation from reference helix
+        deviation = torch.abs(distance_maps - self.helix_ref)
 
-        region_loss = ((distance_maps - self.helix_ref) ** 2) * self.weights * self.mask
-        normalization_factor = (self.weights * self.mask).sum()
-        per_batch_loss = region_loss.sum(dim=(1, 2, 3)) / normalization_factor
+        # Apply flat-bottom potential: only penalize deviations beyond tolerance
+        excess = torch.nn.functional.relu(deviation - self.tolerance)
 
-        # Return mean loss
+        # Calculate harmonic potential for the excess deviation
+        region_loss = 0.5 * self.force_constant * (excess**2) * self.mask
+
+        normalization_factor = self.mask.sum()
+        per_batch_loss = region_loss.sum(dim=(2, 3)) / normalization_factor
+
+        # Return per-batch and mean loss
         return per_batch_loss, per_batch_loss.mean()
 
 
@@ -290,7 +354,7 @@ class DistanceConstraint(Constraint):
         resid2,  # Make this a list of integers
         target,  # Make this a list of floats
         tolerance=0.0,  # Make this a list of floats
-        force_constant=1.0,  # Make this a list of floats
+        force_constant=2.0,  # Make this a list of floats
         constraint_weight=1.0,
     ):
         """Create constraint for distance between two residues."""
