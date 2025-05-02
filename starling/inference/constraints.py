@@ -362,7 +362,9 @@ class DistanceConstraint(Constraint):
         # Calculate harmonic potential for the excess deviation
         per_batch_loss = 0.5 * self.force_constant * excess**2
 
-        return per_batch_loss.squeeze(), per_batch_loss.mean()
+        per_batch_loss = rearrange(per_batch_loss, "b 1 -> b")
+
+        return per_batch_loss, per_batch_loss.mean()
 
 
 class RgConstraint(Constraint):
