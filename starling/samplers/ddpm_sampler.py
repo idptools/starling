@@ -1,4 +1,3 @@
-import sys
 from typing import Tuple
 
 import numpy as np
@@ -7,6 +6,12 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from starling.data.data_wrangler import one_hot_encode
+from starling.inference.constraints import (
+    ConstraintLogger,
+    DistanceConstraint,
+    HelicityConstraint,
+    RgConstraint,
+)
 from starling.utilities import helix_dm
 
 
@@ -88,14 +93,14 @@ class DDPMSampler(nn.Module):
         )
 
         # Step 4: Convert sequence indices to model-specific label format
-        model_labels = self.ddpm_model.sequence2labels(sequence_indices)
+        with torch.inference_mode():
+            model_labels = self.ddpm_model.sequence2labels(sequence_indices)
 
         # Step 5: Add batch dimension
         batched_labels = model_labels.unsqueeze(0)
 
         return batched_labels
 
-    @torch.inference_mode()
     def p_sample(
         self, x: torch.Tensor, timestamp: int, labels: torch.Tensor
     ) -> torch.Tensor:
@@ -151,12 +156,12 @@ class DDPMSampler(nn.Module):
             noise = torch.randn_like(x)
             return predicted_mean + torch.sqrt(posterior_variance) * noise
 
-    @torch.inference_mode()
     def p_sample_loop(
         self,
         shape: tuple,
         labels: torch.Tensor,
         return_all_timesteps: bool = False,
+        constraint=None,
     ) -> torch.Tensor:
         """
         Sampling loop for the diffusion model. It loops over the timesteps
@@ -180,7 +185,13 @@ class DDPMSampler(nn.Module):
             Returns the fully denoised tensor, in this case a latent space
             that can be decoded using a pre-trained VAE
         """
+
         batch_size, device = shape[0], self.device
+
+        sequence_length = len(labels)
+
+        # Convert sequence to model-compatible label format
+        model_labels = self.generate_labels(labels)
 
         # Initialize noise for latent representation
         latents = torch.randn(shape, device=device)
@@ -191,18 +202,42 @@ class DDPMSampler(nn.Module):
         # Use all timesteps
         timesteps = torch.arange(0, self.n_steps)
 
+        if constraint is not None:
+            constraint_logger = ConstraintLogger(
+                n_steps=self.n_steps,
+                verbose=True,
+            )
+            constraint_logger.setup()
+
+            constraint.initialize(
+                self.encoder_model,
+                self.latent_space_scaling_factor,
+                self.n_steps,
+                sequence_length,
+            )
+
         # Reverse timesteps to go from noisy to clean
         for timestep in tqdm(
             reversed(timesteps),
             desc="Denoising latents",
             total=len(timesteps),
+            position=0,
         ):
             # Store current state if tracking trajectory
             if return_all_timesteps:
                 denoising_trajectory.append(latents)
 
-            # Perform single denoising step
-            latents = self.p_sample(latents, timestep, labels)
+            # Use inference mode only for the model's prediction step
+            with torch.inference_mode():
+                # Perform single denoising step
+                latents = self.p_sample(latents, timestep, model_labels)
+
+            # Apply custom constraint
+            if constraint is not None and timestep != 0:
+                latents = constraint.apply(latents, timestep, logger=constraint_logger)
+
+        if constraint is not None:
+            constraint_logger.close()
 
         # Scale latents back to original range
         scaled_latents = latents / self.latent_space_scaling_factor
@@ -216,7 +251,6 @@ class DDPMSampler(nn.Module):
 
         return scaled_latents
 
-    @torch.inference_mode()
     def sample(
         self,
         num_conformations: int,
@@ -225,6 +259,7 @@ class DDPMSampler(nn.Module):
         batch_count: int = 1,
         max_batch_count: int = 1,
         return_all_timesteps: bool = False,
+        constraint=None,
     ) -> torch.Tensor:
         """
         Sample conformations from the trained diffusion model.
@@ -251,14 +286,12 @@ class DDPMSampler(nn.Module):
             self.image_size,
         )
 
-        # Convert sequence to model-compatible label format
-        model_labels = self.generate_labels(labels)
-
         # Generate latent representations through the denoising process
         latents = self.p_sample_loop(
             shape=latent_shape,
-            labels=model_labels,
+            labels=labels,
             return_all_timesteps=return_all_timesteps,
+            constraint=constraint,
         )
 
         # Convert latent representations to distance maps
