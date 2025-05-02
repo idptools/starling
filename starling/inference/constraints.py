@@ -101,6 +101,12 @@ class Constraint(ABC):
 
             # Calculate per-sample loss scaling
             loss_scale = per_batch_loss / per_batch_loss.mean()
+
+            # Prevent extreme scaling
+            max_scale_factor = 2.0
+            loss_scale = torch.clamp(loss_scale, max=max_scale_factor)
+
+            # Reshape loss_scale to match the shape of the latents
             loss_scale = rearrange(loss_scale, "b 1 -> b 1 1 1")
 
             # Now apply meaningful scaling
