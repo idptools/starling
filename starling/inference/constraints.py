@@ -3,14 +3,21 @@ from abc import ABC
 from typing import Tuple
 
 import torch
-from einops import rearrange
+from einops import rearrange, reduce
 from tqdm import tqdm
 
 from starling.utilities import helix_dm
 
 
 class Constraint(ABC):
-    def __init__(self, constraint_weight=1.0, schedule="cosine", verbose=True):
+    def __init__(
+        self,
+        constraint_weight=1.0,
+        schedule="cosine",
+        verbose=True,
+        guidance_start=0.0,
+        guidance_end=1.0,
+    ):
         """Initialize base constraint with common parameters.
 
         Parameters
@@ -34,6 +41,9 @@ class Constraint(ABC):
         self.schedule = schedule
         self.verbose = verbose
 
+        self.guidance_start = guidance_start
+        self.guidance_end = guidance_end
+
     def _setup_constraint(self):
         """Set up constraint-specific resources."""
         pass  # Implemented by subclasses
@@ -50,10 +60,22 @@ class Constraint(ABC):
         self._setup_constraint()
         return self
 
+    def should_apply_guidance(self, timestep, total_steps):
+        t_frac = timestep / total_steps
+        reverse = 1 - t_frac
+        return self.guidance_start <= reverse <= self.guidance_end
+
     def cosine_weight(self, t, total_steps, s=0.008):
         """Cosine schedule for time-dependent guidance strength."""
         t_scaled = t / total_steps
         return math.cos(t_scaled * math.pi / 2) ** 2
+
+    def bell_shaped_schedule(self, timestep: int) -> float:
+        normalized_t = timestep / self.n_steps
+        # Peak at 60% through the sampling process
+        return math.sin(normalized_t * math.pi) * math.exp(
+            -((normalized_t - 0.6) ** 2) / 0.1
+        )
 
     def get_adaptive_clip_threshold(self, timestep):
         """Get an adaptive clipping threshold that follows a cosine schedule."""
@@ -85,6 +107,11 @@ class Constraint(ABC):
 
     def apply(self, latents: torch.Tensor, timestep: int, logger=None) -> torch.Tensor:
         """Apply the constraint to the given latents."""
+
+        # Check if the constraint should be applied
+        if not self.should_apply_guidance(timestep, self.n_steps):
+            return latents
+
         with torch.inference_mode(False):
             latents_copy = latents.clone().requires_grad_(True)
             scaled_latents = latents_copy / self.latent_space_scaling_factor
@@ -107,7 +134,7 @@ class Constraint(ABC):
             loss_scale = torch.clamp(loss_scale, max=max_scale_factor)
 
             # Reshape loss_scale to match the shape of the latents
-            loss_scale = rearrange(loss_scale, "b 1 -> b 1 1 1")
+            loss_scale = rearrange(loss_scale, "b -> b 1 1 1")
 
             # Now apply meaningful scaling
             update = -self.constraint_weight * time_scale * loss_scale * base_grad
@@ -146,15 +173,15 @@ class Constraint(ABC):
         """Get the time-dependent scaling factor."""
         if self.schedule == "cosine":
             return self.cosine_weight(timestep, total_steps=self.n_steps)
+        elif self.schedule == "bell_shaped":
+            return self.bell_shaped_schedule(timestep)
         else:
             return 1.0 - (timestep / self.n_steps)
 
 
 class BondConstraint(Constraint):
-    def __init__(
-        self, bond_length=3.81, tolerance=0.0, force_constant=2.0, constraint_weight=1.0
-    ):
-        super().__init__(constraint_weight=constraint_weight)
+    def __init__(self, bond_length=3.81, tolerance=0.0, force_constant=2.0, **kwargs):
+        super().__init__(**kwargs)
         self.bond_length = bond_length
         self.tolerance = tolerance
         self.force_constant = force_constant
@@ -198,10 +225,8 @@ class BondConstraint(Constraint):
 
 
 class StericClashConstraint(Constraint):
-    def __init__(
-        self, steric_clash_definition=5.0, force_constant=2.0, constraint_weight=1.0
-    ):
-        super().__init__(constraint_weight=constraint_weight)
+    def __init__(self, steric_clash_definition=5.0, force_constant=2.0, **kwargs):
+        super().__init__(**kwargs)
         self.steric_clash_definition = steric_clash_definition
         self.force_constant = force_constant
 
@@ -244,7 +269,7 @@ class StericClashConstraint(Constraint):
         steric_clash = steric_clash * mask
 
         # Sum across all residue pairs and normalize
-        steric_clash = steric_clash.sum(dim=(1, 2, 3))
+        steric_clash = reduce(steric_clash, "b c h w -> b", "sum")
         normalization_factor = mask.sum()
         per_batch_loss = steric_clash / normalization_factor
 
@@ -253,14 +278,9 @@ class StericClashConstraint(Constraint):
 
 class HelicityConstraint(Constraint):
     def __init__(
-        self,
-        resid_start,
-        resid_end,
-        tolerance=0.0,
-        force_constant=2.0,
-        constraint_weight=1.0,
+        self, resid_start, resid_end, tolerance=0.0, force_constant=2.0, **kwargs
     ):
-        super().__init__(constraint_weight=constraint_weight)
+        super().__init__(**kwargs)
 
         self.resid_start = resid_start
         self.resid_end = resid_end
@@ -307,7 +327,9 @@ class HelicityConstraint(Constraint):
         region_loss = 0.5 * self.force_constant * (excess**2) * self.mask
 
         normalization_factor = self.mask.sum()
-        per_batch_loss = region_loss.sum(dim=(2, 3)) / normalization_factor
+        per_batch_loss = (
+            reduce(region_loss, "b c h w -> b", "sum") / normalization_factor
+        )
 
         # Return per-batch and mean loss
         return per_batch_loss, per_batch_loss.mean()
@@ -315,16 +337,10 @@ class HelicityConstraint(Constraint):
 
 class DistanceConstraint(Constraint):
     def __init__(
-        self,
-        resid1,  # Make this a list of integers
-        resid2,  # Make this a list of integers
-        target,  # Make this a list of floats
-        tolerance=0.0,  # Make this a list of floats
-        force_constant=2.0,  # Make this a list of floats
-        constraint_weight=1.0,
+        self, resid1, resid2, target, tolerance=0.0, force_constant=2.0, **kwargs
     ):
         """Create constraint for distance between two residues."""
-        super().__init__(constraint_weight=constraint_weight)
+        super().__init__(**kwargs)
         self.resid1 = resid1
         self.resid2 = resid2
         self.target = target
@@ -346,22 +362,24 @@ class DistanceConstraint(Constraint):
         # Calculate harmonic potential for the excess deviation
         per_batch_loss = 0.5 * self.force_constant * excess**2
 
-        return per_batch_loss, per_batch_loss.mean()
+        return per_batch_loss.squeeze(), per_batch_loss.mean()
 
 
 class RgConstraint(Constraint):
-    def __init__(self, target, tolerance, force_constant=2.0, constraint_weight=1.0):
-        super().__init__(constraint_weight=constraint_weight)
+    def __init__(self, target, tolerance=0.0, force_constant=2.0, **kwargs):
+        super().__init__(**kwargs)
         self.target = target
         self.tolerance = tolerance
         self.force_constant = force_constant
 
     def __compute_rg(self, distance_maps: torch.Tensor) -> torch.Tensor:
+        sequence_length = torch.tensor(self.sequence_length, device=self.device)
         distance_maps = distance_maps[
             :, :, : self.sequence_length, : self.sequence_length
         ]
-        distances = torch.sum(torch.square(distance_maps), axis=(1, 2, 3))
-        rg_vals = torch.sqrt(distances / (2 * torch.pow(self.sequence_length, 2)))
+        squared_distances = torch.square(distance_maps)
+        distances = reduce(squared_distances, "b c h w -> b", "sum")
+        rg_vals = torch.sqrt(distances / (2 * torch.pow(sequence_length, 2)))
 
         return rg_vals
 
@@ -383,8 +401,9 @@ class RgConstraint(Constraint):
 
 
 class ReConstraint(Constraint):
-    def __init__(self, target, tolerance, force_constant=2.0, constraint_weight=1.0):
-        super().__init__(constraint_weight=constraint_weight)
+    def __init__(self, target, tolerance=0.0, force_constant=2.0, **kwargs):
+        """Create constraint for end-to-end distance."""
+        super().__init__(**kwargs)
         self.target = target
         self.tolerance = tolerance
         self.force_constant = force_constant
@@ -409,7 +428,12 @@ class ReConstraint(Constraint):
 class MultiConstraint(Constraint):
     """Combines multiple constraints into a single optimization step."""
 
-    def __init__(self, constraints, schedule="cosine", verbose=True):
+    def __init__(
+        self,
+        constraints,
+        schedule="cosine",
+        verbose=True,
+    ):
         """
         Parameters
         ----------
@@ -429,6 +453,9 @@ class MultiConstraint(Constraint):
         self.constraint_weights = [
             constraint.constraint_weight for constraint in constraints
         ]
+
+        self.guidance_starts = [constraint.guidance_start for constraint in constraints]
+        self.guidance_ends = [constraint.guidance_end for constraint in constraints]
 
     def initialize(
         self, encoder_model, latent_space_scaling_factor, n_steps, sequence_length
