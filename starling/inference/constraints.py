@@ -378,7 +378,7 @@ class ReConstraint(Constraint):
         self.force_constant = force_constant
 
     def compute_loss(self, distance_maps: torch.Tensor) -> torch.Tensor:
-        distances = distance_maps[:, :, 0, : self.sequence_length]
+        distances = distance_maps[:, :, 0, self.sequence_length]
 
         # Calculate deviation from target
         deviation = torch.abs(distances - self.target)
