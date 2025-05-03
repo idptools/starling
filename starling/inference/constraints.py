@@ -22,12 +22,16 @@ class Constraint(ABC):
 
         Parameters
         ----------
-        encoder_model : nn.Module
-            The encoder model used to decode latents into distance maps
-        latent_space_scaling_factor : float
-            Scaling factor for latent space
-        n_steps : int
-            Total number of diffusion steps
+        constraint_weight : float, default=1.0
+            Weight factor for the constraint
+        schedule : str, default="cosine"
+            Scheduling function for time-dependent guidance strength
+        verbose : bool, default=True
+            Whether to print debug information
+        guidance_start : float, default=0.0
+            Normalized timestep to start applying guidance (0.0 = beginning)
+        guidance_end : float, default=1.0
+            Normalized timestep to stop applying guidance (1.0 = end)
         """
 
         # These will be set by the sampler
@@ -71,6 +75,21 @@ class Constraint(ABC):
         return math.cos(t_scaled * math.pi / 2) ** 2
 
     def bell_shaped_schedule(self, timestep: int) -> float:
+        """Bell-shaped schedule for time-dependent guidance strength.
+
+        Creates a schedule that gradually increases guidance strength,
+        peaks at 60% through the sampling process, and then decreases again.
+
+        Parameters
+        ----------
+        timestep : int
+            Current diffusion timestep
+
+        Returns
+        -------
+        float
+            Guidance strength factor (peaks in the middle of sampling)
+        """
         normalized_t = timestep / self.n_steps
         # Peak at 60% through the sampling process
         return math.sin(normalized_t * math.pi) * math.exp(
@@ -423,6 +442,8 @@ class ReConstraint(Constraint):
 
         # Calculate harmonic potential for the excess deviation
         per_batch_loss = 0.5 * self.force_constant * excess**2
+
+        per_batch_loss = rearrange(per_batch_loss, "b 1 -> b")
 
         return per_batch_loss, per_batch_loss.mean()
 
