@@ -388,16 +388,45 @@ class DistanceConstraint(Constraint):
 
 class RgConstraint(Constraint):
     def __init__(self, target, tolerance=0.0, force_constant=2.0, **kwargs):
+        """Create constraint for radius of gyration (Rg).
+
+        Parameters
+        ----------
+        target : float
+            Target Rg value in Angstroms
+        tolerance : float, default=0.0
+            Allowed deviation from target before penalty applies
+        force_constant : float, default=2.0
+            Force constant for the harmonic potential
+        **kwargs
+            Additional parameters passed to parent Constraint class
+        """
         super().__init__(**kwargs)
         self.target = target
         self.tolerance = tolerance
         self.force_constant = force_constant
 
     def __compute_rg(self, distance_maps: torch.Tensor) -> torch.Tensor:
+        """Calculate radius of gyration from distance maps.
+
+        Rg = sqrt(sum(d_ij^2) / (2*N^2)) where d_ij are pairwise distances.
+
+        Parameters
+        ----------
+        distance_maps : torch.Tensor
+            Protein distance maps
+
+        Returns
+        -------
+        torch.Tensor
+            Calculated Rg values for each protein in the batch
+        """
         sequence_length = torch.tensor(self.sequence_length, device=self.device)
+        #! Should this be self.sequence_length + 1? or self.sequence_length?
         distance_maps = distance_maps[
             :, :, : self.sequence_length, : self.sequence_length
         ]
+
         squared_distances = torch.square(distance_maps)
         distances = reduce(squared_distances, "b c h w -> b", "sum")
         rg_vals = torch.sqrt(distances / (2 * torch.pow(sequence_length, 2)))
@@ -407,6 +436,18 @@ class RgConstraint(Constraint):
     def compute_loss(
         self, distance_maps: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute loss based on deviation from target Rg.
+
+        Parameters
+        ----------
+        distance_maps : torch.Tensor
+            Pre-computed distance maps from the latents
+
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor]
+            Per-batch loss and mean loss
+        """
         predicted_rg = self.__compute_rg(distance_maps)
 
         # Calculate deviation from target
