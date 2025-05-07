@@ -7,6 +7,12 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from starling.data.data_wrangler import one_hot_encode
+from starling.inference.constraints import (
+    ConstraintLogger,
+    DistanceConstraint,
+    HelicityConstraint,
+    RgConstraint,
+)
 
 
 class DDIMSampler(nn.Module):
@@ -49,9 +55,13 @@ class DDIMSampler(nn.Module):
         """
         super(DDIMSampler, self).__init__()
         self.ddpm_model = ddpm_model
+        self.encoder_model = ddpm_model.encoder_model
+        self.latent_space_scaling_factor = ddpm_model.latent_space_scaling_factor
         self.n_steps = self.ddpm_model.num_timesteps
         self.ddim_discretize = ddim_discretize
         self.ddim_eta = ddim_eta
+
+        self.device = self.ddpm_model.device
 
         # Ways to discretize the generative process
         if ddim_discretize == "uniform":
@@ -83,13 +93,13 @@ class DDIMSampler(nn.Module):
 
             self.ddim_sqrt_one_minus_alpha = (1.0 - self.ddim_alpha) ** 0.5
 
-    def generate_labels(self, labels: str) -> torch.Tensor:
+    def generate_labels(self, sequence: str) -> torch.Tensor:
         """
         Generate labels to condition the generative process on.
 
         Parameters
         ----------
-        labels : str
+        sequence : str
             A sequence to generate labels from.
 
         Returns
@@ -97,20 +107,19 @@ class DDIMSampler(nn.Module):
         torch.Tensor
             The labels to condition the generative process on.
         """
-        labels = (
-            torch.argmax(
-                torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
-            )
-            .to(torch.int64)
-            .squeeze()
-            .to(self.ddpm_model.device)
+        # Convert input sequence to tensor, padding to required length
+        encoded = one_hot_encode(sequence.ljust(384, "0"))
+
+        # Ordinally encode the sequence
+        ordinal_encoding = torch.argmax(torch.from_numpy(encoded), dim=-1).to(
+            self.device
         )
 
-        labels = self.ddpm_model.sequence2labels(labels)
+        # Squeeze out the dimension that shouldn't be there
+        ordinal_encoding = ordinal_encoding.squeeze()
 
-        labels = labels.unsqueeze(0)
-
-        return labels
+        # Convert sequence to model labels and add batch dimension
+        return self.ddpm_model.sequence2labels(ordinal_encoding)
 
     @torch.no_grad()
     def sample(
@@ -122,6 +131,7 @@ class DDIMSampler(nn.Module):
         show_per_step_progress_bar: bool = True,
         batch_count: int = 1,
         max_batch_count: int = 1,
+        constraint=None,
     ) -> torch.Tensor:
         """
         Sample the generative process using the DDIM model.
@@ -154,7 +164,8 @@ class DDIMSampler(nn.Module):
         torch.Tensor
             The generated distance maps.
         """
-        device = self.ddpm_model.device
+
+        sequence_length = len(labels)
 
         # Initialize the latents with noise
         x = torch.randn(
@@ -164,7 +175,7 @@ class DDIMSampler(nn.Module):
                 self.ddpm_model.image_size,
                 self.ddpm_model.image_size,
             ],
-            device=device,
+            device=self.device,
         )
 
         time_steps = np.flip(self.ddim_time_steps)
@@ -179,6 +190,20 @@ class DDIMSampler(nn.Module):
                 position=1,
                 leave=False,
                 desc=f"DDPM steps (batch {batch_count} of {max_batch_count})",
+            )
+
+        if constraint is not None:
+            constraint_logger = ConstraintLogger(
+                n_steps=self.n_steps,
+                verbose=True,
+            )
+            constraint_logger.setup()
+
+            constraint.initialize(
+                self.encoder_model,
+                self.latent_space_scaling_factor,
+                self.n_steps,
+                sequence_length,
             )
 
         # Denoise the initial latent
@@ -198,9 +223,17 @@ class DDIMSampler(nn.Module):
                 repeat_noise=repeat_noise,
                 temperature=temperature,
             )
+
+            # Apply custom constraint
+            if constraint is not None and step != 0:
+                x = constraint.apply(x, step, logger=constraint_logger)
+
             # update progress bar if we are showing it
             if show_per_step_progress_bar:
                 pbar_inner.update(1)
+
+        if constraint is not None:
+            constraint_logger.close()
 
         # if we have progress bar, close after finishing the steps.
         if show_per_step_progress_bar:

@@ -7,8 +7,8 @@ import gzip
 import lzma
 import os
 import pickle
-import warnings
 import platform
+import warnings
 
 import numpy as np
 import torch
@@ -122,6 +122,7 @@ def parse_output_path(args):
 
     return outname
 
+
 def get_macOS_version():
     """
     Function to check the macOS version.
@@ -130,7 +131,7 @@ def get_macOS_version():
     ---------------
     int
         Returns -1 or the major macOS version.
-    
+
     """
     # get the macOS version
     macos_version = platform.mac_ver()[0]
@@ -139,10 +140,9 @@ def get_macOS_version():
         return -1
     else:
         try:
-            return int(macos_version.split('.')[0])
+            return int(macos_version.split(".")[0])
         except ValueError:
             return -1
-
 
 
 def check_device(use_device, default_device="gpu"):
@@ -542,3 +542,29 @@ def check_distance_map_for_error(distance_map, min_separation=1, max_separation=
         return True
     else:
         return False
+
+
+def helix_dm(L: int, rise_per_res=1.5, angle_per_res_deg=100, radius=2.3):
+    """
+    Generate an L x L distance matrix for an alpha-helix made of L residues.
+
+    Parameters:
+    - L: number of residues
+    - rise_per_res: Ångstroms rise per residue along the helix axis
+    - angle_per_res_deg: degrees of rotation per residue
+    - radius: radius of the helix in Ångstroms
+
+    Returns:
+    - D: (L, L) distance matrix (float32)
+    """
+    angles = np.deg2rad(np.arange(L) * angle_per_res_deg)  # shape (L,)
+    z = np.arange(L) * rise_per_res
+    x = radius * np.cos(angles)
+    y = radius * np.sin(angles)
+
+    coords = np.stack([x, y, z], axis=1)  # shape (L, 3)
+
+    # Compute pairwise Euclidean distances
+    diff = coords[:, None, :] - coords[None, :, :]  # (L, L, 3)
+    D = np.linalg.norm(diff, axis=-1).astype(np.float32)  # (L, L)
+    return D

@@ -168,6 +168,48 @@ E_dict = generate(sequences)
 - **`show_progress_bar`** : `bool`  
     If `True`, displays a progress bar during generation. Default is `True`.
 
+## Constrained generation of ensembles
+
+STARLING allows you to generate structural ensembles with constraints or restraints — such as experimentally measured distances or local/global shape features. These can be directly incorporated into sampling by passing them as arguments to the `generate` function. To do this, simply include the following code block as part of your generate call:
+
+### Distance constraint
+
+```python
+constraint = DistanceConstraint(resid1=10, resid2=200, target=50)
+```
+
+### Radius of gyration constraint
+```python
+constraint = RgConstraint(target=50)
+```
+
+### End-to-end distance constraint
+```python
+constraint = ReConstraint(target=100)
+```
+
+### Helicity constraint
+```python
+constraint = HelicityConstraint(start=10, end=100)
+```
+These constraints are applied during generation by including them directly in the `generate` function call, as shown below:
+
+```python
+# constraint = any of the above constraints
+ensemble = generate(sequence, constraint=constraint)
+```
+
+Additionally, the strength of the constraints can be controlled using the `force_constant` keyword, which takes a float value. The timing of when these constraints are applied during the denoising process is also important and can be specified using the `guidance_start` and `guidance_end` keywords — both of which should be values between 0 and 1, representing the fractional progress through the denoising steps. 
+
+| Timing      | `guidance_start` | `guidance_end` | What’s being denoised during this time              |
+|-------------|------------------|----------------|-----------------------------------------------------|
+| Early       | 0.0              | 0.3            | Mostly noise, minimal structural information        |
+| Mid         | 0.3              | 0.7            | Emerging structure, useful features begin to form   |
+| Late        | 0.7              | 1.0            | Fine details, near-final structural refinement       |
+
+Experimenting with the above parameters for your own purpose is recommended. 
+
+
 ## Speed up STARLING by compiling the torch models
 
 If you intend to use STARLING repeatedly in your computational workflow, consider calling torch.compile to optimize the kernels within the STARLING models. While this adds some overhead during the initial model loading, it improves the performance of subsequent runs by approximately 40% (tested on an NVIDIA A5000 GPU). To compile STARLING, include the following code block in your script:
