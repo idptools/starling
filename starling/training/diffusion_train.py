@@ -40,6 +40,13 @@ def parse_arguments():
         default=16,
         help="Number of workers to use for loading in the data",
     )
+
+    parser.add_argument(
+        "--fine_tune",
+        action="store_true",
+        default=False,
+        help="Whether to fine-tune the model or not",
+    )
     return parser.parse_args()
 
 
@@ -91,14 +98,24 @@ def setup_data_module(config, num_workers):
 def setup_models(config, args):
     """Set up the UNet and Diffusion models."""
     encoder_model_path = config["diffusion"].pop("encoder_path")
+    model_path = config["training"]["checkpoint"]
     UNet_model = UNetConditional(**config["unet"])
-    encoder_model = VAE.load_from_checkpoint(encoder_model_path, map_location="cuda:0")
 
-    diffusion_model = DiffusionModel(
-        model=UNet_model,
-        encoder_model=encoder_model,
-        **config["diffusion"],
-    )
+    encoder_model = VAE.load_from_checkpoint(encoder_model_path)
+
+    if args.fine_tune:
+        diffusion_model = DiffusionModel.load_from_checkpoint(
+            model_path,
+            model=UNet_model,
+            encoder_model=encoder_model,
+            **config["diffusion"],
+        )
+    else:
+        diffusion_model = DiffusionModel(
+            model=UNet_model,
+            encoder_model=encoder_model,
+            **config["diffusion"],
+        )
 
     return UNet_model, diffusion_model
 
@@ -139,13 +156,14 @@ def train_model():
     checkpoint_callback, save_last_checkpoint = setup_checkpoints(
         config["training"]["output_path"]
     )
-    ckpt_path = get_checkpoint_path(config["training"]["output_path"])
+    # ckpt_path = get_checkpoint_path(config["training"]["output_path"])
+    ckpt_path = config["training"]["checkpoint"]
 
     # Setup data module
     dataset = setup_data_module(config, args.num_workers)
 
     # Setup models
-    UNet_model, diffusion_model = setup_models(config)
+    UNet_model, diffusion_model = setup_models(config, args)
 
     # Save model architecture
     with open(f"{config['training']['output_path']}/model_architecture.txt", "w") as f:
@@ -167,7 +185,9 @@ def train_model():
     )
 
     # Start training
-    trainer.fit(diffusion_model, dataset, ckpt_path=ckpt_path)
+    trainer.fit(
+        diffusion_model, dataset, ckpt_path=None if args.fine_tune else ckpt_path
+    )
 
     # Detach WandB logging
     wandb_logger.experiment.unwatch(diffusion_model)
