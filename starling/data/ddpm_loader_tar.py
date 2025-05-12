@@ -1,5 +1,6 @@
 import glob
 import io
+import json
 import os
 
 import numpy as np
@@ -26,15 +27,22 @@ class DDPMDataloader(pl.LightningDataModule):
 
         self.dataset = self.config.dataset
         self.early_batch_size = self.config.early_batch_size
+        self.batch_size = self.config.batch_size
+
+        # Hard coded for now
         self.train_shuffle_buffer = 4000
         self.val_shuffle_buffer = 4000
         self.loader_shuffle_buffer = 4000
-        self.batch_size = self.config.batch_size
 
         # Calculate batch counts
         self.effective_batch_size = effective_batch_size
-        self.n_train_batches = 20_000_000 // self.effective_batch_size
-        self.n_val_batches = 4_000_000 // self.effective_batch_size
+
+        metadata = json.load(open(os.path.join(self.dataset, "metadata.json"), "r"))
+        train_size = metadata["train"]["num_samples"]
+        val_size = metadata["validation"]["num_samples"]
+
+        self.n_train_batches = train_size // self.effective_batch_size
+        self.n_val_batches = val_size // self.effective_batch_size
 
     def setup(self, stage=None):
         # Create the WebDataset instances for training and validation
@@ -81,7 +89,7 @@ class DDPMDataloader(pl.LightningDataModule):
                 batch_size=None,
                 num_workers=self.config.num_workers,
                 pin_memory=True,
-                prefetch_factor=2,
+                prefetch_factor=self.config.prefetch_factor,
             )
             .unbatched()
             .shuffle(4000)
@@ -98,7 +106,7 @@ class DDPMDataloader(pl.LightningDataModule):
                 batch_size=None,
                 num_workers=self.config.num_workers,
                 pin_memory=True,
-                prefetch_factor=2,
+                prefetch_factor=self.config.prefetch_factor,
             )
             .unbatched()
             .shuffle(4000)
