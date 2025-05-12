@@ -1,0 +1,7 @@
+defaults:
+  - dataloader: dataloader.yaml
+  - trainer: trainer.yaml
+  - diffusion: diffusion.yaml
+  - unet: unet.yaml
+  - _self_
+

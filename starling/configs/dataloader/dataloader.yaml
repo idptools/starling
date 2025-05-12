@@ -1,0 +1,5 @@
+batch_size: 32
+early_batch_size: 128
+dataset: /home/borna/packages/starling/starling/data/data
+num_workers: 8
+prefetch_factor: 2

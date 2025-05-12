@@ -1,0 +1,10 @@
+
+
+time: discrete # options: continuous, discrete
+
+discrete:
+  encoder_path: /work/bnovak/projects/sequence2ensemble/starling/continuous_starling/encoder/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
+  set_lr: 0.00001
+  image_size: 24
+  config_scheduler: CosineAnnealingLR
+  labels: learned-embeddings
