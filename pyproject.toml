@@ -105,7 +105,8 @@ where = ["."]
 # Ref https://setuptools.pypa.io/en/latest/userguide/datafiles.html#package-data
 [tool.setuptools.package-data]
 starling = [
-    "py.typed"
+    "py.typed",
+	"configs/**"
 ]
 
 [tool.versioningit]
