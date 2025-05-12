@@ -13,7 +13,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 from starling.data.argument_parser import get_params
-from starling.data.ddpm_loader import MatrixDataModule
+from starling.data.ddpm_loader_tar import DDPMDataloader
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
@@ -61,13 +61,9 @@ def get_checkpoint_path(output_path):
 def setup_data_module(config):
     """Set up the data module."""
     data_config = config.dataloader
-    data_config_dict = OmegaConf.to_container(data_config, resolve=True)
+    effective_batch_size = data_config.batch_size * config.trainer.cuda
 
-    dataset = MatrixDataModule(
-        **data_config_dict,
-        labels=config.diffusion.discrete.labels,
-        num_workers=config.trainer.num_workers,
-    )
+    dataset = DDPMDataloader(data_config, effective_batch_size=effective_batch_size)
     dataset.setup(stage="fit")
     return dataset
 
@@ -133,9 +129,6 @@ def setup_trainer(config, callbacks, logger):
     config_name="configs",
 )
 def train_model(cfg: DictConfig):
-    # Access command line overrides for those arguments not in config
-    fine_tune = cfg.get("fine_tune", False)
-
     # Setup directories and save config
     output_path = cfg.trainer.output_path
     setup_directories(output_path)
