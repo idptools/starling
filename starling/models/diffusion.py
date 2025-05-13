@@ -70,13 +70,8 @@ class DiffusionModel(pl.LightningModule):
     def __init__(
         self,
         model: nn.Module,
-        encoder_model: nn.Module,
-        image_size: int,
-        *,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
-        schedule_fn_kwargs: Union[dict, None] = None,
-        labels: str = "learned-embeddings",
         set_lr: float = 1e-4,
         config_scheduler: str = "LinearWarmupCosineAnnealingLR",
     ) -> None:
@@ -128,19 +123,11 @@ class DiffusionModel(pl.LightningModule):
         super().__init__()
 
         # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
-        self.save_hyperparameters(ignore=["encoder_model", "model"])
+        self.save_hyperparameters(ignore=["model"])
 
         self.model = model
-        self.labels = labels
-
-        # Freeze the encoder model parameters we don't want to keep training it (should already be trained)
-        self.encoder_model = encoder_model
-        for param in self.encoder_model.parameters():
-            param.requires_grad = False
-        self.encoder_model.eval()
 
         self.in_channels = self.model.in_channels
-        self.image_size = image_size
 
         # Learning rate params
         self.set_lr = set_lr
@@ -150,9 +137,6 @@ class DiffusionModel(pl.LightningModule):
         if self.beta_scheduler_fn is None:
             raise ValueError(f"unknown beta schedule {beta_scheduler}")
 
-        if schedule_fn_kwargs is None:
-            schedule_fn_kwargs = {}
-
         # Register scaling factor buffer (calculated during first training step)
         # Used to normalize latent space to unit variance per Reference #3
         self.register_buffer(
@@ -160,7 +144,7 @@ class DiffusionModel(pl.LightningModule):
         )
 
         # Calculate diffusion process parameters
-        betas = self.beta_scheduler_fn(timesteps, **schedule_fn_kwargs)
+        betas = self.beta_scheduler_fn(timesteps)
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
@@ -187,8 +171,7 @@ class DiffusionModel(pl.LightningModule):
         self.monitor = "epoch_val_loss"
 
         # Set up sequence embedding if using learned embeddings
-        if self.labels == "learned-embeddings":
-            self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
+        self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
 
     # Remove mixed precision from this function, I've experienced numerical instability here
     @autocast(device_type="cuda", enabled=False)
@@ -243,8 +226,7 @@ class DiffusionModel(pl.LightningModule):
         ValueError
             If the labels are not one of the three options
         """
-        if self.labels == "learned-embeddings":
-            encoded = self.sequence_embedding(sequences)
+        encoded = self.sequence_embedding(sequences)
 
         return encoded
 
@@ -254,7 +236,6 @@ class DiffusionModel(pl.LightningModule):
         t: int,
         labels: torch.Tensor = None,
         noise: torch.Tensor = None,
-        loss_type: str = "l2",
     ) -> torch.Tensor:
         """
         A function that runs the model and calculates the loss based on the
@@ -270,9 +251,6 @@ class DiffusionModel(pl.LightningModule):
             Labels to condition the model on, by default None
         noise : torch.Tensor, optional
             Sampled noise from N(0,I), by default None
-        loss_type : str, optional
-            The type of loss to calculate between the
-            amount of added noise and predicted noise, by default "l2"
 
         Returns
         -------
@@ -302,14 +280,29 @@ class DiffusionModel(pl.LightningModule):
         predicted_noise = self.model(x_noised, t, labels)
 
         # Calculate the loss based on the predicted noise and the actual noise
-        if loss_type == "l2":
-            loss = F.mse_loss(noise, predicted_noise)
-        elif loss_type == "l1":
-            loss = F.l1_loss(noise, predicted_noise)
-        else:
-            raise ValueError(f"unknown loss type {loss_type}")
+        loss = F.mse_loss(noise, predicted_noise)
 
         return loss
+
+    def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
+        """
+        Initialize the latent space scaling factor using the first batch.
+
+        Parameters
+        ----------
+        latent_encoding : torch.Tensor
+            Batch of encoded latent vectors
+        """
+        # Calculate local standard deviation
+        local_std = latent_encoding.std()
+
+        # Gather from all processes and compute global standard deviation
+        gathered_std = self.all_gather(local_std)
+        mean_std = gathered_std.mean()
+
+        # Set consistent scaling factor across all GPUs
+        scaling_factor = 1 / mean_std
+        self.latent_space_scaling_factor = scaling_factor.float().to(self.device)
 
     def forward(self, x: torch.Tensor, labels: torch.Tensor = None) -> torch.Tensor:
         """
@@ -328,8 +321,7 @@ class DiffusionModel(pl.LightningModule):
         torch.Tensor
             Returns the loss
         """
-        b, c, h, w, device, img_size = *x.shape, x.device, self.image_size
-        assert h == w == img_size, f"image size must be {img_size}"
+        b, c, h, w, device = *x.shape, x.device
 
         # Generate random timestamps to noise the tensor and learn the denoising process
         timestamps = torch.randint(0, self.num_timesteps, (b,), device=device).long()
@@ -337,36 +329,25 @@ class DiffusionModel(pl.LightningModule):
         return self.p_loss(x, timestamps, labels)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences = batch
+        latent_encoding, sequences = batch
 
-        with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(data)
-            latent_encoding = latent_encoding.sample()
-
-        # Figure out the standard deviation of the latent space using
-        # the first batch of the data. This is to scale it to have unit variance
-        # stabilizes denoising-diffusion training
+        # Calculate scaling factor on first batch (only once during training)
         if self.global_step == 0 and batch_idx == 0:
-            latent_space_scaling_factor = 1 / latent_encoding.std()
-            self.latent_space_scaling_factor = latent_space_scaling_factor.float().to(
-                self.device
-            )
+            self._initialize_latent_scaling(latent_encoding)
 
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
+        # Compute loss
         loss = self.forward(latent_encoding, labels=sequences)
 
-        self.log("train_loss", loss, prog_bar=True, batch_size=data.size(0))
+        # Log training metrics
+        self.log("train_loss", loss, prog_bar=True, batch_size=latent_encoding.size(0))
 
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences = batch
-
-        with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(data)
-            latent_encoding = latent_encoding.sample()
+        latent_encoding, sequences = batch
 
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
@@ -378,7 +359,7 @@ class DiffusionModel(pl.LightningModule):
             loss,
             prog_bar=True,
             sync_dist=True,
-            batch_size=data.size(0),
+            batch_size=latent_encoding.size(0),
         )
 
         return loss
