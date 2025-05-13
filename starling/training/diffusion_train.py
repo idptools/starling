@@ -12,8 +12,10 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
+import starling.data.ddpm_loader as ddpm_loader
+import starling.data.ddpm_loader_tar as ddpm_loader_tar
 from starling.data.argument_parser import get_params
-from starling.data.ddpm_loader_tar import DDPMDataloader
+from starling.models.continuous_diffusion import ContinuousDiffusion
 from starling.models.diffusion import DiffusionModel
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
@@ -62,40 +64,47 @@ def setup_data_module(config):
     """Set up the data module."""
     data_config = config.dataloader
     effective_batch_size = data_config.batch_size * config.trainer.cuda
-
-    dataset = DDPMDataloader(data_config, effective_batch_size=effective_batch_size)
+    if data_config.type == "tar":
+        dataset = ddpm_loader_tar.DDPMDataloader(
+            data_config, effective_batch_size=effective_batch_size
+        )
+    elif data_config.type == "h5":
+        dataset = ddpm_loader.DDPMDataloader(data_config)
+    else:
+        raise ValueError(f"Unsupported data type: {data_config.type}")
     dataset.setup(stage="fit")
     return dataset
 
 
 def setup_models(config):
     """Set up the UNet and Diffusion models."""
-    encoder_model_path = config.diffusion.discrete.encoder_path
     model_path = config.trainer.checkpoint
+
+    diffusion_models = {"discrete": DiffusionModel, "continuous": ContinuousDiffusion}
 
     unet_config_dict = OmegaConf.to_container(config.unet, resolve=True)
     UNet_model = UNetConditional(**unet_config_dict)
 
-    encoder_model = VAE.load_from_checkpoint(encoder_model_path)
-
-    diffusion_config_dict = OmegaConf.to_container(
-        config.diffusion.discrete, resolve=True
-    )
-    # Remove encoder_path since it's passed separately
-    if "encoder_path" in diffusion_config_dict:
-        diffusion_config_dict.pop("encoder_path")
+    if config.diffusion.type == "continuous":
+        diffusion_config_dict = OmegaConf.to_container(
+            config.diffusion.continuous, resolve=True
+        )
+    elif config.diffusion.type == "discrete":
+        diffusion_config_dict = OmegaConf.to_container(
+            config.diffusion.discrete, resolve=True
+        )
+    else:
+        raise ValueError(f"Unsupported diffusion type: {config.diffusion.type}")
 
     if config.trainer.fine_tune:
-        diffusion_model = DiffusionModel.load_from_checkpoint(
+        diffusion_model = diffusion_models[config.diffusion.type].load_from_checkpoint(
             model_path,
             model=UNet_model,
-            encoder_model=encoder_model,
             **diffusion_config_dict,
         )
     else:
-        diffusion_model = DiffusionModel(
+        diffusion_model = diffusion_models[config.diffusion.type](
             model=UNet_model,
-            encoder_model=encoder_model,
             **diffusion_config_dict,
         )
 
@@ -118,7 +127,7 @@ def setup_trainer(config, callbacks, logger):
         max_epochs=config.trainer.num_epochs,
         callbacks=callbacks,
         gradient_clip_val=config.trainer.gradient_clip_val,
-        precision="bf16-mixed",
+        precision=config.trainer.precision,
         logger=logger,
     )
 
