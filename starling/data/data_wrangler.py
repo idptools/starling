@@ -96,7 +96,7 @@ def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
     with h5py.File(file_path, "r") as f:
         keys = keys_to_load if keys_to_load else list(f.keys())
         for key in keys:
-            if frame is not None and key == "dm":
+            if frame is not None and key == "dm" or key == "latents":
                 data[key] = f[key][frame]
             else:
                 data[key] = f[key][...]
