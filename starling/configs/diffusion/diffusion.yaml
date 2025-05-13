@@ -1,8 +1,16 @@
 
 
-time: discrete # options: continuous, discrete
+type: discrete # options: continuous, discrete
 
 discrete:
+  beta_scheduler: cosine
+  timesteps: 1000
   set_lr: 0.00001
-  image_size: 24
+  config_scheduler: CosineAnnealingLR
+
+continuous:
+  noise_schedule: karras
+  min_snr_loss_weight: false
+  min_snr_gamma: 5
+  set_lr: 0.00001
   config_scheduler: CosineAnnealingLR
