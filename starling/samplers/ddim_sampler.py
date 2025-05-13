@@ -13,6 +13,7 @@ class DDIMSampler(nn.Module):
     def __init__(
         self,
         ddpm_model,
+        encoder_model,
         n_steps: int,
         ddim_discretize: str = "uniform",
         ddim_eta: float = 0.0,
@@ -49,6 +50,7 @@ class DDIMSampler(nn.Module):
         """
         super(DDIMSampler, self).__init__()
         self.ddpm_model = ddpm_model
+        self.encoder_model = encoder_model
         self.n_steps = self.ddpm_model.num_timesteps
         self.ddim_discretize = ddim_discretize
         self.ddim_eta = ddim_eta
@@ -158,12 +160,7 @@ class DDIMSampler(nn.Module):
 
         # Initialize the latents with noise
         x = torch.randn(
-            [
-                num_conformations,
-                self.ddpm_model.in_channels,
-                self.ddpm_model.image_size,
-                self.ddpm_model.image_size,
-            ],
+            [num_conformations, self.ddpm_model.in_channels, 24, 24],
             device=device,
         )
 
@@ -210,7 +207,7 @@ class DDIMSampler(nn.Module):
         x = (1 / self.ddpm_model.latent_space_scaling_factor) * x
 
         # Decode the latents to get the distance maps
-        x = self.ddpm_model.encoder_model.decode(x)
+        x = self.encoder_model.decode(x)
 
         return x
 
