@@ -1,5 +1,14 @@
+type: h5 # tar or h5
+
+tar:
+  dataset: /home/borna/packages/starling/starling/data/data
+
+h5:
+  train: /work/bnovak/projects/sequence2ensemble/lammps_data/150mM_data/train.csv
+  validation: /work/bnovak/projects/sequence2ensemble/lammps_data/150mM_data/validation.csv
+  test: /work/bnovak/projects/sequence2ensemble/lammps_data/150mM_data/test.csv
+
 batch_size: 32
 early_batch_size: 128
-dataset: /home/borna/packages/starling/starling/data/data
 num_workers: 8
 prefetch_factor: 2

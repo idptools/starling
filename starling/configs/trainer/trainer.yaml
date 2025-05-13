@@ -5,5 +5,5 @@ num_epochs: 50
 gradient_clip_val: 1.0
 output_path: 20mM_model
 project_name: starling-ionic-strength
-checkpoint: /home/borna/.starling_weights/model-kernel-epoch=47-epoch_val_loss=0.03.ckpt
+checkpoint: /home/borna/.starling_weights/ddpm_no_encoder_weights.ckpt
 fine_tune: true

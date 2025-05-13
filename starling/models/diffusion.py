@@ -12,9 +12,7 @@ from torch.optim.lr_scheduler import (
     LambdaLR,
     OneCycleLR,
 )
-from tqdm import tqdm
 
-from starling.data.data_wrangler import one_hot_encode
 from starling.data.schedulers import (
     cosine_beta_schedule,
     linear_beta_schedule,
@@ -54,6 +52,15 @@ def extract(
 
 
 class DiffusionModel(pl.LightningModule):
+    """
+    Denoising diffusion probabilistic model for latent space generation.
+
+    Implements the diffusion process described in:
+    - Sohl-Dickstein et al. (2015): Nonequilibrium Thermodynamics
+    - Ho et al. (2020): Denoising Diffusion Probabilistic Models
+    - Rombach et al. (2021): High-resolution image synthesis with latent diffusion
+    """
+
     SCHEDULER_MAPPING = {
         "linear": linear_beta_schedule,
         "cosine": cosine_beta_schedule,
@@ -146,15 +153,13 @@ class DiffusionModel(pl.LightningModule):
         if schedule_fn_kwargs is None:
             schedule_fn_kwargs = {}
 
-        # This will be calculated later on during the first global step
-        # Need to register here so pytorch_lightning doesn't freak out
-        # Assuming the expected shape for the buffer is [1]
-        # This is used to scale the latent space to have unit variance (see reference #3)
-        latent_space_scaling_factor = torch.tensor(1.0, dtype=torch.float32)
+        # Register scaling factor buffer (calculated during first training step)
+        # Used to normalize latent space to unit variance per Reference #3
+        self.register_buffer(
+            "latent_space_scaling_factor", torch.tensor(1.0, dtype=torch.float32)
+        )
 
-        # Register the buffer
-        self.register_buffer("latent_space_scaling_factor", latent_space_scaling_factor)
-
+        # Calculate diffusion process parameters
         betas = self.beta_scheduler_fn(timesteps, **schedule_fn_kwargs)
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
@@ -163,207 +168,27 @@ class DiffusionModel(pl.LightningModule):
             betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         )
 
-        # Register the buffers for the model
-        self.register_buffer("betas", betas)
-        self.register_buffer("alphas_cumprod", alphas_cumprod)
-        self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
-        self.register_buffer("sqrt_recip_alphas", torch.sqrt(1.0 / alphas))
-        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
-        self.register_buffer(
-            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
-        )
-        self.register_buffer("posterior_variance", posterior_variance)
+        # Register diffusion process buffers
+        buffers = {
+            "betas": betas,
+            "alphas_cumprod": alphas_cumprod,
+            "alphas_cumprod_prev": alphas_cumprod_prev,
+            "sqrt_recip_alphas": torch.sqrt(1.0 / alphas),
+            "sqrt_alphas_cumprod": torch.sqrt(alphas_cumprod),
+            "sqrt_one_minus_alphas_cumprod": torch.sqrt(1.0 - alphas_cumprod),
+            "posterior_variance": posterior_variance,
+        }
 
-        timesteps, *_ = betas.shape
-        self.num_timesteps = int(timesteps)
+        for name, buffer in buffers.items():
+            self.register_buffer(name, buffer)
 
-        self.sampling_timesteps = timesteps
-
+        # Store timesteps information
+        self.num_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
 
+        # Set up sequence embedding if using learned embeddings
         if self.labels == "learned-embeddings":
             self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
-
-    @torch.inference_mode()
-    def p_sample(
-        self, x: torch.Tensor, timestamp: int, labels: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        One denoising step of the diffusion model. This function is
-        used in p_sample_loop to denoise the initial tensor sampled from N(0, I)
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            A tensor to denoise
-        timestamp : int
-            The timestep of the denoising-diffusion process to denoise
-        labels : torch.Tensor
-            Labels (sequences) to condition the model on
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the denoised tensor (t-1)
-        """
-        b, *_, device = *x.shape, x.device
-
-        # Batch the timestep to the same size as the input tensor x
-        batched_timestamps = torch.full(
-            (b,), timestamp, device=device, dtype=torch.long
-        )
-
-        # Run the model to predict the noise at the current timestamp
-        preds = self.model(x, batched_timestamps, labels)
-
-        # Extract the necessary values from the buffers to calculate the predicted mean
-        betas_t = extract(self.betas, batched_timestamps, x.shape)
-        sqrt_recip_alphas_t = extract(
-            self.sqrt_recip_alphas, batched_timestamps, x.shape
-        )
-        sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, batched_timestamps, x.shape
-        )
-
-        # Calculate the predicted mean based on the model prediction of the noise
-        predicted_mean = sqrt_recip_alphas_t * (
-            x - betas_t * preds / sqrt_one_minus_alphas_cumprod_t
-        )
-
-        # If the timestamp is 0, return the predicted mean
-        if timestamp == 0:
-            return predicted_mean
-        else:
-            posterior_variance = extract(
-                self.posterior_variance, batched_timestamps, x.shape
-            )
-            noise = torch.randn_like(x)
-            return predicted_mean + torch.sqrt(posterior_variance) * noise
-
-    @torch.inference_mode()
-    def p_sample_loop(
-        self,
-        shape: tuple,
-        labels: torch.Tensor,
-        steps: int = None,
-        return_all_timesteps: bool = False,
-    ) -> torch.Tensor:
-        """
-        Sampling loop for the diffusion model. It loops over the timesteps
-        to denoise the initial tensor sampled from N(0, I)
-
-        Parameters
-        ----------
-        shape : tuple
-            The shape of the tensor to sample from N(0, I)
-        labels : torch.Tensor
-            Labels to condition the sampling on
-        steps : int, optional
-            Number of steps to sample, by default None (all timesteps)
-        return_all_timesteps : bool, optional
-            Whether to return the full trajectory of denoising,
-            by default False
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the fully denoised tensor, in this case a latent space
-            that can be decoded using a pre-trained VAE
-        """
-
-        batch, device = shape[0], self.device
-
-        all_latents = []
-
-        # Sample noise to generate the latent representation of the data
-        latents = torch.randn(shape, device=device)
-
-        # Get the number of steps to run denoising
-        if steps is not None:
-            timesteps = (
-                torch.linspace(1, self.num_timesteps - 1, steps).round().to(torch.int64)
-            )
-        else:
-            timesteps = range(0, self.num_timesteps)
-
-        # Loop over the timesteps to denoise the initial tensor
-        for t in tqdm(
-            reversed(timesteps),
-            desc="Generating Latents",
-            total=len(timesteps),
-        ):
-            if return_all_timesteps:
-                all_latents.append(latents)
-
-            latents = self.p_sample(latents, t, labels)
-
-        # Scale the latents back to the original scale
-        latents = (1 / self.latent_space_scaling_factor) * latents
-
-        # if not return_all_timesteps else torch.stack(imgs, dim=1)
-        if return_all_timesteps:
-            return torch.stack(all_latents, dim=1) * (
-                1 / self.latent_space_scaling_factor
-            )
-        else:
-            return latents
-
-    @torch.inference_mode()
-    def sample(
-        self,
-        batch_size: int,
-        labels: str,
-        steps: int = None,
-        return_all_timesteps: bool = False,
-    ) -> torch.Tensor:
-        """
-        Sample from the trained diffusion model
-
-        Parameters
-        ----------
-        batch_size : int
-            The batch size to sample, higher the better if enough VRAM
-        labels : str
-            Sequence to condition the sampling on
-        steps : int, optional
-            Number of steps to sample, by default None (all timesteps)
-        return_all_timesteps : bool, optional
-            Whether to return all the tensors along the
-            denoising trajectory, by default False
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the sampled fully denoised tensor
-        """
-
-        shape = (batch_size, self.in_channels, self.image_size, self.image_size)
-
-        # Prepare the labels to condition the sampling from the model on
-        with torch.no_grad():
-            if self.labels == "learned-embeddings":
-                # Get the learned embeddings for the given sequence
-                labels = (
-                    torch.argmax(
-                        torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
-                    )
-                    .to(torch.int64)
-                    .squeeze()
-                    .to(self.device)
-                )
-                labels = self.sequence2labels(labels)
-
-        labels = labels.unsqueeze(0)
-
-        # Sample the denoising-diffusion model to generate data (in our case, latent space)
-        latents = self.p_sample_loop(
-            shape, labels, steps=steps, return_all_timesteps=return_all_timesteps
-        )
-
-        # Decode the latent space with the VAE to generate the distance map
-        distance_map = self.encoder_model.decode(latents)
-
-        return distance_map, latents, labels
 
     # Remove mixed precision from this function, I've experienced numerical instability here
     @autocast(device_type="cuda", enabled=False)
