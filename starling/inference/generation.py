@@ -75,6 +75,8 @@ def generate_backend(
     show_per_step_progress_bar,
     pdb_trajectory,
     model_manager=model_manager,
+    encoder_path=None,
+    ddpm_path=None,
 ):
     """
     Backend function for generating the distance maps using STARLING.
@@ -150,6 +152,14 @@ def generate_backend(
         read into the ModelManager object located the
         model_loading.py
 
+    encoder_path : str, optional
+        Path to a custom encoder model checkpoint file to use instead of the default.
+        Default is None, which uses the default model path from configs.py.
+
+    ddpm_path : str, optional
+        Path to a custom diffusion model checkpoint file to use instead of the default.
+        Default is None, which uses the default model path from configs.py.
+
     Returns
     ---------------
     dict or None:
@@ -165,11 +175,15 @@ def generate_backend(
 
     # get models. This will only load once even if we call this
     # function multiple times.
-    encoder_model, diffusion = model_manager.get_models(device=device)
+    encoder_model, diffusion = model_manager.get_models(
+        device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
+    )
 
     # Construct a sampler
     if ddim:
-        sampler = DDIMSampler(ddpm_model=diffusion, n_steps=steps)
+        sampler = DDIMSampler(
+            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps
+        )
     else:
         sampler = diffusion
 

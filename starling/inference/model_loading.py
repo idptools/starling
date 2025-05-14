@@ -32,6 +32,9 @@ class ModelManager:
             return path
 
         # Resolve paths
+        encoder_path = encoder_path or DEFAULT_ENCODER_WEIGHTS_PATH
+        ddpm_path = ddpm_path or DEFAULT_DDPM_WEIGHTS_PATH
+
         encoder_path = load_from_path_or_url(encoder_path)
         ddpm_path = load_from_path_or_url(ddpm_path)
 

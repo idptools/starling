@@ -171,6 +171,8 @@ def generate(
     show_per_step_progress_bar=True,
     pdb_trajectory=False,
     return_single_ensemble=False,
+    encoder_path=None,
+    ddpm_path=None,
 ):
     """
     Main function for generating the distance maps using STARLING. Allows
@@ -284,6 +286,16 @@ def generate(
         object instead of a dictionary of ensemble objects IF and only if
         there is one sequence passed. If this option is passed and multiple
         sequences are passed this will throw an ValueError. Default False.
+
+    encoder_path : str, optional
+        Path to a custom encoder model checkpoint file to use instead of the default.
+        This allows using your own pretrained models.
+        Default is None, which uses the default model path from configs.py.
+
+    ddpm_path : str, optional
+        Path to a custom diffusion model checkpoint file to use instead of the default.
+        This allows using your own pretrained models.
+        Default is None, which uses the default model path from configs.py.
 
     Returns
     ---------------
@@ -432,6 +444,9 @@ def generate(
         show_progress_bar,
         show_per_step_progress_bar,
         pdb_trajectory,
+        model_manager=generation.model_manager,
+        encoder_path=encoder_path,
+        ddpm_path=ddpm_path,
     )
 
     # if this is true we KNOW there is only one Ensemble in the return dict because

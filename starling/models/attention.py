@@ -38,9 +38,9 @@ class CrossAttention(nn.Module):
         self.context_dim = context_dim
         self.custom = custom
 
-        assert (
-            self.head_dim * num_heads == embed_dim
-        ), "embed_dim must be divisible by num_heads"
+        assert self.head_dim * num_heads == embed_dim, (
+            "embed_dim must be divisible by num_heads"
+        )
 
         self.query_norm = nn.LayerNorm(embed_dim)
         self.context_norm = nn.LayerNorm(context_dim)
@@ -121,9 +121,9 @@ class SelfAttention(nn.Module):
         self.channels_last = channels_last
         self.custom = custom
 
-        assert (
-            self.head_dim * num_heads == embed_dim
-        ), "embed_dim must be divisible by num_heads"
+        assert self.head_dim * num_heads == embed_dim, (
+            "embed_dim must be divisible by num_heads"
+        )
 
         self.query_norm = nn.LayerNorm(embed_dim)
 
@@ -244,9 +244,9 @@ class SelfAttentionConv(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
 
-        assert (
-            self.head_dim * num_heads == embed_dim
-        ), "embed_dim must be divisible by num_heads"
+        assert self.head_dim * num_heads == embed_dim, (
+            "embed_dim must be divisible by num_heads"
+        )
 
         self.query_conv = nn.Conv2d(
             embed_dim, embed_dim, kernel_size=kernel_size, padding=kernel_size // 2
