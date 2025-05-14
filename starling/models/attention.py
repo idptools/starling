@@ -12,7 +12,6 @@ class CrossAttention(nn.Module):
         embed_dim: int,
         num_heads: int,
         context_dim: int,
-        custom,
         channel_last=False,
     ) -> None:
         """
@@ -36,7 +35,6 @@ class CrossAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.channel_last = channel_last
         self.context_dim = context_dim
-        self.custom = custom
 
         assert self.head_dim * num_heads == embed_dim, (
             "embed_dim must be divisible by num_heads"
@@ -75,13 +73,7 @@ class CrossAttention(nn.Module):
         K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
         V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
 
-        # Use scaled_dot_product_attention
-        if self.custom:
-            scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
-            attention_weights = F.softmax(scores, dim=-1)
-            attention_output = torch.matmul(attention_weights, V)
-        else:
-            attention_output = F.scaled_dot_product_attention(Q, K, V)
+        attention_output = F.scaled_dot_product_attention(Q, K, V)
 
         # Reshape back to original dimensions
         attention_output = rearrange(
@@ -97,7 +89,7 @@ class CrossAttention(nn.Module):
 
 class SelfAttention(nn.Module):
     def __init__(
-        self, embed_dim: int, num_heads: int, custom, channels_last: bool = False
+        self, embed_dim: int, num_heads: int, channels_last: bool = False
     ) -> None:
         """
         This is a basic self-attention module. It uses linear layers to project
@@ -119,7 +111,6 @@ class SelfAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         self.channels_last = channels_last
-        self.custom = custom
 
         assert self.head_dim * num_heads == embed_dim, (
             "embed_dim must be divisible by num_heads"
@@ -165,13 +156,7 @@ class SelfAttention(nn.Module):
             K = rearrange(K, "b x (h d) -> b h x d", h=self.num_heads)
             V = rearrange(V, "b x (h d) -> b h x d", h=self.num_heads)
 
-        # Scaled Dot-Product Attention
-        if self.custom:
-            scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
-            attention_weights = F.softmax(scores, dim=-1)
-            attention_output = torch.matmul(attention_weights, V)
-        else:
-            attention_output = F.scaled_dot_product_attention(Q, K, V)
+        attention_output = F.scaled_dot_product_attention(Q, K, V)
 
         # Concatenate heads and reshape back to original dimensions
         if input_dim == 4:
