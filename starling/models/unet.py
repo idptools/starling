@@ -221,7 +221,7 @@ class UNetConditional(nn.Module):
         middle_blocks: int = 2,
         labels_dim: int = 512,
         sinusoidal_pos_emb_theta: int = 10000,
-        custom_attention: bool = True,
+        custom_attention: bool = False,
     ):
         """
         A U-Net architecture that uses ResNet blocks with spatial transformer blocks to process the input
