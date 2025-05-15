@@ -21,6 +21,50 @@ def sequence_to_indices(sequence, aa_to_int):
     return torch.tensor(int_sequence, dtype=torch.int64)
 
 
+def collate_batch_with_padding(batch):
+    """
+    Custom collate function that pads sequences to the maximum length within the batch.
+
+    Parameters:
+    - batch: List of tuples (distance_map, sequence)
+
+    Returns:
+    - distance_maps: Tensor of shape [batch_size, channels, height, width]
+    - padded_sequences: Tensor of shape [batch_size, max_seq_length]
+    - sequence_masks: Tensor of shape [batch_size, max_seq_length], 1 for real, 0 for padding
+    """
+    # Separate the distance maps and sequences
+    distance_maps, sequences = zip(*batch)
+
+    # Find the maximum sequence length in this batch
+    max_len = max(seq.size(0) for seq in sequences)
+
+    # Create padded sequences and masks
+    padded_sequences = []
+    sequence_masks = []
+
+    # Pad each sequence to the maximum length
+    for seq in sequences:
+        seq_len = seq.size(0)
+        # Create padding
+        padding = torch.zeros(max_len - seq_len, dtype=seq.dtype)
+        # Pad sequence
+        padded_seq = torch.cat([seq, padding], dim=0)
+        padded_sequences.append(padded_seq)
+
+        # Create mask (1 for real tokens, 0 for padding)
+        mask = torch.zeros(max_len, dtype=torch.bool)
+        mask[:seq_len] = 1
+        sequence_masks.append(mask)
+
+    # Stack into tensors
+    distance_maps = torch.stack(distance_maps, dim=0)
+    padded_sequences = torch.stack(padded_sequences, dim=0)
+    sequence_masks = torch.stack(sequence_masks, dim=0)
+
+    return distance_maps, padded_sequences, sequence_masks.bool()
+
+
 class MatrixDataset(torch.utils.data.Dataset):
     def __init__(self, tsv_file: str) -> None:
         """
@@ -68,6 +112,8 @@ class MatrixDataset(torch.utils.data.Dataset):
         distance_map = torch.from_numpy(distance_map).unsqueeze(0)
 
         sequence = data["seq"].astype(np.int32)
+        remove_padded = sequence != 0
+        sequence = sequence[remove_padded]
         sequence = torch.from_numpy(sequence)
 
         return distance_map, sequence
@@ -109,6 +155,7 @@ class DDPMDataloader(pl.LightningDataModule):
             pin_memory=True,
             persistent_workers=True,
             prefetch_factor=self.prefetch_factor,
+            collate_fn=collate_batch_with_padding,
         )
 
     def val_dataloader(self):
@@ -119,6 +166,7 @@ class DDPMDataloader(pl.LightningDataModule):
             persistent_workers=True,
             prefetch_factor=self.prefetch_factor,
             pin_memory=True,
+            collate_fn=collate_batch_with_padding,
         )
 
     def test_dataloader(self):
@@ -127,4 +175,5 @@ class DDPMDataloader(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=True,
+            collate_fn=collate_batch_with_padding,
         )
