@@ -1,5 +1,5 @@
 import torch
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import nn
 from torch.nn import functional as F
 
@@ -49,7 +49,7 @@ class CrossAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, query, context=None):
+    def forward(self, query, context=None, query_mask=None, context_mask=None):
         batch_size, channels, height, width = query.size()
 
         if not self.channel_last:
@@ -73,7 +73,37 @@ class CrossAttention(nn.Module):
         K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
         V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
 
-        attention_output = F.scaled_dot_product_attention(Q, K, V)
+        if query_mask is not None or context_mask is not None:
+            if query_mask is None:
+                query_mask = torch.ones(
+                    (batch_size, height * width), device=query.device
+                )
+            if context_mask is None:
+                context_mask = torch.ones((batch_size, K.size(2)), device=query.device)
+
+            context_mask = rearrange(context_mask, "b s -> b 1 s")
+            query_mask = rearrange(query_mask, "b s -> b s 1")
+
+            attention_mask = query_mask * context_mask
+            attention_mask = repeat(
+                attention_mask, "b q k -> b h q k", h=self.num_heads
+            )
+            attention_mask = attention_mask.bool()
+
+        else:
+            attention_mask = None
+
+        if attention_mask is not None:
+            assert attention_mask.shape == (
+                batch_size,
+                self.num_heads,
+                height * width,
+                K.size(2),
+            ), "Attention mask shape mismatch"
+
+        attention_output = F.scaled_dot_product_attention(
+            Q, K, V, attn_mask=attention_mask
+        )
 
         # Reshape back to original dimensions
         attention_output = rearrange(
@@ -124,7 +154,7 @@ class SelfAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         input_dim = x.dim()
 
         if input_dim == 4:
@@ -155,8 +185,14 @@ class SelfAttention(nn.Module):
             Q = rearrange(Q, "b x (h d) -> b h x d", h=self.num_heads)
             K = rearrange(K, "b x (h d) -> b h x d", h=self.num_heads)
             V = rearrange(V, "b x (h d) -> b h x d", h=self.num_heads)
+            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            attention_mask = attention_mask.expand(
+                batch_size, self.num_heads, seq_len, seq_len
+            )
 
-        attention_output = F.scaled_dot_product_attention(Q, K, V)
+        attention_output = F.scaled_dot_product_attention(
+            Q, K, V, attn_mask=attention_mask
+        )
 
         # Concatenate heads and reshape back to original dimensions
         if input_dim == 4:
