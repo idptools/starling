@@ -158,7 +158,7 @@ class SpatialTransformer(nn.Module):
         super().__init__()
 
         # Add positional encodings to the context (protein sequence data)
-        self.context_positional_encodings = PositionalEncoding1D(384, context_dim)
+        self.context_positional_encodings = PositionalEncoding1D(context_dim)
         self.context_encoder = TransformerEncoder(context_dim, num_heads)
 
         # Add positional encodings to the latent space representation of images (e.i. distance maps)
