@@ -234,7 +234,8 @@ class DiffusionModel(pl.LightningModule):
         self,
         x_start: torch.Tensor,
         t: int,
-        labels: torch.Tensor = None,
+        labels: torch.Tensor,
+        mask: torch.Tensor,
         noise: torch.Tensor = None,
     ) -> torch.Tensor:
         """
@@ -277,34 +278,14 @@ class DiffusionModel(pl.LightningModule):
         labels = self.sequence2labels(labels)
 
         # Run the model to predict the noise
-        predicted_noise = self.model(x_noised, t, labels)
+        predicted_noise = self.model(x_noised, t, labels, mask)
 
         # Calculate the loss based on the predicted noise and the actual noise
         loss = F.mse_loss(noise, predicted_noise)
 
         return loss
 
-    def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
-        """
-        Initialize the latent space scaling factor using the first batch.
-
-        Parameters
-        ----------
-        latent_encoding : torch.Tensor
-            Batch of encoded latent vectors
-        """
-        # Calculate local standard deviation
-        local_std = latent_encoding.std()
-
-        # Gather from all processes and compute global standard deviation
-        gathered_std = self.all_gather(local_std)
-        mean_std = gathered_std.mean()
-
-        # Set consistent scaling factor across all GPUs
-        scaling_factor = 1 / mean_std
-        self.latent_space_scaling_factor = scaling_factor.float().to(self.device)
-
-    def forward(self, x: torch.Tensor, labels: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, labels: torch.Tensor, mask) -> torch.Tensor:
         """
         Forward pass of the model, calculates the loss based on the
         predicted noise and the actual noise.
@@ -326,10 +307,30 @@ class DiffusionModel(pl.LightningModule):
         # Generate random timestamps to noise the tensor and learn the denoising process
         timestamps = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
-        return self.p_loss(x, timestamps, labels)
+        return self.p_loss(x, timestamps, labels, mask)
+
+    def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
+        """
+        Initialize the latent space scaling factor using the first batch.
+
+        Parameters
+        ----------
+        latent_encoding : torch.Tensor
+            Batch of encoded latent vectors
+        """
+        # Calculate local standard deviation
+        local_std = latent_encoding.std()
+
+        # Gather from all processes and compute global standard deviation
+        gathered_std = self.all_gather(local_std)
+        mean_std = gathered_std.mean()
+
+        # Set consistent scaling factor across all GPUs
+        scaling_factor = 1 / mean_std
+        self.latent_space_scaling_factor = scaling_factor.float().to(self.device)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        latent_encoding, sequences = batch
+        latent_encoding, sequences, sequence_attention_mask = batch
 
         # Calculate scaling factor on first batch (only once during training)
         if self.global_step == 0 and batch_idx == 0:
@@ -339,7 +340,9 @@ class DiffusionModel(pl.LightningModule):
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
         # Compute loss
-        loss = self.forward(latent_encoding, labels=sequences)
+        loss = self.forward(
+            latent_encoding, labels=sequences, mask=sequence_attention_mask
+        )
 
         # Log training metrics
         self.log("train_loss", loss, prog_bar=True, batch_size=latent_encoding.size(0))
@@ -347,12 +350,14 @@ class DiffusionModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        latent_encoding, sequences = batch
+        latent_encoding, sequences, sequence_attention_mask = batch
 
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
-        loss = self.forward(latent_encoding, labels=sequences)
+        loss = self.forward(
+            latent_encoding, labels=sequences, mask=sequence_attention_mask
+        )
 
         self.log(
             "epoch_val_loss",
