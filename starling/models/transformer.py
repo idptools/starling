@@ -92,9 +92,9 @@ class TransformerEncoder(nn.Module):
         self.self_attention = SelfAttention(embed_dim, num_heads)
         self.feed_forward = FeedForward(embed_dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
         # Prenorm is happening within the self attention layer
-        x = x + self.self_attention(x)
+        x = x + self.self_attention(x, attention_mask=mask)
 
         # Prenorm is happening within the feed forward layer
         x = x + self.feed_forward(x)
@@ -125,12 +125,12 @@ class TransformerDecoder(nn.Module):
         self.cross_attention = CrossAttention(embed_dim, num_heads, context_dim)
         self.feed_forward = FeedForward(embed_dim)
 
-    def forward(self, x: torch.Tensor, context=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, context, context_mask) -> torch.Tensor:
         # Prenorm is happening within the self attention layer
         x = x + self.self_attention(x)
 
         # Prenorm is happening within the cross attention layer
-        x = x + self.cross_attention(x, context)
+        x = x + self.cross_attention(x, context, context_mask=context_mask)
 
         # Prenorm is happening within the feed forward layer
         x = x + self.feed_forward(x)
@@ -168,13 +168,13 @@ class SpatialTransformer(nn.Module):
         self.transformer_block = TransformerDecoder(embed_dim, num_heads, context_dim)
         self.conv_out = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
 
-    def forward(self, x: torch.Tensor, context=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, context, mask) -> torch.Tensor:
         # Save the input for the residual connection
         x_in = x
 
         # Add positional encodings to the context and process the context features
         context = self.context_positional_encodings(context)
-        context = self.context_encoder(context)
+        context = self.context_encoder(context, mask=mask)
 
         # Add positional encodings to the latent space representation of images
         x = self.image_positional_encodings(x)
@@ -182,7 +182,7 @@ class SpatialTransformer(nn.Module):
         x = self.conv_in(x)
 
         # Transformer block to capture the relationships between the input data and the context data
-        x = self.transformer_block(x, context)
+        x = self.transformer_block(x, context, mask)
 
         x = self.conv_out(x)
 
