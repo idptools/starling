@@ -182,7 +182,11 @@ class CrossAttentionResnetLayer(nn.Module):
             self.in_channels = out_channels
 
     def forward(
-        self, x: torch.Tensor, time: torch.Tensor, sequence_label: torch.Tensor
+        self,
+        x: torch.Tensor,
+        time: torch.Tensor,
+        sequence_label: torch.Tensor,
+        sequence_mask: torch.Tensor,
     ) -> torch.Tensor:
         """
         Forward pass of the ResNet + spatial transformer blocks.
@@ -203,7 +207,7 @@ class CrossAttentionResnetLayer(nn.Module):
         """
         for layer, transformer in zip(self.layer, self.transformer):
             x = layer(x, time)
-            x = transformer(x, context=sequence_label)
+            x = transformer(x, context=sequence_label, mask=sequence_mask)
         return x
 
 
@@ -396,7 +400,11 @@ class UNetConditional(nn.Module):
         self.conv_out = nn.Conv2d(all_in_channels[0], out_channels, kernel_size=1)
 
     def forward(
-        self, x: torch.Tensor, time: torch.Tensor, labels: torch.Tensor = None
+        self,
+        x: torch.Tensor,
+        time: torch.Tensor,
+        labels: torch.Tensor,
+        sequence_mask: torch.Tensor,
     ) -> torch.Tensor:
         """
         Forward pass of the UNet architecture.
@@ -419,36 +427,36 @@ class UNetConditional(nn.Module):
         time = self.time_mlp(time)
 
         # Initial convolution
-        x = self.conv_in(x, time, labels)
+        x = self.conv_in(x, time, labels, sequence_mask)
 
         # Encoder forward passes
-        x = self.encoder_layer1(x, time, labels)
+        x = self.encoder_layer1(x, time, labels, sequence_mask)
         x_layer1 = x.clone()
         x = self.downsample1(x)
 
-        x = self.encoder_layer2(x, time, labels)
+        x = self.encoder_layer2(x, time, labels, sequence_mask)
         x_layer2 = x.clone()
         x = self.downsample2(x)
 
-        x = self.encoder_layer3(x, time, labels)
+        x = self.encoder_layer3(x, time, labels, sequence_mask)
         x_layer3 = x.clone()
         x = self.downsample3(x)
 
         # Mid UNet
-        x = self.middle(x, time, labels)
+        x = self.middle(x, time, labels, sequence_mask)
 
         # Decoder forward passes with skip connections from the encoder
         x = self.upconv1(x)
         x = torch.cat((x, x_layer3), dim=1)
-        x = self.decoder_layer1(x, time, labels)
+        x = self.decoder_layer1(x, time, labels, sequence_mask)
 
         x = self.upconv2(x)
         x = torch.cat((x, x_layer2), dim=1)
-        x = self.decoder_layer2(x, time, labels)
+        x = self.decoder_layer2(x, time, labels, sequence_mask)
 
         x = self.upconv3(x)
         x = torch.cat((x, x_layer1), dim=1)
-        x = self.decoder_layer3(x, time, labels)
+        x = self.decoder_layer3(x, time, labels, sequence_mask)
 
         # Final convolutions
         x = self.conv_out(x)
