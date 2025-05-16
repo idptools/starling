@@ -2,8 +2,25 @@ import hdf5plugin
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from finches.epsilon_calculation import InteractionMatrixConstructor
+from finches.forcefields.mpipi import Mpipi_model
 
 from starling.data.data_wrangler import load_hdf5_compressed, read_tsv_file
+from starling.data.tokenizer import StarlingTokenizer
+
+
+def row_norm(A):
+    """
+    Normalize the rows of a matrix A.
+
+    Parameters:
+    - A (torch.Tensor): Input matrix of shape [batch_size, channels, height, width].
+
+    Returns:
+    - torch.Tensor: Row-normalized matrix.
+    """
+    norm = torch.norm(A, p=2, dim=1, keepdim=True)
+    return A / norm
 
 
 def sequence_to_indices(sequence, aa_to_int):
@@ -34,7 +51,7 @@ def collate_batch_with_padding(batch):
     - sequence_masks: Tensor of shape [batch_size, max_seq_length], 1 for real, 0 for padding
     """
     # Separate the distance maps and sequences
-    distance_maps, sequences = zip(*batch)
+    distance_maps, sequences, interaction_matrices = zip(*batch)
 
     # Find the maximum sequence length in this batch
     max_len = max(seq.size(0) for seq in sequences)
@@ -44,7 +61,7 @@ def collate_batch_with_padding(batch):
     sequence_masks = []
 
     # Pad each sequence to the maximum length
-    for seq in sequences:
+    for seq, matrix in zip(sequences, interaction_matrices):
         seq_len = seq.size(0)
         # Create padding
         padding = torch.zeros(max_len - seq_len, dtype=seq.dtype)
@@ -76,47 +93,65 @@ class MatrixDataset(torch.utils.data.Dataset):
             Which labels to use for the dataset, learnable or fixed (finches interaction matrix).
         """
         self.data = read_tsv_file(tsv_file)
-        self.aa_to_int = {
-            "0": 0,
-            "A": 1,
-            "C": 2,
-            "D": 3,
-            "E": 4,
-            "F": 5,
-            "G": 6,
-            "H": 7,
-            "I": 8,
-            "K": 9,
-            "L": 10,
-            "M": 11,
-            "N": 12,
-            "P": 13,
-            "Q": 14,
-            "R": 15,
-            "S": 16,
-            "T": 17,
-            "V": 18,
-            "W": 19,
-            "Y": 20,
-        }
+
+        self.tokenizer = StarlingTokenizer()
+
+        Mpipi_GGv1_params_20 = Mpipi_model(version="Mpipi_GGv1", salt=20)
+        Mpipi_GGv1_params_150 = Mpipi_model(version="Mpipi_GGv1", salt=150)
+        Mpipi_GGv1_params_300 = Mpipi_model(version="Mpipi_GGv1", salt=300)
+
+        self.mpipi_20 = InteractionMatrixConstructor(Mpipi_GGv1_params_20)
+        self.mpipi_150 = InteractionMatrixConstructor(Mpipi_GGv1_params_150)
+        self.mpipi_300 = InteractionMatrixConstructor(Mpipi_GGv1_params_300)
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
+        """
+        Retrieves an item from the dataset at the specified index.
+
+        Args:
+            index: Index of the item to retrieve
+
+        Returns:
+            tuple: (distance_map, sequence, interaction_matrix)
+                - distance_map: Tensor of shape [1, height, width]
+                - sequence: Tensor of integer indices representing amino acids
+                - interaction_matrix: Normalized interaction matrix
+        """
+        # 1. Extract data path and frame number from dataframe
         data_path, frame = self.data.iloc[index]
+
+        # 2. Load compressed HDF5 data
         data = load_hdf5_compressed(
             data_path, keys_to_load=["latents", "seq"], frame=int(frame)
         )
+
+        # 3. Process distance map
         distance_map = data["latents"]
+        # Add channel dimension
         distance_map = torch.from_numpy(distance_map).unsqueeze(0)
 
+        # 4. Process sequence data
         sequence = data["seq"].astype(np.int32)
-        remove_padded = sequence != 0
-        sequence = sequence[remove_padded]
+        valid_indices = sequence != 0  # Identify non-padded positions
+        sequence = sequence[valid_indices]  # Remove padding
+
+        # 5. Generate interaction matrix using MPIPI model
+        decoded_sequence = self.tokenizer.decoe(sequence)
+        interaction_matrix = self.mpipi_150.calculate_pairwise_homotypic_matrix(
+            decoded_sequence
+        )
+
+        # 6. Normalize interaction matrix and zero out diagonal
+        interaction_matrix = row_norm(interaction_matrix)
+        np.fill_diagonal(interaction_matrix, 0)
+
+        # 7. Convert sequence to tensor
         sequence = torch.from_numpy(sequence)
 
-        return distance_map, sequence
+        return distance_map, sequence, interaction_matrix
 
 
 # Step 2: Create a data module
