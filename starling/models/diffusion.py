@@ -74,6 +74,8 @@ class DiffusionModel(pl.LightningModule):
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         set_lr: float = 1e-4,
+        min_snr_loss: bool = False,
+        min_snr_gamma: float = 5.0,
         config_scheduler: str = "LinearWarmupCosineAnnealingLR",
     ) -> None:
         """
@@ -138,6 +140,9 @@ class DiffusionModel(pl.LightningModule):
         self.beta_scheduler_fn = self.SCHEDULER_MAPPING.get(beta_scheduler)
         if self.beta_scheduler_fn is None:
             raise ValueError(f"unknown beta schedule {beta_scheduler}")
+
+        self.min_snr_loss = min_snr_loss
+        self.min_snr_gamma = min_snr_gamma
 
         # Register scaling factor buffer (calculated during first training step)
         # Used to normalize latent space to unit variance per Reference #3
@@ -279,8 +284,27 @@ class DiffusionModel(pl.LightningModule):
         # Run the model to predict the noise
         predicted_noise = self.unet_model(x_noised, t, labels, mask)
 
-        # Calculate the loss based on the predicted noise and the actual noise
-        loss = F.mse_loss(noise, predicted_noise)
+        # The following adapted from:
+        # https://github.com/huggingface/diffusers/blob/78a78515d64736469742e5081337dbcf60482750/examples/text_to_image/train_text_to_image.py#L927
+        if self.min_snr_loss:
+            # Apply min-SNR weighting as per Section 3.4 of https://arxiv.org/abs/2303.09556
+            # This improves training stability by reweighting timestep losses
+            snr = self.compute_snr(t)
+
+            # Calculate weight using min(snr, γ) / snr formula
+            # Handle zero SNR case by replacing potential infinities with 1.0
+            snr_weight = torch.clamp(self.min_snr_gamma / snr, min=1.0)
+
+            # Apply the SNR-weighted MSE loss
+            # First compute per-element losses, then average across spatial dimensions
+            # Finally, apply SNR weights and average across batch
+            mse_loss_raw = F.mse_loss(noise, predicted_noise, reduction="none")
+            mse_loss_per_sample = mse_loss_raw.mean(
+                dim=list(range(1, len(mse_loss_raw.shape)))
+            )
+            loss = (mse_loss_per_sample * snr_weight).mean()
+        else:
+            loss = F.mse_loss(noise, predicted_noise)
 
         return loss
 
@@ -367,6 +391,20 @@ class DiffusionModel(pl.LightningModule):
         )
 
         return loss
+
+    def compute_snr(self, timesteps):
+        """
+        Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
+        """
+        alphas_cumprod = self.alphas_cumprod
+        sqrt_alphas_cumprod = alphas_cumprod**0.5
+        sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
+
+        alpha = sqrt_alphas_cumprod[timesteps]
+        sigma = sqrt_one_minus_alphas_cumprod[timesteps]
+        # Compute SNR.
+        snr = (alpha / sigma) ** 2
+        return snr
 
     def configure_optimizers(self):
         """
