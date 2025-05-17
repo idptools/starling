@@ -69,7 +69,8 @@ class DiffusionModel(pl.LightningModule):
 
     def __init__(
         self,
-        model: nn.Module,
+        unet_model: nn.Module,
+        sequence_encoder: nn.Module,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         set_lr: float = 1e-4,
@@ -123,11 +124,12 @@ class DiffusionModel(pl.LightningModule):
         super().__init__()
 
         # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
-        self.save_hyperparameters(ignore=["model"])
+        self.save_hyperparameters(ignore=["unet_model", "sequence_encoder"])
 
-        self.model = model
+        self.unet_model = unet_model
+        self.sequence_encoder = sequence_encoder
 
-        self.in_channels = self.model.in_channels
+        self.in_channels = self.unet_model.in_channels
 
         # Learning rate params
         self.set_lr = set_lr
@@ -170,9 +172,6 @@ class DiffusionModel(pl.LightningModule):
         self.num_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
 
-        # Set up sequence embedding if using learned embeddings
-        self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
-
     # Remove mixed precision from this function, I've experienced numerical instability here
     @autocast(device_type="cuda", enabled=False)
     def q_sample(
@@ -207,7 +206,7 @@ class DiffusionModel(pl.LightningModule):
         # Return the noised tensor based on the timestamp
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-    def sequence2labels(self, sequences: List) -> torch.Tensor:
+    def sequence2labels(self, sequences: List, sequence_mask) -> torch.Tensor:
         """
         Converts sequences to labels based on user defined models,
 
@@ -226,7 +225,7 @@ class DiffusionModel(pl.LightningModule):
         ValueError
             If the labels are not one of the three options
         """
-        encoded = self.sequence_embedding(sequences)
+        encoded = self.sequence_encoder(sequences, sequence_mask)
 
         return encoded
 
@@ -275,10 +274,10 @@ class DiffusionModel(pl.LightningModule):
         x_noised = self.q_sample(x_start, t, noise=noise)
 
         # Get the labels to condition the model on
-        labels = self.sequence2labels(labels)
+        labels = self.sequence2labels(labels, mask)
 
         # Run the model to predict the noise
-        predicted_noise = self.model(x_noised, t, labels, mask)
+        predicted_noise = self.unet_model(x_noised, t, labels, mask)
 
         # Calculate the loss based on the predicted noise and the actual noise
         loss = F.mse_loss(noise, predicted_noise)
@@ -390,7 +389,8 @@ class DiffusionModel(pl.LightningModule):
             If the scheduler is not implemented
         """
         optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            list(self.unet_model.parameters())
+            + list(self.sequence_encoder.parameters()),
             lr=self.set_lr,
             betas=(0.9, 0.999),
             eps=1e-08,
@@ -434,7 +434,7 @@ class DiffusionModel(pl.LightningModule):
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
-            warmup_steps = steps_per_epoch * int(num_epochs * 0.05)
+            warmup_steps = steps_per_epoch * int(num_epochs * 0.01)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:
