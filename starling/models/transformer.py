@@ -101,6 +101,42 @@ class TransformerEncoder(nn.Module):
         return x
 
 
+class SequenceEncoder(nn.Module):
+    def __init__(self, num_layers: int, embed_dim: int, num_heads: int):
+        """
+        Sequence encoder layer. The sequence encoder layer consists of a transformer encoder
+        and a feed forward layer. The transformer encoder layer is used to capture the relationships
+        between different elements in the input data. The feed forward layer is used to introduce
+        non-linearity in the network.
+
+        Parameters
+        ----------
+        num_layers : int
+            The number of layers in the transformer encoder.
+        embed_dim : int
+            The input dimension of the data. Used to initialize the transformer encoder and feed forward layers.
+        num_heads : int
+            The number of heads in the multi-head attention layer. Used to initialize the transformer encoder.
+        """
+        super().__init__()
+
+        self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
+
+        self.sequence_positional_encoding = PositionalEncoding1D(embed_dim)
+
+        self.layers = nn.ModuleList(
+            [TransformerEncoder(embed_dim, num_heads) for _ in range(num_layers)]
+        )
+
+    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
+        x = self.sequence_learned_embedding(x)
+        # Add positional encodings to the input data
+        x = self.sequence_positional_encoding(x)
+        for layer in self.layers:
+            x = layer(x, mask=mask)
+        return x
+
+
 class TransformerDecoder(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, context_dim):
         """
@@ -157,10 +193,6 @@ class SpatialTransformer(nn.Module):
         """
         super().__init__()
 
-        # Add positional encodings to the context (protein sequence data)
-        self.context_positional_encodings = PositionalEncoding1D(context_dim)
-        self.context_encoder = TransformerEncoder(context_dim, num_heads)
-
         # Add positional encodings to the latent space representation of images (e.i. distance maps)
         self.image_positional_encodings = PositionalEncoding2D(embed_dim)
         self.group_norm = nn.GroupNorm(num_groups=32, num_channels=embed_dim)
@@ -171,10 +203,6 @@ class SpatialTransformer(nn.Module):
     def forward(self, x: torch.Tensor, context, mask) -> torch.Tensor:
         # Save the input for the residual connection
         x_in = x
-
-        # Add positional encodings to the context and process the context features
-        context = self.context_positional_encodings(context)
-        context = self.context_encoder(context, mask=mask)
 
         # Add positional encodings to the latent space representation of images
         x = self.image_positional_encodings(x)
