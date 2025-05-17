@@ -17,6 +17,7 @@ import starling.data.ddpm_loader_tar as ddpm_loader_tar
 from starling.data.argument_parser import get_params
 from starling.models.continuous_diffusion import ContinuousDiffusion
 from starling.models.diffusion import DiffusionModel
+from starling.models.transformer import SequenceEncoder
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
 
@@ -83,7 +84,9 @@ def setup_models(config):
     diffusion_models = {"discrete": DiffusionModel, "continuous": ContinuousDiffusion}
 
     unet_config_dict = OmegaConf.to_container(config.unet, resolve=True)
+    seq_encoder_dict = OmegaConf.to_container(config.sequence_encoder, resolve=True)
     UNet_model = UNetConditional(**unet_config_dict)
+    sequence_encoder = SequenceEncoder(**seq_encoder_dict)
 
     if config.diffusion.type == "continuous":
         diffusion_config_dict = OmegaConf.to_container(
@@ -99,12 +102,14 @@ def setup_models(config):
     if config.trainer.fine_tune:
         diffusion_model = diffusion_models[config.diffusion.type].load_from_checkpoint(
             model_path,
-            model=UNet_model,
+            unet_model=UNet_model,
+            sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )
     else:
         diffusion_model = diffusion_models[config.diffusion.type](
-            model=UNet_model,
+            unet_model=UNet_model,
+            sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )
 
