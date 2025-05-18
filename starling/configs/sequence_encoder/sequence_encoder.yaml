@@ -1,0 +1,3 @@
+num_layers: 12
+embed_dim: 512
+num_heads: 8
