@@ -3,10 +3,11 @@ from typing import Tuple
 
 import numpy as np
 import torch
+from einops import rearrange
 from torch import nn
 from tqdm.auto import tqdm
 
-from starling.data.data_wrangler import one_hot_encode
+from starling.data.tokenizer import StarlingTokenizer
 
 
 class DDIMSampler(nn.Module):
@@ -54,6 +55,7 @@ class DDIMSampler(nn.Module):
         self.n_steps = self.ddpm_model.num_timesteps
         self.ddim_discretize = ddim_discretize
         self.ddim_eta = ddim_eta
+        self.tokenizer = StarlingTokenizer()
 
         # Ways to discretize the generative process
         if ddim_discretize == "uniform":
@@ -99,18 +101,11 @@ class DDIMSampler(nn.Module):
         torch.Tensor
             The labels to condition the generative process on.
         """
-        labels = (
-            torch.argmax(
-                torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
-            )
-            .to(torch.int64)
-            .squeeze()
-            .to(self.ddpm_model.device)
-        )
+        labels = torch.tensor(self.tokenizer.encode(labels)).to(self.ddpm_model.device)
+        labels = rearrange(labels, "f -> 1 f")
+        attention_mask = torch.ones_like(labels, device=self.ddpm_model.device).bool()
 
-        labels = self.ddpm_model.sequence2labels(labels)
-
-        labels = labels.unsqueeze(0)
+        labels = self.ddpm_model.sequence2labels(labels, attention_mask)
 
         return labels
 
@@ -167,7 +162,9 @@ class DDIMSampler(nn.Module):
         time_steps = np.flip(self.ddim_time_steps)
 
         # Get the labels to condition the generative process on
-        labels = self.generate_labels(labels)
+        labels = self.generate_labels(
+            labels,
+        )
 
         # initialize progress bar if we want to show it
         if show_per_step_progress_bar:
@@ -250,7 +247,13 @@ class DDIMSampler(nn.Module):
 
         # Predict the amount of noise in the latent based on the timestep and labels
 
-        predicted_noise = self.ddpm_model.model(x, t, c)
+        # print(f"x shape: {x.shape}")
+        # print(f"c shape: {c.shape}")
+
+        attention_mask = torch.ones((c.shape[0], c.shape[1]), device=x.device)
+        attention_mask = attention_mask.bool()
+
+        predicted_noise = self.ddpm_model.unet_model(x, t, c, attention_mask)
 
         # Calculate the previous latent and the predicted latent
         x_prev, pred_x0 = self.get_x_prev_and_pred_x0(
