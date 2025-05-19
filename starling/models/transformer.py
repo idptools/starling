@@ -132,6 +132,7 @@ class SequenceEncoder(nn.Module):
         self.ff_mlp = nn.Sequential(
             nn.Linear(context_dim, context_dim * 4),
             nn.ReLU(),
+            nn.LayerNorm(context_dim * 4),
             nn.Linear(context_dim * 4, embed_dim),
         )
 
