@@ -90,11 +90,16 @@ class TransformerEncoder(nn.Module):
         super().__init__()
 
         self.self_attention = SelfAttention(embed_dim, num_heads)
+        self.cross_attention = CrossAttention(embed_dim, num_heads, embed_dim)
         self.feed_forward = FeedForward(embed_dim)
 
-    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask, context=None) -> torch.Tensor:
         # Prenorm is happening within the self attention layer
         x = x + self.self_attention(x, attention_mask=mask)
+
+        x = x + self.cross_attention(
+            query=x, context=context, query_mask=mask, context_mask=mask
+        )
 
         # Prenorm is happening within the feed forward layer
         x = x + self.feed_forward(x)
@@ -102,7 +107,9 @@ class TransformerEncoder(nn.Module):
 
 
 class SequenceEncoder(nn.Module):
-    def __init__(self, num_layers: int, embed_dim: int, num_heads: int):
+    def __init__(
+        self, num_layers: int, embed_dim: int, num_heads: int, context_dim=None
+    ):
         """
         Sequence encoder layer. The sequence encoder layer consists of a transformer encoder
         and a feed forward layer. The transformer encoder layer is used to capture the relationships
@@ -120,6 +127,14 @@ class SequenceEncoder(nn.Module):
         """
         super().__init__()
 
+        self.context_dim = context_dim
+
+        self.ff_mlp = nn.Sequential(
+            nn.Linear(context_dim, context_dim * 4),
+            nn.ReLU(),
+            nn.Linear(context_dim * 4, embed_dim),
+        )
+
         self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
 
         self.sequence_positional_encoding = PositionalEncoding1D(embed_dim)
@@ -128,12 +143,15 @@ class SequenceEncoder(nn.Module):
             [TransformerEncoder(embed_dim, num_heads) for _ in range(num_layers)]
         )
 
-    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask, context=None) -> torch.Tensor:
+        context = self.ff_mlp(context)
+
         x = self.sequence_learned_embedding(x)
         # Add positional encodings to the input data
         x = self.sequence_positional_encoding(x)
+        context = self.sequence_positional_encoding(context)
         for layer in self.layers:
-            x = layer(x, mask=mask)
+            x = layer(x, mask=mask, context=context)
         return x
 
 
