@@ -3,11 +3,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 
-from starling.data.data_wrangler import (
-    HDF5FileCache,
-    load_hdf5_compressed,
-    read_tsv_file,
-)
+from starling.data.data_wrangler import load_hdf5_compressed, read_tsv_file
 
 
 def sequence_to_indices(sequence, aa_to_int):
