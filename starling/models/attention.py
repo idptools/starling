@@ -16,8 +16,8 @@ class CrossAttention(nn.Module):
     ) -> None:
         """
         CrossAttention module for use in UNet models. This module is used to
-        perform attention on query (distance maps/2D data) using key and value
-        (sequence labels). It is used to attend to 2D features using text/sequence
+        perform attention on query (distance maps/2D data or text/1D data) using key and value
+        (sequence labels). It is used to attend to features using text/sequence
         embeddings, effectively conditioning the model on the text/sequence labels.
 
         Parameters
@@ -26,8 +26,10 @@ class CrossAttention(nn.Module):
             Dimension of the input embedding
         num_heads : int
             Number of heads for multi-head attention
-        kernel_size : int, optional
-            Size of the kernel for generating query, by default 1
+        context_dim : int
+            Dimension of the context embedding
+        channel_last : bool, optional
+            Whether the input has channels last format, by default False
         """
         super(CrossAttention, self).__init__()
         self.embed_dim = embed_dim
@@ -50,34 +52,53 @@ class CrossAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
     def forward(self, query, context=None, query_mask=None, context_mask=None):
-        batch_size, channels, height, width = query.size()
+        # Handle different input dimensions (3D for text, 4D for images)
+        input_dim = query.dim()
+        batch_size = query.size(0)
 
-        if not self.channel_last:
-            query = rearrange(query, "b c h w -> b h w c")
+        if input_dim == 4:  # Image input (B, C, H, W)
+            batch_size, channels, height, width = query.size()
+            if not self.channel_last:
+                query = rearrange(query, "b c h w -> b h w c")
+            spatial_size = (height, width)
+        elif input_dim == 3:  # Text input (B, S, C)
+            batch_size, seq_len, channels = query.size()
+            spatial_size = (seq_len,)
+            # Text is already in channel-last format
+        else:
+            raise ValueError(f"Unsupported input dimension: {input_dim}")
 
         # Prenormalization of the query and context
         query = self.query_norm(query)
         context = self.context_norm(context)
 
-        # Linear projection for the query (image features)
-        Q = self.query_proj(query)  # [batch_size, height, width, channels]
+        # Linear projection for the query (image features or text)
+        Q = self.query_proj(query)
 
         # Linear projections for the key and value (text embeddings)
-        K = self.key_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
-        V = self.value_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
+        K = self.key_proj(context)
+        V = self.value_proj(context)
 
-        # Reshape query (image features) to match multi-head attention dimensions
-        Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+        # Reshape query for multi-head attention
+        if input_dim == 4:  # Image
+            Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
+        else:  # Text
+            Q = rearrange(Q, "b s (h d) -> b h s d", h=self.num_heads)
 
         # Reshape key and value (text embeddings) for multi-head attention
         K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
         V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
 
+        # Handle attention masks for different input types
         if query_mask is not None or context_mask is not None:
             if query_mask is None:
-                query_mask = torch.ones(
-                    (batch_size, height * width), device=query.device
-                )
+                if input_dim == 4:
+                    query_mask = torch.ones(
+                        (batch_size, height * width), device=query.device
+                    )
+                else:
+                    query_mask = torch.ones((batch_size, seq_len), device=query.device)
+
             if context_mask is None:
                 context_mask = torch.ones((batch_size, K.size(2)), device=query.device)
 
@@ -89,30 +110,30 @@ class CrossAttention(nn.Module):
                 attention_mask, "b q k -> b h q k", h=self.num_heads
             )
             attention_mask = attention_mask.bool()
-
         else:
             attention_mask = None
 
-        if attention_mask is not None:
-            assert attention_mask.shape == (
-                batch_size,
-                self.num_heads,
-                height * width,
-                K.size(2),
-            ), "Attention mask shape mismatch"
-
+        # Perform attention
         attention_output = F.scaled_dot_product_attention(
             Q, K, V, attn_mask=attention_mask
         )
 
         # Reshape back to original dimensions
-        attention_output = rearrange(
-            attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
-        )
-        attention_output = self.out_proj(attention_output)
+        if input_dim == 4:  # Image
+            attention_output = rearrange(
+                attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
+            )
 
-        if not self.channel_last:
-            attention_output = rearrange(attention_output, "b h w c -> b c h w")
+            # Apply projection while in channel-last format
+            attention_output = self.out_proj(attention_output)
+
+            # Then convert back to channel-first if needed
+            if not self.channel_last:
+                attention_output = rearrange(attention_output, "b h w c -> b c h w")
+        else:  # Text
+            attention_output = rearrange(attention_output, "b h s d -> b s (h d)")
+            # Apply projection for text data
+            attention_output = self.out_proj(attention_output)
 
         return attention_output
 
