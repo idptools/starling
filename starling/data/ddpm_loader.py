@@ -51,7 +51,7 @@ def collate_batch_with_padding(batch):
 
 
 class MatrixDataset(torch.utils.data.Dataset):
-    def __init__(self, tsv_file: str) -> None:
+    def __init__(self, tsv_file: str, sequence_context) -> None:
         """
         A class that creates a dataset of distance maps compatible with PyTorch
         tsv_file : str
@@ -61,6 +61,7 @@ class MatrixDataset(torch.utils.data.Dataset):
             Which labels to use for the dataset, learnable or fixed (finches interaction matrix).
         """
         self.data = read_tsv_file(tsv_file)
+        self.sequence_context = sequence_context
 
     def __len__(self):
         return len(self.data)
@@ -83,7 +84,7 @@ class MatrixDataset(torch.utils.data.Dataset):
 
         data = load_hdf5_compressed(
             data_path,
-            keys_to_load=["latents", "seq", "finches_row_norm"],
+            keys_to_load=["latents", "seq", self.sequence_context],
             frame=int(frame),
         )
 
@@ -95,7 +96,7 @@ class MatrixDataset(torch.utils.data.Dataset):
         valid_indices = sequence != 0
         sequence = torch.from_numpy(sequence[valid_indices].astype(np.int32))
 
-        interaction_matrix = data["finches_row_norm"]
+        interaction_matrix = data[self.sequence_context]
 
         return distance_map, sequence, interaction_matrix
 
@@ -110,6 +111,7 @@ class DDPMDataloader(pl.LightningDataModule):
         self.batch_size = config.batch_size
         self.num_workers = config.num_workers
         self.prefetch_factor = config.prefetch_factor
+        self.sequence_context = config.sequence_context
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -117,10 +119,10 @@ class DDPMDataloader(pl.LightningDataModule):
 
     def setup(self, stage: str):
         if stage == "fit":
-            self.train_dataset = MatrixDataset(self.train_data)
-            self.val_dataset = MatrixDataset(self.val_data)
+            self.train_dataset = MatrixDataset(self.train_data, self.sequence_context)
+            self.val_dataset = MatrixDataset(self.val_data, self.sequence_context)
         if stage == "test":
-            self.test_dataset = MatrixDataset(self.test_data)
+            self.test_dataset = MatrixDataset(self.test_data, self.sequence_context)
         if stage == "predict":
             self.predict_dataset = MatrixDataset(
                 self.predict_data,
