@@ -128,7 +128,7 @@ class TransformerEncoder(nn.Module):
         return x
 
 
-class SequenceEncoder(nn.Module):
+class InteractionMatrixEncoder(nn.Module):
     def __init__(
         self, num_layers: int, embed_dim: int, num_heads: int, context_dim=None
     ):
@@ -151,6 +151,66 @@ class SequenceEncoder(nn.Module):
 
         self.interaction_vector_mlp = MLP(context_dim, embed_dim)
 
+        self.class_token = nn.Parameter(torch.randn(1, 1, embed_dim))
+
+        self.sequence_positional_encoding = PositionalEncoding1D(embed_dim)
+
+        self.layers = nn.ModuleList(
+            [TransformerEncoder(embed_dim, num_heads) for _ in range(num_layers)]
+        )
+
+    def forward(self, interaction_vector: torch.Tensor, mask) -> torch.Tensor:
+        # Run the interaction vector through the MLP
+        interaction_vector = self.interaction_vector_mlp(interaction_vector)
+
+        # Get batch size and expand class token to batch dimension
+        batch_size = interaction_vector.shape[0]
+        cls_tokens = self.class_token.expand(batch_size, -1, -1)
+
+        # Update mask to include class token (always attended to)
+        if mask is not None:
+            # Create a column of ones for the class token
+            cls_mask = torch.ones((batch_size, 1), dtype=torch.bool, device=mask.device)
+            # Prepend to the existing mask
+            mask = torch.cat((cls_mask, mask), dim=1)
+
+        # Prepend class token to sequence
+        interaction_vector = torch.cat((cls_tokens, interaction_vector), dim=1)
+
+        # Add positional encodings to the input data
+        interaction_vector = self.sequence_positional_encoding(interaction_vector)
+
+        # Run the sequence through the transformer encoder
+        for layer in self.layers:
+            interaction_vector = layer(interaction_vector, mask=mask)
+        return interaction_vector[:, 0]
+
+
+class SequenceEncoder(nn.Module):
+    def __init__(
+        self, num_layers: int, embed_dim: int, num_heads: int, context_dim=None
+    ):
+        """
+        Sequence encoder layer. The sequence encoder layer consists of a transformer encoder
+        and a feed forward layer. The transformer encoder layer is used to capture the relationships
+        between different elements in the input data. The feed forward layer is used to introduce
+        non-linearity in the network.
+
+        Parameters
+        ----------
+        num_layers : int
+            The number of layers in the transformer encoder.
+        embed_dim : int
+            The input dimension of the data. Used to initialize the transformer encoder and feed forward layers.
+        num_heads : int
+            The number of heads in the multi-head attention layer. Used to initialize the transformer encoder.
+        """
+        super().__init__()
+
+        self.interaction_vector_encoder = InteractionMatrixEncoder(
+            4, embed_dim, num_heads, context_dim
+        )
+
         self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
 
         self.film = FiLMModulation(embed_dim)
@@ -163,15 +223,28 @@ class SequenceEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor, mask, interaction_vector=None) -> torch.Tensor:
         # Run the interaction vector through the MLP
-        interaction_vector = self.interaction_vector_mlp(interaction_vector)
+        interaction_vector = self.interaction_vector_encoder(interaction_vector, mask)
 
         # Turn the sequence into a learned embedding
         x = self.sequence_learned_embedding(x)
 
-        # Condition the sequence with the interaction vector
-        x = x + self.film(x, interaction_vector)
+        # Reshape interaction token to prepend to sequence
+        batch_size = x.shape[0]
+        interaction_vector = interaction_vector.view(batch_size, 1, -1)
 
-        # Add positional encodings to the input data
+        # Update mask to include interaction token (always attended to)
+        if mask is not None:
+            # Create a column of ones for the interaction token
+            token_mask = torch.ones(
+                (batch_size, 1), dtype=torch.bool, device=mask.device
+            )
+            # Prepend to the existing mask
+            mask = torch.cat((token_mask, mask), dim=1)
+
+        # Prepend interaction token to sequence
+        x = torch.cat((interaction_vector, x), dim=1)
+
+        # Add positional encodings to the combined sequence
         x = self.sequence_positional_encoding(x)
 
         # Run the sequence through the transformer encoder
@@ -251,6 +324,12 @@ class SpatialTransformer(nn.Module):
         x = self.image_positional_encodings(x)
         x = self.group_norm(x)
         x = self.conv_in(x)
+
+        batch_size = x.shape[0]
+        # Create a column of ones for the class token
+        cls_mask = torch.ones((batch_size, 1), dtype=torch.bool, device=mask.device)
+        # Prepend to the existing mask
+        mask = torch.cat((cls_mask, mask), dim=1)
 
         # Transformer block to capture the relationships between the input data and the context data
         x = self.transformer_block(x, context, mask)
