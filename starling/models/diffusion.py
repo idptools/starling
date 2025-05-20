@@ -498,7 +498,7 @@ class DiffusionModel(pl.LightningModule):
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
-            warmup_steps = steps_per_epoch * int(num_epochs * 0.01)
+            warmup_steps = int(steps_per_epoch * num_epochs * 0.01)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:
