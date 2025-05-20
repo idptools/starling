@@ -76,29 +76,6 @@ class MatrixDataset(torch.utils.data.Dataset):
             Which labels to use for the dataset, learnable or fixed (finches interaction matrix).
         """
         self.data = read_tsv_file(tsv_file)
-        self.aa_to_int = {
-            "0": 0,
-            "A": 1,
-            "C": 2,
-            "D": 3,
-            "E": 4,
-            "F": 5,
-            "G": 6,
-            "H": 7,
-            "I": 8,
-            "K": 9,
-            "L": 10,
-            "M": 11,
-            "N": 12,
-            "P": 13,
-            "Q": 14,
-            "R": 15,
-            "S": 16,
-            "T": 17,
-            "V": 18,
-            "W": 19,
-            "Y": 20,
-        }
 
     def __len__(self):
         return len(self.data)
