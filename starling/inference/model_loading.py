@@ -8,6 +8,7 @@ from starling import configs
 # local imports
 from starling.configs import DEFAULT_DDPM_WEIGHTS_PATH, DEFAULT_ENCODER_WEIGHTS_PATH
 from starling.models.diffusion import DiffusionModel
+from starling.models.transformer import SequenceEncoder
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
 
@@ -48,9 +49,10 @@ class ModelManager:
         encoder_model = VAE.load_from_checkpoint(encoder_path, map_location=device)
 
         # Load the diffusion model
+        sequence_encoder = SequenceEncoder(12, 512, 8)
         diffusion_model = DiffusionModel.load_from_checkpoint(
             ddpm_path,
-            model=UNetConditional(
+            unet_model=UNetConditional(
                 in_channels=1,
                 out_channels=1,
                 base=64,
@@ -59,7 +61,8 @@ class ModelManager:
                 middle_blocks=2,
                 labels_dim=configs.UNET_LABELS_DIM,
             ),
-            encoder_model=encoder_model,
+            sequence_encoder=sequence_encoder,
+            # encoder_model=encoder_model,
             map_location=device,
         )
 

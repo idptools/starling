@@ -9,6 +9,7 @@ from soursop.sstrajectory import SSTrajectory
 from tqdm.auto import tqdm
 
 from starling import configs
+from starling.data.tokenizer import StarlingTokenizer
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.structure.coordinates import (
@@ -56,6 +57,172 @@ def symmetrize_distance_map(dist_map):
     sym_dist_map.fill_diagonal_(0)
 
     return sym_dist_map.cpu()
+
+
+def sequence_encoder_backend(
+    sequence_dict,
+    device,
+    batch_size,
+    output_directory=None,
+    model_manager=model_manager,
+    encoder_path=None,
+    ddpm_path=None,
+):
+    """
+    Generate embeddings for sequences and optionally save them to disk.
+
+    Parameters
+    ----------
+    sequence_dict : dict
+        Dictionary of sequence names to sequences
+    device : str
+        Device to use for computation
+    batch_size : int
+        Batch size for processing
+    output_directory : str, optional
+        If provided, embeddings will be saved to this directory with sequence name as filename
+    model_manager : ModelManager
+        Model manager instance
+    encoder_path : str, optional
+        Custom encoder path
+    ddpm_path : str, optional
+        Custom diffusion model path
+
+    Returns
+    -------
+    dict or None
+        If output_directory is None, returns dictionary of embeddings.
+        Otherwise returns None (embeddings are saved to disk).
+    """
+    tokenizer = StarlingTokenizer()
+    _, diffusion = model_manager.get_models(
+        device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
+    )
+
+    # Create output directory if it doesn't exist
+    if output_directory is not None:
+        os.makedirs(output_directory, exist_ok=True)
+        print(f"Saving embeddings to: {os.path.abspath(output_directory)}")
+        embedding_dict = None
+    else:
+        embedding_dict = {}
+
+    # Sort sequences by length in descending order for efficient batching
+    sorted_items = sorted(sequence_dict.items(), key=lambda x: len(x[1]), reverse=True)
+    sorted_names = [item[0] for item in sorted_items]
+    sorted_sequences = [tokenizer.encode(item[1]) for item in sorted_items]
+
+    # get num_batches and remaining samples
+    num_batches = len(sorted_sequences) // batch_size
+    remaining = len(sorted_sequences) % batch_size
+
+    # Process full batches
+    for batch in range(num_batches):
+        start_idx = batch * batch_size
+        end_idx = (batch + 1) * batch_size
+
+        batch_names = sorted_names[start_idx:end_idx]
+        batch_sequences = sorted_sequences[start_idx:end_idx]
+
+        # Get the maximum sequence length in this batch
+        max_length = len(batch_sequences[0])  # First is longest due to sorting
+
+        # Create input tensor and attention mask
+        sequence_tensor = torch.zeros(
+            (batch_size, max_length), dtype=torch.long, device=device
+        )
+        attention_mask = torch.zeros(
+            (batch_size, max_length), dtype=torch.bool, device=device
+        )
+
+        # Fill the tensors with sequence data
+        for i, seq in enumerate(batch_sequences):
+            seq_length = len(seq)
+            # Add the actual sequence tokens to the tensor
+            sequence_tensor[i, :seq_length] = torch.tensor(
+                seq, dtype=torch.long, device=device
+            )
+            # Set attention mask (1 for actual tokens, 0 for padding)
+            attention_mask[i, :seq_length] = True
+
+        # Process batch through encoder
+        with torch.no_grad():
+            batch_embeddings = diffusion.sequence2labels(
+                sequences=sequence_tensor, sequence_mask=attention_mask
+            )
+
+        # Store embeddings in dictionary or save to disk
+        for i, name in enumerate(batch_names):
+            # Get the actual sequence length from attention mask
+            seq_length = torch.sum(attention_mask[i]).item()
+            # Only store the embeddings for actual sequence tokens (remove padding)
+            embedding = batch_embeddings[i, :seq_length].cpu()
+
+            if output_directory is not None:
+                # Save embedding to file and clear from memory
+                torch.save(embedding, os.path.join(output_directory, f"{name}.pt"))
+                del embedding
+            else:
+                embedding_dict[name] = embedding
+
+        # Clear memory after each batch
+        del batch_embeddings
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    # Process remaining samples if any
+    if remaining > 0:
+        start_idx = num_batches * batch_size
+        batch_names = sorted_names[start_idx:]
+        batch_sequences = sorted_sequences[start_idx:]
+
+        # Get the maximum sequence length in the final batch
+        max_length = len(batch_sequences[0])
+
+        # Create input tensor and attention mask
+        sequence_tensor = torch.zeros(
+            (remaining, max_length), dtype=torch.long, device=device
+        )
+        attention_mask = torch.zeros(
+            (remaining, max_length), dtype=torch.bool, device=device
+        )
+
+        # Fill the tensors with sequence data
+        for i, seq in enumerate(batch_sequences):
+            seq_length = len(seq)
+            # Add the actual sequence tokens to the tensor
+            sequence_tensor[i, :seq_length] = torch.tensor(
+                seq, dtype=torch.long, device=device
+            )
+            # Set attention mask
+            attention_mask[i, :seq_length] = True
+
+        # Process final batch through encoder
+        with torch.no_grad():
+            batch_embeddings = diffusion.sequence2labels(
+                sequences=sequence_tensor, sequence_mask=attention_mask
+            )
+
+        # Store embeddings in dictionary or save to disk
+        for i, name in enumerate(batch_names):
+            # Get the actual sequence length from attention mask
+            seq_length = torch.sum(attention_mask[i]).item()
+            # Only store the embeddings for actual sequence tokens (remove padding)
+            embedding = batch_embeddings[i, :seq_length].cpu()
+
+            if output_directory is not None:
+                # Save embedding to file and clear from memory
+                torch.save(embedding, os.path.join(output_directory, f"{name}.pt"))
+                del embedding
+            else:
+                embedding_dict[name] = embedding
+
+        # Clear memory after processing
+        del batch_embeddings
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    return embedding_dict
 
 
 def generate_backend(
