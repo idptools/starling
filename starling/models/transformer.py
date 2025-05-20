@@ -149,11 +149,11 @@ class SequenceEncoder(nn.Module):
         """
         super().__init__()
 
-        self.film = FiLMModulation(embed_dim)
-
         self.interaction_vector_mlp = MLP(context_dim, embed_dim)
 
         self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
+
+        self.film = FiLMModulation(embed_dim)
 
         self.sequence_positional_encoding = PositionalEncoding1D(embed_dim)
 
@@ -169,7 +169,7 @@ class SequenceEncoder(nn.Module):
         x = self.sequence_learned_embedding(x)
 
         # Condition the sequence with the interaction vector
-        x = self.film(x, interaction_vector)
+        x = x + self.film(x, interaction_vector)
 
         # Add positional encodings to the input data
         x = self.sequence_positional_encoding(x)
