@@ -232,7 +232,7 @@ class DiffusionModel(pl.LightningModule):
         """
 
         encoded = self.sequence_encoder(
-            x=sequences, mask=sequence_mask, context=finches
+            x=sequences, mask=sequence_mask, interaction_vector=finches
         )
 
         return encoded

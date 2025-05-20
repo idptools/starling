@@ -9,6 +9,32 @@ from starling.data.positional_encodings import (
 from starling.models.attention import CrossAttention, SelfAttention
 
 
+class FiLMModulation(nn.Module):
+    def __init__(self, seq_dim):
+        super().__init__()
+        self.gamma_proj = nn.Linear(seq_dim, seq_dim)
+        self.beta_proj = nn.Linear(seq_dim, seq_dim)
+
+    def forward(self, sequence_embedding, interaction_vector):
+        # seq_emb: [L, D]
+        # inter_repr: [L, D_int]
+        gamma = self.gamma_proj(interaction_vector)  # [L, D]
+        beta = self.beta_proj(interaction_vector)  # [L, D]
+        return gamma * sequence_embedding + beta  # [L, D]
+
+
+class MLP(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, output_dim * 4)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(output_dim * 4, output_dim)
+        self.norm = nn.LayerNorm(output_dim)
+
+    def forward(self, x):
+        return self.norm(self.fc2(self.relu(self.fc1(x))))
+
+
 class GeGLU(nn.Module):
     def __init__(self, d_in: int, d_out: int):
         """
@@ -90,19 +116,15 @@ class TransformerEncoder(nn.Module):
         super().__init__()
 
         self.self_attention = SelfAttention(embed_dim, num_heads)
-        self.cross_attention = CrossAttention(embed_dim, num_heads, embed_dim)
         self.feed_forward = FeedForward(embed_dim)
 
-    def forward(self, x: torch.Tensor, mask, context=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
         # Prenorm is happening within the self attention layer
         x = x + self.self_attention(x, attention_mask=mask)
 
-        x = x + self.cross_attention(
-            query=x, context=context, query_mask=mask, context_mask=mask
-        )
-
         # Prenorm is happening within the feed forward layer
         x = x + self.feed_forward(x)
+
         return x
 
 
@@ -127,13 +149,9 @@ class SequenceEncoder(nn.Module):
         """
         super().__init__()
 
-        self.context_dim = context_dim
+        self.film = FiLMModulation(embed_dim)
 
-        self.ff_mlp = nn.Sequential(
-            nn.Linear(context_dim, context_dim * 4),
-            nn.ReLU(),
-            nn.Linear(context_dim * 4, embed_dim),
-        )
+        self.interaction_vector_mlp = MLP(context_dim, embed_dim)
 
         self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
 
@@ -143,15 +161,22 @@ class SequenceEncoder(nn.Module):
             [TransformerEncoder(embed_dim, num_heads) for _ in range(num_layers)]
         )
 
-    def forward(self, x: torch.Tensor, mask, context=None) -> torch.Tensor:
-        context = self.ff_mlp(context)
+    def forward(self, x: torch.Tensor, mask, interaction_vector=None) -> torch.Tensor:
+        # Run the interaction vector through the MLP
+        interaction_vector = self.interaction_vector_mlp(interaction_vector)
 
+        # Turn the sequence into a learned embedding
         x = self.sequence_learned_embedding(x)
+
+        # Condition the sequence with the interaction vector
+        x = self.film(x, interaction_vector)
+
         # Add positional encodings to the input data
         x = self.sequence_positional_encoding(x)
-        context = self.sequence_positional_encoding(context)
+
+        # Run the sequence through the transformer encoder
         for layer in self.layers:
-            x = layer(x, mask=mask, context=context)
+            x = layer(x, mask=mask)
         return x
 
 
