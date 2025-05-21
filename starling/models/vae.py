@@ -51,7 +51,7 @@ class VAE(pl.LightningModule):
         norm: str = "instance",
         base: int = 64,
         optimizer: str = "SGD",
-        KLD_warmup_fraction: float = 0.1,
+        KLD_warmup_fraction: float = None,
     ) -> None:
         """
         The variational autoencoder (VAE) model that is used to learn the latent space of

@@ -35,18 +35,20 @@ class MatrixDataset(torch.utils.data.Dataset):
 class MatrixDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        train_data=None,
-        val_data=None,
-        test_data=None,
-        batch_size=None,
-        num_workers=None,
+        train,
+        validation,
+        test,
+        batch_size,
+        num_workers,
+        prefetch_factor,
     ):
         super().__init__()
-        self.train_data = train_data
-        self.val_data = val_data
-        self.test_data = test_data
+        self.train_data = train
+        self.val_data = validation
+        self.test_data = test
         self.batch_size = batch_size
-        self.num_workers = num_workers  # Set this to 16
+        self.num_workers = num_workers
+        self.prefetch_factor = prefetch_factor
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -77,7 +79,7 @@ class MatrixDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
-            prefetch_factor=5,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def val_dataloader(self):
@@ -87,7 +89,7 @@ class MatrixDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
-            prefetch_factor=5,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def test_dataloader(self):
@@ -96,6 +98,6 @@ class MatrixDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             persistent_workers=True,
-            prefetch_factor=5,
+            prefetch_factor=self.prefetch_factor,
             pin_memory=True,
         )
