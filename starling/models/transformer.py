@@ -10,29 +10,92 @@ from starling.models.attention import CrossAttention, SelfAttention
 
 
 class FiLMModulation(nn.Module):
-    def __init__(self, seq_dim):
-        super().__init__()
-        self.gamma_proj = nn.Linear(seq_dim, seq_dim)
-        self.beta_proj = nn.Linear(seq_dim, seq_dim)
+    """
+    Feature-wise Linear Modulation (FiLM) layer.
 
-    def forward(self, sequence_embedding, interaction_vector):
-        # seq_emb: [L, D]
-        # inter_repr: [L, D_int]
-        gamma = self.gamma_proj(interaction_vector)  # [L, D]
-        beta = self.beta_proj(interaction_vector)  # [L, D]
-        return gamma * sequence_embedding + beta  # [L, D]
+    FiLM is a conditioning mechanism that applies an affine transformation to features
+    based on conditioning information. It modulates each feature map by scaling it with
+    a learned parameter gamma and shifting it with a learned parameter beta.
+
+    Formula: y = gamma * x + beta
+
+    References:
+        Perez et al. "FiLM: Visual Reasoning with a General Conditioning Layer"
+    """
+
+    def __init__(self, input_dim: int, output_dim: int):
+        """
+        Initialize the FiLM modulation layer.
+
+        Parameters
+        ----------
+        input_dim : int
+            Dimension of the conditioning input (interaction vector).
+        output_dim : int
+            Dimension of the features to be modulated.
+        """
+        super().__init__()
+        self.gamma_proj = nn.Linear(input_dim, output_dim)  # Scaling projection
+        self.beta_proj = nn.Linear(input_dim, output_dim)  # Shift projection
+
+    def forward(self, features: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        """
+        Apply FiLM modulation to the input features.
+
+        Parameters
+        ----------
+        features : torch.Tensor
+            Input features to be modulated. Shape: [..., output_dim]
+        condition : torch.Tensor
+            Conditioning information. Shape: [..., input_dim]
+
+        Returns
+        -------
+        torch.Tensor
+            Modulated features with the same shape as input features.
+        """
+        # Compute scaling factors
+        gamma = self.gamma_proj(condition)
+
+        # Compute shifting factors
+        beta = self.beta_proj(condition)
+
+        # Apply affine transformation: gamma * features + beta
+        return gamma * features + beta
 
 
 class MLP(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim: int, output_dim: int, expansion_factor: int = 4):
+        """
+        A simple Multi-Layer Perceptron with a single hidden layer and layer normalization.
+
+        The MLP first projects the input to a higher dimension (output_dim * expansion_factor),
+        applies a ReLU activation, then projects back to the output dimension. Finally,
+        layer normalization is applied to the output.
+
+        Parameters
+        ----------
+        input_dim : int
+            The dimension of the input features.
+        output_dim : int
+            The dimension of the output features.
+        expansion_factor : int, optional
+            The factor by which to expand the hidden dimension, by default 4.
+        """
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, output_dim * 4)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(output_dim * 4, output_dim)
+
+        hidden_dim = output_dim * expansion_factor
+
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
         self.norm = nn.LayerNorm(output_dim)
 
-    def forward(self, x):
-        return self.norm(self.fc2(self.relu(self.fc1(x))))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.norm(self.net(x))
 
 
 class GeGLU(nn.Module):
@@ -64,6 +127,37 @@ class GeGLU(nn.Module):
         return x * self.gelu(gate)
 
 
+class FiLMFFN(nn.Module):
+    def __init__(self, embed_dim: int):
+        """
+        Feed forward layer in the transformer architecture. The feed forward layer consists of
+        two linear layers with a GELU activation function in between. The linear layers first
+        expand the number of dimensions by a factor of 4 and then reduce the number of dimensions
+        back to the original number of dimensions. The GELU activation function is used to introduce
+        non-linearity in the network.
+
+        Parameters
+        ----------
+        embed_dim : int
+            The input dimension of the data. Used to initialize the linear layers.
+        """
+        super().__init__()
+
+        self.pre_norm = nn.LayerNorm(embed_dim)
+        self.film = FiLMModulation(embed_dim, embed_dim)
+
+        self.net = nn.Sequential(
+            GeGLU(embed_dim, embed_dim * 4),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
+
+    def forward(self, x: torch.Tensor, context) -> torch.Tensor:
+        x = self.pre_norm(x)
+        x = self.film(x, context)
+        x = self.net(x)
+        return x
+
+
 class FeedForward(nn.Module):
     def __init__(self, embed_dim: int):
         """
@@ -80,18 +174,20 @@ class FeedForward(nn.Module):
         """
         super().__init__()
 
+        self.pre_norm = nn.LayerNorm(embed_dim)
+
         self.net = nn.Sequential(
             GeGLU(embed_dim, embed_dim * 4),
             nn.Linear(embed_dim * 4, embed_dim),
         )
 
-        self.norm = nn.LayerNorm(embed_dim)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
             x = rearrange(x, "b c h w -> b h w c")
 
-        x = self.net(self.norm(x))
+        x = self.pre_norm(x)
+
+        x = self.net(x)
 
         if x.dim() == 4:
             x = rearrange(x, "b h w c -> b c h w")
@@ -116,14 +212,14 @@ class TransformerEncoder(nn.Module):
         super().__init__()
 
         self.self_attention = SelfAttention(embed_dim, num_heads)
-        self.feed_forward = FeedForward(embed_dim)
+        self.feed_forward = FiLMFFN(embed_dim)
 
-    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask, context) -> torch.Tensor:
         # Prenorm is happening within the self attention layer
         x = x + self.self_attention(x, attention_mask=mask)
 
         # Prenorm is happening within the feed forward layer
-        x = x + self.feed_forward(x)
+        x = x + self.feed_forward(x, context)
 
         return x
 
@@ -207,9 +303,7 @@ class SequenceEncoder(nn.Module):
         """
         super().__init__()
 
-        self.interaction_vector_encoder = InteractionMatrixEncoder(
-            4, embed_dim, num_heads, context_dim
-        )
+        self.interaction_vector_mlp = MLP(context_dim, embed_dim)
 
         self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
 
@@ -220,34 +314,18 @@ class SequenceEncoder(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, mask, interaction_vector=None) -> torch.Tensor:
-        # Run the interaction vector through the MLP
-        interaction_vector = self.interaction_vector_encoder(interaction_vector, mask)
+        # Run the interaction vector through an MLP
+        interaction_vector = self.interaction_vector_mlp(interaction_vector)
 
         # Turn the sequence into a learned embedding
         x = self.sequence_learned_embedding(x)
-
-        # Reshape interaction token to prepend to sequence
-        batch_size = x.shape[0]
-        interaction_vector = interaction_vector.view(batch_size, 1, -1)
-
-        # Update mask to include interaction token (always attended to)
-        if mask is not None:
-            # Create a column of ones for the interaction token
-            token_mask = torch.ones(
-                (batch_size, 1), dtype=torch.bool, device=mask.device
-            )
-            # Prepend to the existing mask
-            mask = torch.cat((token_mask, mask), dim=1)
-
-        # Prepend interaction token to sequence
-        x = torch.cat((interaction_vector, x), dim=1)
 
         # Add positional encodings to the combined sequence
         x = self.sequence_positional_encoding(x)
 
         # Run the sequence through the transformer encoder
         for layer in self.layers:
-            x = layer(x, mask=mask)
+            x = layer(x, mask=mask, context=interaction_vector)
         return x
 
 
@@ -322,12 +400,6 @@ class SpatialTransformer(nn.Module):
         x = self.image_positional_encodings(x)
         x = self.group_norm(x)
         x = self.conv_in(x)
-
-        batch_size = x.shape[0]
-        # Create a column of ones for the class token
-        cls_mask = torch.ones((batch_size, 1), dtype=torch.bool, device=mask.device)
-        # Prepend to the existing mask
-        mask = torch.cat((cls_mask, mask), dim=1)
 
         # Transformer block to capture the relationships between the input data and the context data
         x = self.transformer_block(x, context, mask)
