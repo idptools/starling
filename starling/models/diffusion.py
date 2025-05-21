@@ -211,7 +211,9 @@ class DiffusionModel(pl.LightningModule):
         # Return the noised tensor based on the timestamp
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-    def sequence2labels(self, sequences: List, sequence_mask) -> torch.Tensor:
+    def sequence2labels(
+        self, sequences: List, sequence_mask, ionic_strength
+    ) -> torch.Tensor:
         """
         Converts sequences to labels based on user defined models,
 
@@ -230,7 +232,7 @@ class DiffusionModel(pl.LightningModule):
         ValueError
             If the labels are not one of the three options
         """
-        encoded = self.sequence_encoder(sequences, sequence_mask)
+        encoded = self.sequence_encoder(sequences, sequence_mask, ionic_strength)
 
         return encoded
 
@@ -276,10 +278,10 @@ class DiffusionModel(pl.LightningModule):
         x_noised = self.q_sample(x_start, t, noise=noise)
 
         # Get the labels to condition the model on
-        labels = self.sequence2labels(sequences, mask)
+        labels = self.sequence2labels(sequences, mask, ionic_strength)
 
         # Run the model to predict the noise
-        predicted_noise = self.unet_model(x_noised, t, labels, mask, ionic_strength)
+        predicted_noise = self.unet_model(x_noised, t, labels, mask)
 
         # The following adapted from:
         # https://github.com/huggingface/diffusers/blob/78a78515d64736469742e5081337dbcf60482750/examples/text_to_image/train_text_to_image.py#L927
