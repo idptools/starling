@@ -213,8 +213,6 @@ class SequenceEncoder(nn.Module):
 
         self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
 
-        self.film = FiLMModulation(embed_dim)
-
         self.sequence_positional_encoding = PositionalEncoding1D(embed_dim)
 
         self.layers = nn.ModuleList(
