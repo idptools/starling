@@ -236,24 +236,20 @@ class DiffusionModel(pl.LightningModule):
 
     def p_loss(
         self,
-        x_start: torch.Tensor,
+        batch,
         t: int,
-        labels: torch.Tensor,
-        mask: torch.Tensor,
         noise: torch.Tensor = None,
     ) -> torch.Tensor:
         """
         A function that runs the model and calculates the loss based on the
-        predicted noise and the actual noise. The loss can either be L1 or L2.
+        predicted noise and the actual noise.
 
         Parameters
         ----------
-        x_start : torch.Tensor
-            The starting image tensor
+        batch : NamedTuple
+            Batch containing distance_maps, sequences, masks, and other data
         t : int
             The timestep along the denoising-diffusion process
-        labels : torch.Tensor, optional
-            Labels to condition the model on, by default None
         noise : torch.Tensor, optional
             Sampled noise from N(0,I), by default None
 
@@ -261,12 +257,13 @@ class DiffusionModel(pl.LightningModule):
         -------
         torch.Tensor
             Returns the loss
-
-        Raises
-        ------
-        ValueError
-            If the loss type is not one of the two options (l1, l2)
         """
+        # Extract elements from batch
+        x_start = batch.latent_distance_maps
+        sequences = batch.sequences
+        mask = batch.masks
+        ionic_strength = batch.ionic_strength
+
         if noise is None:
             noise = torch.randn_like(x_start)
             # Offset noise that seems to improve the inference
@@ -279,10 +276,10 @@ class DiffusionModel(pl.LightningModule):
         x_noised = self.q_sample(x_start, t, noise=noise)
 
         # Get the labels to condition the model on
-        labels = self.sequence2labels(labels, mask)
+        labels = self.sequence2labels(sequences, mask)
 
         # Run the model to predict the noise
-        predicted_noise = self.unet_model(x_noised, t, labels, mask)
+        predicted_noise = self.unet_model(x_noised, t, labels, mask, ionic_strength)
 
         # The following adapted from:
         # https://github.com/huggingface/diffusers/blob/78a78515d64736469742e5081337dbcf60482750/examples/text_to_image/train_text_to_image.py#L927
@@ -308,29 +305,29 @@ class DiffusionModel(pl.LightningModule):
 
         return loss
 
-    def forward(self, x: torch.Tensor, labels: torch.Tensor, mask) -> torch.Tensor:
+    def forward(self, batch) -> torch.Tensor:
         """
         Forward pass of the model, calculates the loss based on the
         predicted noise and the actual noise.
 
         Parameters
         ----------
-        x : torch.Tensor
-            The starting tensor to noise/denoise
-        labels : torch.Tensor, optional
-            Sequences to condition the model on, by default None
+        batch : NamedTuple
+            Batch containing distance_maps, sequences, masks, and other data
 
         Returns
         -------
         torch.Tensor
             Returns the loss
         """
-        b, c, h, w, device = *x.shape, x.device
+        # Extract shape information for timestamp generation
+        x_start = batch.latent_distance_maps
+        b, c, h, w, device = *x_start.shape, x_start.device
 
         # Generate random timestamps to noise the tensor and learn the denoising process
         timestamps = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
-        return self.p_loss(x, timestamps, labels, mask)
+        return self.p_loss(batch, timestamps)
 
     def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
         """
@@ -352,8 +349,8 @@ class DiffusionModel(pl.LightningModule):
         scaling_factor = 1 / mean_std
         self.latent_space_scaling_factor = scaling_factor.float().to(self.device)
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        latent_encoding, sequences, sequence_attention_mask = batch
+    def training_step(self, batch, batch_idx: int) -> torch.Tensor:
+        latent_encoding = batch.latent_distance_maps
 
         # Calculate scaling factor on first batch (only once during training)
         if self.global_step == 0 and batch_idx == 0:
@@ -363,24 +360,20 @@ class DiffusionModel(pl.LightningModule):
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
         # Compute loss
-        loss = self.forward(
-            latent_encoding, labels=sequences, mask=sequence_attention_mask
-        )
+        loss = self.forward(batch)
 
         # Log training metrics
         self.log("train_loss", loss, prog_bar=True, batch_size=latent_encoding.size(0))
 
         return loss
 
-    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        latent_encoding, sequences, sequence_attention_mask = batch
+    def validation_step(self, batch, batch_idx: int) -> torch.Tensor:
+        latent_encoding = batch.latent_distance_maps
 
         # Scale the latent encoding to have unit std
         latent_encoding = self.latent_space_scaling_factor * latent_encoding
 
-        loss = self.forward(
-            latent_encoding, labels=sequences, mask=sequence_attention_mask
-        )
+        loss = self.forward(batch)
 
         self.log(
             "epoch_val_loss",

@@ -9,6 +9,38 @@ from starling.models.normalization import RMSNorm
 from starling.models.transformer import SpatialTransformer
 
 
+class ConditionedEmbedding(nn.Module):
+    def __init__(self, emb_dim=128, hidden_dim=256):
+        super().__init__()
+        self.timestep_embed = nn.Sequential(
+            SinusoidalPosEmb(emb_dim),
+            nn.Linear(emb_dim, hidden_dim),
+            nn.SiLU(),
+        )
+        self.scalar_embed = nn.Sequential(
+            SinusoidalPosEmb(emb_dim),
+            nn.Linear(emb_dim, hidden_dim),
+            nn.SiLU(),
+        )
+        self.combined = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+    def forward(self, t, s):
+        """
+        t: timestep tensor of shape (batch,)
+        s: scalar conditioning tensor of shape (batch,)
+        Returns: (batch, hidden_dim)
+        """
+        t_emb = self.timestep_embed(t.float())
+        s = s.squeeze()
+        s_emb = self.scalar_embed(s.float())
+        combined = torch.cat([t_emb, s_emb], dim=-1)
+        return self.combined(combined)
+
+
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim: int, theta: int = 10000):
         """
@@ -220,7 +252,7 @@ class UNetConditional(nn.Module):
         norm: str,
         blocks: List = [2, 2, 2],
         middle_blocks: int = 2,
-        labels_dim: int = 512,
+        sequence_dim: int = 512,
         sinusoidal_pos_emb_theta: int = 10000,
     ):
         """
@@ -243,7 +275,7 @@ class UNetConditional(nn.Module):
             The number of ResNet + spatial transformer blocks in each section of the U-Net architecture, by default [2, 2, 2]
         middle_blocks : int, optional
             The number of ResNet + spatial transformer blocks in the middle section of the U-Net architecture, by default 2
-        labels_dim : int, optional
+        sequence_dim : int, optional
             The dimension of the context data (i.e., protein sequences), by default 512
         sinusoidal_pos_emb_theta : int, optional
             A scaling factor for the positional (timestep) embeddings, by default 10000
@@ -262,15 +294,13 @@ class UNetConditional(nn.Module):
         self.out_channels = out_channels
         self.time_dim = base * 4
         self.base = base
-        self.labels_dim = labels_dim
+        self.sequence_dim = sequence_dim
 
         # Time embeddings
-        self.time_emb = SinusoidalPosEmb(self.base, theta=sinusoidal_pos_emb_theta)
-        self.time_mlp = nn.Sequential(
-            self.time_emb,
-            nn.Linear(self.base, self.time_dim),
-            nn.SiLU(inplace=False),
-            nn.Linear(self.time_dim, self.time_dim),
+
+        self.time_and_class_mlp = ConditionedEmbedding(
+            emb_dim=base,
+            hidden_dim=self.time_dim,
         )
 
         all_in_channels = [base * (2**i) for i in range(len(blocks) + 1)]
@@ -284,7 +314,7 @@ class UNetConditional(nn.Module):
             blocks[0],
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         self.encoder_layer1 = CrossAttentionResnetLayer(
@@ -294,7 +324,7 @@ class UNetConditional(nn.Module):
             blocks[0],
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         self.downsample1 = Downsample(all_in_channels[0], all_in_channels[1], norm)
@@ -306,7 +336,7 @@ class UNetConditional(nn.Module):
             blocks[1],
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         self.downsample2 = Downsample(all_in_channels[1], all_in_channels[2], norm)
@@ -318,7 +348,7 @@ class UNetConditional(nn.Module):
             blocks[2],
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         self.downsample3 = Downsample(all_in_channels[2], all_in_channels[3], norm)
@@ -332,7 +362,7 @@ class UNetConditional(nn.Module):
             middle_blocks,
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         # Decoder part of UNet
@@ -354,7 +384,7 @@ class UNetConditional(nn.Module):
             blocks[2],
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         self.upconv2 = ResizeConv2d(
@@ -374,7 +404,7 @@ class UNetConditional(nn.Module):
             blocks[1],
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         self.upconv3 = ResizeConv2d(
@@ -394,7 +424,7 @@ class UNetConditional(nn.Module):
             blocks[1],
             8,
             self.time_dim,
-            self.labels_dim,
+            self.sequence_dim,
         )
 
         self.conv_out = nn.Conv2d(all_in_channels[0], out_channels, kernel_size=1)
@@ -403,8 +433,9 @@ class UNetConditional(nn.Module):
         self,
         x: torch.Tensor,
         time: torch.Tensor,
-        labels: torch.Tensor,
+        sequence: torch.Tensor,
         sequence_mask: torch.Tensor,
+        ionic_strength: torch.Tensor,
     ) -> torch.Tensor:
         """
         Forward pass of the UNet architecture.
@@ -415,7 +446,7 @@ class UNetConditional(nn.Module):
             Data to pass through the UNet architecture.
         time : torch.Tensor
             Timestep embeddings.
-        labels : torch.Tensor, optional
+        sequence : torch.Tensor, optional
             Context data (protein sequences) to guide the prediction, by default None
 
         Returns
@@ -423,40 +454,39 @@ class UNetConditional(nn.Module):
         torch.Tensor
             Output of the UNet architecture.
         """
-        # Get the time embeddings
-        time = self.time_mlp(time)
+        conditioning = self.time_and_class_mlp(time, ionic_strength)
 
         # Initial convolution
-        x = self.conv_in(x, time, labels, sequence_mask)
+        x = self.conv_in(x, conditioning, sequence, sequence_mask)
 
         # Encoder forward passes
-        x = self.encoder_layer1(x, time, labels, sequence_mask)
-        x_layer1 = x.clone()
+        x = self.encoder_layer1(x, conditioning, sequence, sequence_mask)
+        skip_connection1 = x.clone()
         x = self.downsample1(x)
 
-        x = self.encoder_layer2(x, time, labels, sequence_mask)
-        x_layer2 = x.clone()
+        x = self.encoder_layer2(x, conditioning, sequence, sequence_mask)
+        skip_connection2 = x.clone()
         x = self.downsample2(x)
 
-        x = self.encoder_layer3(x, time, labels, sequence_mask)
-        x_layer3 = x.clone()
+        x = self.encoder_layer3(x, conditioning, sequence, sequence_mask)
+        skip_connection3 = x.clone()
         x = self.downsample3(x)
 
         # Mid UNet
-        x = self.middle(x, time, labels, sequence_mask)
+        x = self.middle(x, conditioning, sequence, sequence_mask)
 
         # Decoder forward passes with skip connections from the encoder
         x = self.upconv1(x)
-        x = torch.cat((x, x_layer3), dim=1)
-        x = self.decoder_layer1(x, time, labels, sequence_mask)
+        x = torch.cat((x, skip_connection3), dim=1)
+        x = self.decoder_layer1(x, conditioning, sequence, sequence_mask)
 
         x = self.upconv2(x)
-        x = torch.cat((x, x_layer2), dim=1)
-        x = self.decoder_layer2(x, time, labels, sequence_mask)
+        x = torch.cat((x, skip_connection2), dim=1)
+        x = self.decoder_layer2(x, conditioning, sequence, sequence_mask)
 
         x = self.upconv3(x)
-        x = torch.cat((x, x_layer1), dim=1)
-        x = self.decoder_layer3(x, time, labels, sequence_mask)
+        x = torch.cat((x, skip_connection1), dim=1)
+        x = self.decoder_layer3(x, conditioning, sequence, sequence_mask)
 
         # Final convolutions
         x = self.conv_out(x)
