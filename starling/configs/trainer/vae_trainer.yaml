@@ -1,0 +1,10 @@
+cuda: 1
+num_nodes: 1
+num_workers: 8
+num_epochs: 25
+gradient_clip_val: 1.0
+precision: bf16-mixed
+output_path: ionic-strength-model
+project_name: vae-ionic-strength
+checkpoint: /home/borna/.starling_weights/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
+fine_tune: true

@@ -1,0 +1,9 @@
+_target_: "starling.data.VAE_loader.MatrixDataModule"
+
+train: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/train.csv
+validation: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/validation.csv
+test: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/validation.csv
+  
+batch_size: 32
+num_workers: 8
+prefetch_factor: 5
