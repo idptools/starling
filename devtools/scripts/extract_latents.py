@@ -1,4 +1,5 @@
 import glob
+import os
 
 import h5py
 import numpy as np
@@ -20,7 +21,7 @@ def load_hdf5_compressed(file_path):
     - dict: Dictionary containing loaded data.
     """
     data_dict = {}
-    with h5py.File(file_path, "r") as f:
+    with h5py.File(file_path, "r", libver="latest", swmr=True) as f:
         for key in f.keys():
             data_dict[key] = f[key][...]
     return data_dict
@@ -81,18 +82,24 @@ def save_h5(averange_latent, encoded_data, seq_data, file_path):
 def main():
     # Load the VAE model
     model = VAE.load_from_checkpoint(
-        "/work/bnovak/projects/sequence2ensemble/starling/continuous_starling/encoder/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt",
+        "/work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/fine_tuned_model/model-kernel-epoch=01-epoch_val_loss=1.83.ckpt",
         map_location="cuda",
     )
     model.eval()
 
     data_paths = sorted(
         glob.glob(
-            "/work/bnovak/projects/sequence2ensemble/lammps_data/150mM_data/mPIPIgg_70k_seqs/IDRs_*/preprocessed_data/*.h5"
+            "/work/bnovak/projects/sequence2ensemble/lammps_data/20mM_data/mPIPIgg_20mM/*.h5"
         )
     )
 
+    data_paths = [path for path in data_paths if "vae_encoded" not in path]
+
     for data_path in tqdm(data_paths):
+        outfile = data_path.replace(".h5", "_vae_encoded.h5")
+        if os.path.exists(outfile):
+            print(f"File {outfile} already exists. Skipping.")
+            continue
         # Load the data
         data = load_hdf5_compressed(data_path)
 
@@ -102,8 +109,6 @@ def main():
         except Exception as e:
             print(f"Error encoding data from {data_path}: {e}")
             continue
-
-        outfile = data_path.replace(".h5", "_vae_encoded.h5")
 
         # Save the encoded data to a new HDF5 file
         save_h5(average_latent, encoded_data, data["seq"], outfile)
