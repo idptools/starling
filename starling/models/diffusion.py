@@ -77,6 +77,7 @@ class DiffusionModel(pl.LightningModule):
         min_snr_loss: bool = False,
         min_snr_gamma: float = 5.0,
         config_scheduler: str = "LinearWarmupCosineAnnealingLR",
+        warmup_fraction: float = 0.1,
     ) -> None:
         """
         A discrete-time denoising-diffusion model framework for latent space diffusion models.
@@ -136,6 +137,7 @@ class DiffusionModel(pl.LightningModule):
         # Learning rate params
         self.set_lr = set_lr
         self.config_scheduler = config_scheduler
+        self.warmup_fraction = warmup_fraction
 
         self.beta_scheduler_fn = self.SCHEDULER_MAPPING.get(beta_scheduler)
         if self.beta_scheduler_fn is None:
@@ -467,7 +469,7 @@ class DiffusionModel(pl.LightningModule):
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
-            warmup_steps = steps_per_epoch * int(num_epochs * 0.01)
+            warmup_steps = int(steps_per_epoch * num_epochs * self.warmup_fraction)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:

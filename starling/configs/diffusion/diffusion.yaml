@@ -9,6 +9,7 @@ discrete:
   config_scheduler: CosineAnnealingLR
   min_snr_loss: False
   min_snr_gamma: 5.0
+  warmup_fraction: 0.1
 
 continuous:
   noise_schedule: karras
