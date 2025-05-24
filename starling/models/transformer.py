@@ -219,9 +219,7 @@ class SequenceEncoder(nn.Module):
             [TransformerEncoder(embed_dim, num_heads) for _ in range(num_layers)]
         )
 
-    def forward(
-        self, x: torch.Tensor, mask, ionic_strength, mask_ionic_prob: float = 0.0
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask, ionic_strength) -> torch.Tensor:
         # Convert the ionic strength to the same dimension as the input data
         ionic_strength = self.ionic_strength_emb(ionic_strength)
 
@@ -230,6 +228,13 @@ class SequenceEncoder(nn.Module):
 
         # Embed the sequences
         x = self.sequence_learned_embedding(x)
+
+        if self.training:
+            # Randomly mask some of the ionic strength values
+            mask_ionic = (
+                torch.rand(ionic_strength.shape[0], device=ionic_strength.device) < 0.2
+            )
+            ionic_strength[mask_ionic] = torch.zeros_like(ionic_strength[mask_ionic])
 
         # Give it a unique position (cls token)
         ionic_strength = ionic_strength + self.cls_token_position
