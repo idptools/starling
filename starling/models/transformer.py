@@ -85,10 +85,18 @@ class MLP(nn.Module):
             nn.Linear(hidden_dim, output_dim),
         )
 
-        self.norm = nn.LayerNorm(output_dim)
+        self._init_weights()
+
+    def _init_weights(self):
+        # Initialize weights for all linear layers in the sequential
+        for module in self.net:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.norm(self.net(x))
+        return self.net(x)
 
 
 class GeGLU(nn.Module):
@@ -115,6 +123,15 @@ class GeGLU(nn.Module):
         self.proj = nn.Linear(d_in, d_out * 2)
         self.gelu = nn.GELU()
 
+        self._init_weights()
+
+    def _init_weights(self):
+        gain = 1 / math.sqrt(2)
+        # Initialize the weights of the gate and up projection layers
+        nn.init.xavier_uniform_(self.proj.weight, gain=gain)
+        if self.proj.bias is not None:
+            nn.init.zeros_(self.proj.bias)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, gate = self.proj(x).chunk(2, dim=-1)
         return x * self.gelu(gate)
@@ -136,18 +153,27 @@ class FeedForward(nn.Module):
         """
         super().__init__()
 
-        self.net = nn.Sequential(
-            GeGLU(embed_dim, embed_dim * 4),
-            nn.Linear(embed_dim * 4, embed_dim),
-        )
+        self.up_proj = GeGLU(embed_dim, embed_dim * 4)
+
+        self.down_proj = nn.Linear(embed_dim * 4, embed_dim)
 
         self.norm = nn.LayerNorm(embed_dim)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        # Initialize the weights of the down projection layer
+        nn.init.xavier_uniform_(self.down_proj.weight)
+        if self.down_proj.bias is not None:
+            nn.init.zeros_(self.down_proj.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
             x = rearrange(x, "b c h w -> b h w c")
 
-        x = self.net(self.norm(x))
+        x = self.norm(x)
+        x = self.up_proj(x)
+        x = self.down_proj(x)
 
         if x.dim() == 4:
             x = rearrange(x, "b h w c -> b c h w")
@@ -218,6 +244,13 @@ class SequenceEncoder(nn.Module):
         self.layers = nn.ModuleList(
             [TransformerEncoder(embed_dim, num_heads) for _ in range(num_layers)]
         )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        # Initialize embedding normally with a small stddev.
+        nn.init.normal_(self.sequence_learned_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.cls_token_position, mean=0.0, std=0.02)
 
     def forward(self, x: torch.Tensor, mask, ionic_strength) -> torch.Tensor:
         # Convert the ionic strength to the same dimension as the input data
@@ -319,6 +352,15 @@ class SpatialTransformer(nn.Module):
             ]
         )
         self.conv_out = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        # Initialize convolutional layers
+        nn.init.xavier_uniform_(self.conv_in.weight)
+        nn.init.zeros_(self.conv_in.bias)
+        nn.init.xavier_uniform_(self.conv_out.weight)
+        nn.init.zeros_(self.conv_out.bias)
 
     def forward(self, x: torch.Tensor, context, mask) -> torch.Tensor:
         # Save the input for the residual connection

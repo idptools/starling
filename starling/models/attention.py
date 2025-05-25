@@ -1,3 +1,5 @@
+import math
+
 import torch
 from einops import rearrange, repeat
 from torch import nn
@@ -50,6 +52,18 @@ class CrossAttention(nn.Module):
         self.value_proj = nn.Linear(context_dim, embed_dim, bias=False)
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        # For q, k, v projections, use xavier_uniform.
+        nn.init.xavier_uniform_(self.query_proj.weight)
+        nn.init.xavier_uniform_(self.key_proj.weight)
+        nn.init.xavier_uniform_(self.value_proj.weight)
+        # For the final projection, xavier uniform but scale gain because residual conenctions inputs
+        nn.init.xavier_uniform_(self.out_proj.weight, gain=1 / math.sqrt(2))
+        if self.out_proj.bias is not None:
+            nn.init.zeros_(self.out_proj.bias)
 
     def forward(self, query, context=None, query_mask=None, context_mask=None):
         # Handle different input dimensions (3D for text, 4D for images)
@@ -174,6 +188,18 @@ class SelfAttention(nn.Module):
         self.value_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        # For q, k, v projections, use xavier_uniform.
+        nn.init.xavier_uniform_(self.query_proj.weight)
+        nn.init.xavier_uniform_(self.key_proj.weight)
+        nn.init.xavier_uniform_(self.value_proj.weight)
+        # For the final projection, xavier uniform but scale gain because residual conenctions inputs
+        nn.init.xavier_uniform_(self.out_proj.weight, gain=1 / math.sqrt(2))
+        if self.out_proj.bias is not None:
+            nn.init.zeros_(self.out_proj.bias)
 
     def forward(self, x, attention_mask=None):
         input_dim = x.dim()
