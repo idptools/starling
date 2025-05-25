@@ -125,6 +125,7 @@ class DiffusionModel(pl.LightningModule):
             If the beta scheduler is not implemented
         """
         super().__init__()
+        torch.autograd.set_detect_anomaly(True)
 
         # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
         self.save_hyperparameters(ignore=["unet_model", "sequence_encoder"])
@@ -388,6 +389,12 @@ class DiffusionModel(pl.LightningModule):
         )
 
         return loss
+
+    def on_after_backward(self):
+        for name, param in self.named_parameters():
+            if param.grad is not None and torch.isnan(param.grad).any():
+                print(f"⚠️ NaN in gradient of {name}")
+                raise ValueError(f"NaN in gradient of {name}")
 
     def compute_snr(self, timesteps):
         """
