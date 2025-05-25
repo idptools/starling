@@ -424,6 +424,7 @@ class UNetConditional(nn.Module):
             Output of the UNet architecture.
         """
         # Get the time embeddings
+        time = time.to(torch.float32)
         time = self.time_mlp(time)
 
         # Initial convolution
