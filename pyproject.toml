@@ -54,7 +54,7 @@ dependencies = [
 
 [project.scripts]
 starling-ddpm-train = "starling.training.diffusion_train:train_model"
-starling-train = "starling.training.joint_training:train_model"
+starling-join-train = "starling.training.joint_training:train_model"
 starling-sample = "starling.training.vae_generate:vae_generate"
 ae-train = "starling.training.ae_train:train_ae"
 
