@@ -10,7 +10,6 @@ discrete:
   min_snr_loss: False
   min_snr_gamma: 5.0
   warmup_fraction: 0.0
-  ddpm_loss_weight: 5.0
 
 continuous:
   noise_schedule: karras
@@ -21,3 +20,4 @@ continuous:
 
 
 vae_checkpoint: /home/borna/.starling_weights/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
+ddpm_loss_weight: 5.0

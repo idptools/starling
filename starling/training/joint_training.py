@@ -120,7 +120,7 @@ def setup_models(config):
         vae_model=vae_model,
         learning_rate=diffusion_config_dict["set_lr"],
         warmup_fraction=diffusion_config_dict["warmup_fraction"],
-        ddpm_loss_weight=diffusion_config_dict["ddpm_loss_weight"],
+        ddpm_loss_weight=config.diffusion.ddpm_loss_weight,
     )
     return UNet_model, starling_model
 
