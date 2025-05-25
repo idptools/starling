@@ -10,6 +10,7 @@ discrete:
   min_snr_loss: False
   min_snr_gamma: 5.0
   warmup_fraction: 0.0
+  ddpm_loss_weight: 5.0
 
 continuous:
   noise_schedule: karras
