@@ -371,7 +371,7 @@ class SpatialTransformer(nn.Module):
         x = self.group_norm(x)
         x = self.conv_in(x)
 
-        batch_size, *_ = x.shape
+        batch_size, *_ = context.shape
         cls_mask = torch.ones((batch_size, 1), dtype=torch.bool, device=mask.device)
         # Prepend to the existing mask
         mask = torch.cat((cls_mask, mask), dim=1)

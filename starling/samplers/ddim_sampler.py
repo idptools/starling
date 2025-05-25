@@ -87,7 +87,7 @@ class DDIMSampler(nn.Module):
 
             self.ddim_sqrt_one_minus_alpha = (1.0 - self.ddim_alpha) ** 0.5
 
-    def generate_labels(self, labels: str) -> torch.Tensor:
+    def generate_labels(self, labels: str, ionic_strength=150) -> torch.Tensor:
         """
         Generate labels to condition the generative process on.
 
@@ -104,8 +104,13 @@ class DDIMSampler(nn.Module):
         labels = torch.tensor(self.tokenizer.encode(labels)).to(self.ddpm_model.device)
         labels = rearrange(labels, "f -> 1 f")
         attention_mask = torch.ones_like(labels, device=self.ddpm_model.device).bool()
+        ionic_strength = (
+            torch.tensor(ionic_strength, device=self.ddpm_model.device)
+            .unsqueeze(0)
+            .unsqueeze(1)
+        )
 
-        labels = self.ddpm_model.sequence2labels(labels, attention_mask)
+        labels = self.ddpm_model.sequence2labels(labels, attention_mask, ionic_strength)
 
         return labels
 
@@ -114,6 +119,7 @@ class DDIMSampler(nn.Module):
         self,
         num_conformations: int,
         labels: torch.Tensor,
+        ionic_strength: int = 150,
         repeat_noise: bool = False,
         temperature: float = 1.0,
         show_per_step_progress_bar: bool = True,
@@ -162,9 +168,7 @@ class DDIMSampler(nn.Module):
         time_steps = np.flip(self.ddim_time_steps)
 
         # Get the labels to condition the generative process on
-        labels = self.generate_labels(
-            labels,
-        )
+        labels = self.generate_labels(labels, ionic_strength)
 
         # initialize progress bar if we want to show it
         if show_per_step_progress_bar:
@@ -250,10 +254,12 @@ class DDIMSampler(nn.Module):
         # print(f"x shape: {x.shape}")
         # print(f"c shape: {c.shape}")
 
-        attention_mask = torch.ones((c.shape[0], c.shape[1]), device=x.device)
+        attention_mask = torch.ones((c.shape[0], c.shape[1] - 1), device=x.device)
         attention_mask = attention_mask.bool()
 
-        predicted_noise = self.ddpm_model.unet_model(x, t, c, attention_mask)
+        predicted_noise = self.ddpm_model.unet_model(
+            x=x, time=t, sequence=c, sequence_mask=attention_mask
+        )
 
         # Calculate the previous latent and the predicted latent
         x_prev, pred_x0 = self.get_x_prev_and_pred_x0(

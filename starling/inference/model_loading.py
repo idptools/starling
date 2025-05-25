@@ -59,7 +59,7 @@ class ModelManager:
                 norm="group",
                 blocks=[2, 2, 2],
                 middle_blocks=2,
-                labels_dim=configs.UNET_LABELS_DIM,
+                sequence_dim=configs.UNET_LABELS_DIM,
             ),
             sequence_encoder=sequence_encoder,
             # encoder_model=encoder_model,
