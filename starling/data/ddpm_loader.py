@@ -25,7 +25,7 @@ def sequence_to_indices(sequence, aa_to_int):
 
 # Define a named tuple at the module level
 BatchOutput = namedtuple(
-    "BatchOutput", ["latent_distance_maps", "sequences", "masks", "ionic_strength"]
+    "BatchOutput", ["distance_maps", "sequences", "masks", "ionic_strength"]
 )
 
 
@@ -55,7 +55,7 @@ def collate_batch_with_padding(batch):
 
     # Return a named tuple for better type safety and readability
     return BatchOutput(
-        latent_distance_maps=distance_maps,
+        distance_maps=distance_maps,
         sequences=padded_sequences,
         masks=sequence_masks,
         ionic_strength=ionic_strengths,
@@ -81,10 +81,10 @@ class MatrixDataset(torch.utils.data.Dataset):
         data_path, frame = self.data.iloc[index]
         data = load_hdf5_compressed(
             data_path,
-            keys_to_load=["latents", "seq", "ionic_strength"],
+            keys_to_load=["dm", "seq"],
             frame=int(frame),
         )
-        distance_map = data["latents"]
+        distance_map = data["dm"]
         distance_map = torch.from_numpy(distance_map).unsqueeze(0)
 
         sequence = data["seq"].astype(np.int32)
@@ -92,7 +92,10 @@ class MatrixDataset(torch.utils.data.Dataset):
         sequence = sequence[remove_padded]
         sequence = torch.from_numpy(sequence)
 
-        ionic_strength = torch.tensor(data["ionic_strength"], dtype=torch.float32)
+        # ionic_strength = torch.tensor(data["ionic_strength"], dtype=torch.float32)
+        ionic_strength = data_path.split("/")[6]
+        ionic_strength = int(ionic_strength.split("mM")[0])
+        ionic_strength = torch.tensor(ionic_strength, dtype=torch.float32)
 
         return distance_map, sequence, ionic_strength
 

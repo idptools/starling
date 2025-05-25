@@ -6,10 +6,10 @@ discrete:
   beta_scheduler: cosine
   timesteps: 1000
   set_lr: 0.0001
-  config_scheduler: CosineAnnealingLR
+  config_scheduler: LinearWarmupCosineAnnealingLR
   min_snr_loss: False
   min_snr_gamma: 5.0
-  warmup_fraction: 0.1
+  warmup_fraction: 0.0
 
 continuous:
   noise_schedule: karras
@@ -17,3 +17,6 @@ continuous:
   min_snr_gamma: 5
   set_lr: 0.00001
   config_scheduler: CosineAnnealingLR
+
+
+vae_checkpoint: /home/borna/.starling_weights/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
