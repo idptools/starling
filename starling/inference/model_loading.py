@@ -8,6 +8,7 @@ from starling import configs
 # local imports
 from starling.configs import DEFAULT_DDPM_WEIGHTS_PATH, DEFAULT_ENCODER_WEIGHTS_PATH
 from starling.models.diffusion import DiffusionModel
+from starling.models.starling_joint import STARLING
 from starling.models.transformer import SequenceEncoder
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
@@ -15,8 +16,7 @@ from starling.models.vae import VAE
 
 class ModelManager:
     def __init__(self):
-        self.encoder_model = None
-        self.diffusion_model = None
+        self.starling_model = None
 
     def load_models(self, encoder_path, ddpm_path, device):
         """Load the models from local files or URLs."""
@@ -45,13 +45,21 @@ class ModelManager:
         if not os.path.exists(ddpm_path):
             raise FileNotFoundError(f"DDPM model {ddpm_path} not found.")
 
-        # Load the encoder model
-        encoder_model = VAE.load_from_checkpoint(encoder_path, map_location=device)
+        encoder_model = VAE(
+            model_type="Resnet18",
+            in_channels=1,
+            latent_dim=1,
+            dimension=384,
+            loss_type="nll",
+            weights_type="equal",
+            KLD_weight=1e-4,
+            lr_scheduler="LinearWarmupCosineAnnealingLR",
+            set_lr=1e-4,
+        )
 
         # Load the diffusion model
         sequence_encoder = SequenceEncoder(12, 512, 8)
-        diffusion_model = DiffusionModel.load_from_checkpoint(
-            ddpm_path,
+        diffusion_model = DiffusionModel(
             unet_model=UNetConditional(
                 in_channels=1,
                 out_channels=1,
@@ -62,11 +70,16 @@ class ModelManager:
                 sequence_dim=configs.UNET_LABELS_DIM,
             ),
             sequence_encoder=sequence_encoder,
-            # encoder_model=encoder_model,
+        )
+
+        starling_model = STARLING.load_from_checkpoint(
+            ddpm_path,
+            ddpm_model=diffusion_model,
+            vae_model=encoder_model,
             map_location=device,
         )
 
-        return encoder_model, diffusion_model
+        return starling_model
 
     def get_models(
         self,
@@ -95,17 +108,15 @@ class ModelManager:
         encoder_model, diffusion_model
             The loaded encoder and diffusion models.
         """
-        if self.encoder_model is None or self.diffusion_model is None:
+        if self.starling_model is None:
             # Models haven't been loaded yet, so load them now
-            self.encoder_model, self.diffusion_model = self.load_models(
-                encoder_path, ddpm_path, device
-            )
+            self.starling_model = self.load_models(encoder_path, ddpm_path, device)
             if configs.TORCH_COMPILATION["enabled"]:
                 # Compile the models if requested
                 self.encoder_model, self.diffusion_model = self.compile()
 
         # Return the already-loaded models
-        return self.encoder_model, self.diffusion_model
+        return self.starling_model
 
     def compile(self):
         """

@@ -342,15 +342,13 @@ def generate_backend(
 
     # get models. This will only load once even if we call this
     # function multiple times.
-    encoder_model, diffusion = model_manager.get_models(
+    diffusion = model_manager.get_models(
         device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
     )
 
     # Construct a sampler
     if ddim:
-        sampler = DDIMSampler(
-            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps
-        )
+        sampler = DDIMSampler(starling=diffusion, n_steps=steps)
     else:
         sampler = diffusion
 

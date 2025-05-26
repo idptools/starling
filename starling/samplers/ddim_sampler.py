@@ -13,8 +13,7 @@ from starling.data.tokenizer import StarlingTokenizer
 class DDIMSampler(nn.Module):
     def __init__(
         self,
-        ddpm_model,
-        encoder_model,
+        starling,
         n_steps: int,
         ddim_discretize: str = "uniform",
         ddim_eta: float = 0.0,
@@ -50,9 +49,8 @@ class DDIMSampler(nn.Module):
             If the discretization method is not implemented.
         """
         super(DDIMSampler, self).__init__()
-        self.ddpm_model = ddpm_model
-        self.encoder_model = encoder_model
-        self.n_steps = self.ddpm_model.num_timesteps
+        self.starling = starling
+        self.n_steps = self.starling.ddpm_model.num_timesteps
         self.ddim_discretize = ddim_discretize
         self.ddim_eta = ddim_eta
         self.tokenizer = StarlingTokenizer()
@@ -69,7 +67,7 @@ class DDIMSampler(nn.Module):
             raise NotImplementedError(ddim_discretize)
 
         with torch.no_grad():
-            alpha_bar = self.ddpm_model.alphas_cumprod
+            alpha_bar = self.starling.ddpm_model.alphas_cumprod
             self.ddim_alpha = alpha_bar[self.ddim_time_steps].clone().to(torch.float32)
             self.ddim_alpha_sqrt = torch.sqrt(self.ddim_alpha)
             self.ddim_alpha_prev = torch.cat(
@@ -101,16 +99,17 @@ class DDIMSampler(nn.Module):
         torch.Tensor
             The labels to condition the generative process on.
         """
-        labels = torch.tensor(self.tokenizer.encode(labels)).to(self.ddpm_model.device)
-        labels = rearrange(labels, "f -> 1 f")
-        attention_mask = torch.ones_like(labels, device=self.ddpm_model.device).bool()
-        ionic_strength = (
-            torch.tensor(ionic_strength, device=self.ddpm_model.device)
-            .unsqueeze(0)
-            .unsqueeze(1)
-        )
+        device = self.starling.device
 
-        labels = self.ddpm_model.sequence2labels(labels, attention_mask, ionic_strength)
+        labels = torch.tensor(self.tokenizer.encode(labels)).to(device)
+        labels = rearrange(labels, "f -> 1 f")
+        attention_mask = torch.ones_like(labels, device=device).bool()
+        ionic_strength = (
+            torch.tensor(ionic_strength, device=device).unsqueeze(0).unsqueeze(1)
+        )
+        labels = self.starling.ddpm_model.sequence_encoder(
+            labels, attention_mask, ionic_strength
+        )
 
         return labels
 
@@ -157,11 +156,11 @@ class DDIMSampler(nn.Module):
         torch.Tensor
             The generated distance maps.
         """
-        device = self.ddpm_model.device
+        device = self.starling.device
 
         # Initialize the latents with noise
         x = torch.randn(
-            [num_conformations, self.ddpm_model.in_channels, 24, 24],
+            [num_conformations, self.starling.ddpm_model.in_channels, 24, 24],
             device=device,
         )
 
@@ -204,11 +203,8 @@ class DDIMSampler(nn.Module):
         if show_per_step_progress_bar:
             pbar_inner.close()
 
-        # Scale the latents back to the original scale
-        x = (1 / self.ddpm_model.latent_space_scaling_factor) * x
-
         # Decode the latents to get the distance maps
-        x = self.encoder_model.decode(x)
+        x = self.starling.vae_model.decode(x)
 
         return x
 
@@ -257,7 +253,7 @@ class DDIMSampler(nn.Module):
         attention_mask = torch.ones((c.shape[0], c.shape[1] - 1), device=x.device)
         attention_mask = attention_mask.bool()
 
-        predicted_noise = self.ddpm_model.unet_model(
+        predicted_noise = self.starling.ddpm_model.unet_model(
             x=x, time=t, sequence=c, sequence_mask=attention_mask
         )
 
