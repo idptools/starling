@@ -101,3 +101,27 @@ class MatrixDataModule(pl.LightningDataModule):
             prefetch_factor=self.prefetch_factor,
             pin_memory=True,
         )
+
+
+if __name__ == "__main__":
+    from tqdm import tqdm
+
+    # Example usage
+    train_tsv = "/work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/train_dm_small.csv"
+    val_tsv = "/work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/validation_dm_small.csv"
+    test_tsv = "/work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/train_dm_small.csv"
+
+    data_module = MatrixDataModule(
+        train=train_tsv,
+        validation=val_tsv,
+        test=test_tsv,
+        batch_size=32,
+        num_workers=8,
+        prefetch_factor=5,
+    )
+
+    data_module.prepare_data()
+    data_module.setup("fit")
+
+    for batch in tqdm(data_module.train_dataloader()):
+        pass
