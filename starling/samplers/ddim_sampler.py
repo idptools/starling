@@ -3,7 +3,7 @@ from typing import Tuple
 
 import numpy as np
 import torch
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import nn
 from tqdm.auto import tqdm
 
@@ -85,7 +85,7 @@ class DDIMSampler(nn.Module):
 
             self.ddim_sqrt_one_minus_alpha = (1.0 - self.ddim_alpha) ** 0.5
 
-    def generate_labels(self, labels: str, ionic_strength=150) -> torch.Tensor:
+    def generate_labels(self, labels: str, ionic_strength=20) -> torch.Tensor:
         """
         Generate labels to condition the generative process on.
 
@@ -118,7 +118,7 @@ class DDIMSampler(nn.Module):
         self,
         num_conformations: int,
         labels: torch.Tensor,
-        ionic_strength: int = 150,
+        ionic_strength: int = 20,
         repeat_noise: bool = False,
         temperature: float = 1.0,
         show_per_step_progress_bar: bool = True,
@@ -250,8 +250,9 @@ class DDIMSampler(nn.Module):
         # print(f"x shape: {x.shape}")
         # print(f"c shape: {c.shape}")
 
-        attention_mask = torch.ones((c.shape[0], c.shape[1] - 1), device=x.device)
-        attention_mask = attention_mask.bool()
+        attention_mask = torch.ones(
+            (c.shape[0], c.shape[1] - 1), dtype=torch.bool, device=x.device
+        )
 
         predicted_noise = self.starling.ddpm_model.unet_model(
             x=x, time=t, sequence=c, sequence_mask=attention_mask
