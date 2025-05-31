@@ -375,7 +375,8 @@ class VAE(pl.LightningModule):
         # For more information of KLD loss check out Appendix B:
         # https://arxiv.org/abs/1312.6114
         KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
-        KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+        # KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
+        KLD = KLD.mean()  # Simple average across batch
 
         # In vae_loss:
         KLD_weight = self.kld_scheduler.get_weight()
