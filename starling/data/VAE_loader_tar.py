@@ -30,8 +30,8 @@ class VAEdataloader(pl.LightningDataModule):
         train_size = getattr(self.config, "train_size", 1_000_000)
         val_size = getattr(self.config, "val_size", 100_000)
         self.effective_batch_size = effective_batch_size or self.batch_size
-        self.n_train_batches = train_size // self.effective_batch_size
-        self.n_val_batches = val_size // self.effective_batch_size
+        self.n_train_batches = int(train_size) // int(self.effective_batch_size)
+        self.n_val_batches = int(val_size) // int(self.effective_batch_size)
 
     def setup(self, stage=None):
         """Create dataset objects for training and validation"""
