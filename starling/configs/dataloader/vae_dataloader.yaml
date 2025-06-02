@@ -1,9 +1,16 @@
-_target_: "starling.data.VAE_loader.MatrixDataModule"
+type: tar # tar or h5
 
-train: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/train.csv
-validation: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/validation.csv
-test: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/validation.csv
-  
-batch_size: 32
-num_workers: 8
-prefetch_factor: 5
+tar:
+  _target_: "starling.data.VAE_loader_tar.VAEdataloader"
+  dataset: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/vae_model/data
+  batch_size: 32
+  num_workers: 16
+  prefetch_factor: 5
+  train_size: 11_420_000 # estimated from num_tar_files * 10_000
+  val_size: 2_450_000 # estimated from num_tar_files * 10_000
+
+h5:
+  _target_: "starling.data.VAE_loader.MatrixDataModule"
+  train: /home/borna/ionic_strength_data/train.csv
+  validation: /home/borna/ionic_strength_data/validation.csv
+  test: /home/borna/ionic_strength_data/validation.csv

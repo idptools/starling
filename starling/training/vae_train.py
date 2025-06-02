@@ -55,10 +55,24 @@ def get_checkpoint_path(output_path):
     return "last" if checkpoint_files else None
 
 
-def setup_data_module(cfg):
+def setup_data_module(cfg, effective_batch_size=None):
     """Set up the data module for VAE training."""
-    dataset = instantiate(cfg.dataloader)
-    dataset.setup(stage="fit")
+
+    if cfg.dataloader.type == "h5":
+        dataloader_config = cfg.dataloader.h5
+        dataset = instantiate(dataloader_config)
+        dataset.setup(stage="fit")
+
+    elif cfg.dataloader.type == "tar":
+        from starling.data.VAE_loader_tar import VAEdataloader
+
+        dataset = VAEdataloader(
+            config=cfg.dataloader.tar, effective_batch_size=effective_batch_size
+        )
+        dataset.setup(stage="fit")
+    else:
+        raise ValueError(f"Unsupported dataloader type: {cfg.dataloader.type}")
+
     return dataset
 
 
@@ -133,7 +147,15 @@ def train_vae(cfg: DictConfig):
             print(f"Resuming from last checkpoint: {ckpt_path}")
 
     # Setup data module
-    dataset = setup_data_module(cfg)
+
+    if cfg.dataloader.type == "tar":
+        effective_batch_size = (
+            cfg.trainer.cuda * cfg.trainer.num_nodes * cfg.dataloader.tar.batch_size
+        )
+    else:
+        effective_batch_size = None
+
+    dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
 
     # Setup VAE model
     vae = setup_vae_model(cfg)
