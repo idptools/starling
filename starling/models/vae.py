@@ -199,6 +199,15 @@ class VAE(pl.LightningModule):
             norm=norm,
         )
 
+        try:
+            self.encoder = torch.compile(self.encoder)
+            self.decoder = torch.compile(self.decoder)
+        except Exception as e:
+            print(
+                f"Failed to compile encoder/decoder with torch.compile: {e}. "
+                "Continuing without compilation."
+            )
+
         # Params to learn for reconstruction loss
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
@@ -535,38 +544,9 @@ class VAE(pl.LightningModule):
             If the scheduler is not implemented
         """
 
-        optimizer_params = [
-            {
-                "params": [
-                    param
-                    for name, param in self.named_parameters()
-                    if not any(nd in name for nd in ["bn", "bias"])
-                    and name != "log_std"
-                ],
-                "weight_decay": 0.01,  # Default weight decay for all parameters except batch norm and log_std
-            },
-            {
-                "params": [
-                    param
-                    for name, param in self.named_parameters()
-                    if any(nd in name for nd in ["bn", "bias"])
-                ],
-                "weight_decay": 0.0,  # Exclude weight decay for parameters with 'bn' in name
-            },
-        ]
-
-        # Conditionally add parameter group for log_std based on self.loss_type
-        if self.loss_type == "nll":
-            optimizer_params.append(
-                {
-                    "params": [self.log_std],  # Separate parameter group for log_std
-                    "weight_decay": 0.0,  # Exclude weight decay for log_std
-                }
-            )
-
         if self.optimizer == "SGD":
             optimizer = torch.optim.SGD(
-                optimizer_params,
+                self.parameters(),
                 lr=self.set_lr,
                 momentum=0.875,
                 nesterov=True,
@@ -574,7 +554,14 @@ class VAE(pl.LightningModule):
 
         elif self.optimizer == "AdamW":
             optimizer = torch.optim.AdamW(
-                optimizer_params,
+                self.parameters(),
+                lr=self.set_lr,
+                betas=(0.9, 0.999),
+                eps=1e-08,
+            )
+        elif self.optimizer == "Adam":
+            optimizer = torch.optim.Adam(
+                self.parameters(),
                 lr=self.set_lr,
                 betas=(0.9, 0.999),
                 eps=1e-08,
@@ -606,7 +593,7 @@ class VAE(pl.LightningModule):
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
-            warmup_steps = steps_per_epoch * int(num_epochs * 0.05)
+            warmup_steps = int(steps_per_epoch * num_epochs * 0.01)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:
