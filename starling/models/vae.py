@@ -199,15 +199,6 @@ class VAE(pl.LightningModule):
             norm=norm,
         )
 
-        try:
-            self.encoder = torch.compile(self.encoder)
-            self.decoder = torch.compile(self.decoder)
-        except Exception as e:
-            print(
-                f"Failed to compile encoder/decoder with torch.compile: {e}. "
-                "Continuing without compilation."
-            )
-
         # Params to learn for reconstruction loss
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
