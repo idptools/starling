@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 # Self-descriptive entries which should always be present
 # https://packaging.python.org/en/latest/specifications/declaring-project-metadata/
 [project]
-name = "starling"
+name = "idptools-starling"
 description = "Construction of intrinsically disordered proteins ensembles through multiscale generative models"
 dynamic = ["version"]
 readme = "README.md"
