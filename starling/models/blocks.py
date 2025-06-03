@@ -325,7 +325,7 @@ class ResBlockDecBasic(nn.Module):
                 activation=None,
                 padding=padding,
                 scale_factor=stride,
-                mode="bilinear",
+                mode="nearest",
             )
 
             self.shortcut = ResizeConv2d(
@@ -336,7 +336,7 @@ class ResBlockDecBasic(nn.Module):
                 activation=None,
                 padding=0,
                 scale_factor=stride,
-                mode="bilinear",
+                mode="nearest",
             )
         else:
             self.conv2 = nn.Sequential(
