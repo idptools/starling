@@ -107,7 +107,7 @@ class VAEdataloader(pl.LightningDataModule):
             return None
 
         # Stack distance maps
-        distance_maps = np.stack([item for item in batch[0]])
+        distance_maps = np.stack([item[0] for item in batch])
 
         # Convert to torch tensor and desired data type (on CPU to avoid slowdown)
         distance_maps = torch.from_numpy(distance_maps)
