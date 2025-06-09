@@ -25,6 +25,7 @@ class VAEdataloader(pl.LightningDataModule):
         self.num_workers = self.config.num_workers
         self.prefetch_factor = getattr(self.config, "prefetch_factor", 2)
         self.shuffle_buffer = getattr(self.config, "shuffle_buffer", 10000)
+        self.apply_filter = getattr(self.config, "apply_filter", True)
 
         # Calculate number of batches (can be replaced with metadata file reading)
         train_size = getattr(self.config, "train_size", 1_000_000)
@@ -51,14 +52,19 @@ class VAEdataloader(pl.LightningDataModule):
 
         # Create datasets - simpler pipeline with clear stages
         self.train_dataset = self._create_dataset(
-            tar_files=train_tar_files, is_training=True
+            tar_files=train_tar_files, is_training=True, apply_filter=self.apply_filter
         )
 
         self.val_dataset = self._create_dataset(
-            tar_files=val_tar_files, is_training=False
+            tar_files=val_tar_files, is_training=False, apply_filter=False
         )
 
-    def _create_dataset(self, tar_files: List[str], is_training: bool = False):
+    def _create_dataset(
+        self,
+        tar_files: List[str],
+        is_training: bool = False,
+        apply_filter: bool = False,
+    ):
         """Create a WebDataset with appropriate processing"""
         # Configure the options based on training or validation
         dataset = wds.WebDataset(
@@ -68,13 +74,40 @@ class VAEdataloader(pl.LightningDataModule):
             shardshuffle=True,
         )
 
-        # Apply data processing pipeline
-        return (
-            dataset.shuffle(self.shuffle_buffer)
-            .decode(self._npz_decoder)
-            .map(self._process_sample)
-            .batched(self.batch_size, partial=not is_training)
+        # Start the processing pipeline
+        pipeline = dataset.shuffle(self.shuffle_buffer).decode(self._npz_decoder)
+
+        # Apply filter only if requested (for training)
+        if apply_filter:
+            pipeline = pipeline.map(self._apply_filter_map)
+
+        # Complete the processing pipeline
+        return pipeline.map(self._process_sample).batched(
+            self.batch_size, partial=not is_training
         )
+
+    def _apply_filter_map(self, sample):
+        """Map function that applies filtering by returning None for filtered samples"""
+        if self._filter_sample(sample):
+            return sample
+        else:
+            return None
+
+    def _filter_sample(self, sample):
+        """Filter samples based on custom training criteria"""
+        # Your filtering criteria here
+        if sample is None or "distance_map.npz" not in sample:
+            return False
+
+        # Example filtering based on distance map properties
+        distance_map = sample["distance_map.npz"]
+
+        mask = distance_map != 0
+
+        if mask[0].sum() + 1 < 250:
+            return False
+
+        return True
 
     def _npz_decoder(self, key, data):
         """Decoder for NPZ files with error handling"""
