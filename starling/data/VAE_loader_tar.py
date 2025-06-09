@@ -102,12 +102,16 @@ class VAEdataloader(pl.LightningDataModule):
         # Example filtering based on distance map properties
         distance_map = sample["distance_map.npz"]
 
-        mask = distance_map != 0
+        sequence_length = (distance_map != 0)[0].sum()
 
-        if mask[0].sum() + 1 < 250:
-            return False
-
-        return True
+        if sequence_length >= 249:
+            return True
+        else:
+            # Keep some smaller distance maps to avoid forgetting them
+            if np.random.random() < 0.15:
+                return True
+            else:
+                return False
 
     def _npz_decoder(self, key, data):
         """Decoder for NPZ files with error handling"""
@@ -189,4 +193,7 @@ if __name__ == "__main__":
     data_module.setup()
     train_loader = data_module.train_dataloader()
     for batch in tqdm(train_loader):
+        # import pdb
+
+        # pdb.set_trace()  # Debugging breakpoint
         pass
