@@ -4,6 +4,7 @@ import os
 from typing import List, Optional
 
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 import webdataset as wds
@@ -26,6 +27,13 @@ class VAEdataloader(pl.LightningDataModule):
         self.prefetch_factor = getattr(self.config, "prefetch_factor", 2)
         self.shuffle_buffer = getattr(self.config, "shuffle_buffer", 10000)
         self.apply_filter = getattr(self.config, "apply_filter", True)
+        if self.apply_filter:
+            self.filter_data = pd.read_csv(
+                os.path.join(self.dataset_dir, "acceptance_probs.csv")
+            )
+            self.bin_starts = self.filter_data["bin_start"].values
+            self.bin_ends = self.filter_data["bin_end"].values
+            self.accept_probs = self.filter_data["accept_prob"].values
 
         # Calculate number of batches (can be replaced with metadata file reading)
         train_size = getattr(self.config, "train_size", 1_000_000)
@@ -33,6 +41,14 @@ class VAEdataloader(pl.LightningDataModule):
         self.effective_batch_size = effective_batch_size or self.batch_size
         self.n_train_batches = int(train_size) // int(self.effective_batch_size)
         self.n_val_batches = int(val_size) // int(self.effective_batch_size)
+
+    def __get_accept_prob(self, seq_length):
+        # Binary search could be faster if bins are sorted and many
+        # For now, simple linear scan (usually bins < 100)
+
+        for start, end, prob in zip(self.bin_starts, self.bin_ends, self.accept_probs):
+            if start < seq_length <= end:
+                return prob
 
     def setup(self, stage=None):
         """Create dataset objects for training and validation"""
@@ -102,16 +118,22 @@ class VAEdataloader(pl.LightningDataModule):
         # Example filtering based on distance map properties
         distance_map = sample["distance_map.npz"]
 
-        sequence_length = (distance_map != 0)[0].sum()
+        # Add 1 because the first residue is False in the distance map
+        sequence_length = (distance_map != 0)[0].sum() + 1
 
-        if sequence_length >= 249:
+        if np.random.random() < self.__get_accept_prob(sequence_length):
             return True
         else:
-            # Keep some smaller distance maps to avoid forgetting them
-            if np.random.random() < 0.15:
-                return True
-            else:
-                return False
+            return False
+
+        # if sequence_length >= 249:
+        #     return True
+        # else:
+        #     # Keep some smaller distance maps to avoid forgetting them
+        #     if np.random.random() < 0.15:
+        #         return True
+        #     else:
+        #         return False
 
     def _npz_decoder(self, key, data):
         """Decoder for NPZ files with error handling"""
