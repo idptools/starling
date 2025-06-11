@@ -297,6 +297,9 @@ class VAE(pl.LightningModule):
             Returns the likelihood of the input data given the latent space
         """
 
+        # Clamp the log_std to avoid cheating
+        log_std = torch.clamp(log_std, min=-1.0, max=1.0)
+
         # Create the normal distributions
         dist = torch.distributions.Normal(data_reconstructed, torch.exp(log_std))
 
