@@ -1,13 +1,15 @@
 import glob
 import io
-import json
 import os
+from typing import List, Optional
 
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 import webdataset as wds
 from omegaconf import OmegaConf
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 
@@ -15,129 +17,182 @@ def npy_decoder(key, data):
     return np.load(io.BytesIO(data), allow_pickle=False)
 
 
-class DDPMDataloader(pl.LightningDataModule):
+class DDPMDataLoader(pl.LightningDataModule):
     def __init__(
         self,
         config,
         effective_batch_size=None,
     ):
         super().__init__()
-
         self.config = config
-
-        self.dataset = self.config.dataset
-        self.early_batch_size = self.config.early_batch_size
+        self.dataset_dir = self.config.dataset
         self.batch_size = self.config.batch_size
+        self.num_workers = self.config.num_workers
+        self.prefetch_factor = getattr(self.config, "prefetch_factor", 2)
+        self.shuffle_buffer = getattr(self.config, "shuffle_buffer", 10000)
+        self.apply_filter = getattr(self.config, "apply_filter", True)
 
-        # Hard coded for now
-        self.train_shuffle_buffer = 4000
-        self.val_shuffle_buffer = 4000
-        self.loader_shuffle_buffer = 4000
+        self.ionic_strength = getattr(self.config, "ionic_strength", "150")
 
-        # Calculate batch counts
-        self.effective_batch_size = effective_batch_size
-
-        metadata = json.load(open(os.path.join(self.dataset, "metadata.json"), "r"))
-        train_size = metadata["train"]["num_samples"]
-        val_size = metadata["validation"]["num_samples"]
-
-        self.n_train_batches = train_size // self.effective_batch_size
-        self.n_val_batches = val_size // self.effective_batch_size
+        # Calculate number of batches (can be replaced with metadata file reading)
+        train_size = getattr(self.config, "train_size", 1_000_000)
+        val_size = getattr(self.config, "val_size", 100_000)
+        self.effective_batch_size = effective_batch_size or self.batch_size
+        self.n_train_batches = int(train_size) // int(self.effective_batch_size)
+        self.n_val_batches = int(val_size) // int(self.effective_batch_size)
 
     def setup(self, stage=None):
-        # Create the WebDataset instances for training and validation
-        train_dir = os.path.join(self.dataset, "train")
-        val_dir = os.path.join(self.dataset, "validation")
+        """Create dataset objects for training and validation"""
+        # Find tar files
+        train_dir = os.path.join(self.dataset_dir, "train")
+        val_dir = os.path.join(self.dataset_dir, "validation")
 
-        train_tar_files = sorted(glob.glob(f"{train_dir}/*.tar"))
-        val_tar_files = sorted(glob.glob(f"{val_dir}/*.tar"))
+        # Include .tar.zst, .tar.gz
+        train_tar_files = sorted(glob.glob(f"{train_dir}/*.tar*"))
+        val_tar_files = sorted(glob.glob(f"{val_dir}/*.tar*"))
 
-        # Check if we found any files
+        # Error checking
         if not train_tar_files:
             raise FileNotFoundError(f"No train tar files found in {train_dir}")
         if not val_tar_files:
             raise FileNotFoundError(f"No validation tar files found in {val_dir}")
 
-        self.train_dataset = (
-            wds.WebDataset(
-                train_tar_files,
-                nodesplitter=wds.split_by_node,  # Distributes tar files across nodes
-                resampled=True,  # Enables infinite iteration through the dataset
-                shardshuffle=True,
-            )
-            .shuffle(4000)  # Creates and constantly maintains a buffer of 4000 samples
-            .decode(npy_decoder)
-            .to_tuple("sequence.npy", "distance_map.npy")
-            .batched(self.early_batch_size, self.early_collate)
+        # Create datasets - simpler pipeline with clear stages
+        self.train_dataset = self._create_dataset(
+            tar_files=train_tar_files, is_training=True
         )
-        self.val_dataset = (
-            wds.WebDataset(
-                val_tar_files,
-                nodesplitter=wds.split_by_node,
-                shardshuffle=True,
-            )
-            .shuffle(4000)
-            .decode(npy_decoder)
-            .to_tuple("sequence.npy", "distance_map.npy")
-            .batched(self.early_batch_size, self.early_collate)
+
+        self.val_dataset = self._create_dataset(
+            tar_files=val_tar_files, is_training=False
         )
+
+    def _create_dataset(
+        self,
+        tar_files: List[str],
+        is_training: bool = False,
+    ):
+        """Create a WebDataset with appropriate processing"""
+        # Configure the options based on training or validation
+        dataset = wds.WebDataset(
+            tar_files,
+            nodesplitter=wds.split_by_node,
+            resampled=is_training,  # Only enable infinite iteration for training
+            shardshuffle=True,
+        )
+
+        # Start the processing pipeline
+        pipeline = dataset.shuffle(self.shuffle_buffer).decode(self._npz_decoder)
+
+        pipeline = pipeline.map(self._apply_filter_map)
+
+        # Complete the processing pipeline
+        return pipeline.map(self._process_sample).batched(
+            self.batch_size, partial=not is_training
+        )
+
+    def _apply_filter_map(self, sample):
+        """Map function that applies filtering by returning None for filtered samples"""
+        if self._filter_sample(sample):
+            return sample
+        else:
+            return None
+
+    def _filter_sample(self, sample):
+        """Filter samples based on custom training criteria"""
+
+        # Example filtering based on distance map properties
+        ionic_strength = str(sample["ionic_strength_mm.npz"])
+
+        if ionic_strength == self.ionic_strength:
+            return True
+        else:
+            return False
+
+    def _npz_decoder(self, key, data):
+        """Decoder for NPZ files with error handling"""
+        try:
+            npz_data = np.load(io.BytesIO(data), allow_pickle=False)
+            return npz_data["array"]
+        except Exception as e:
+            print(f"Error decoding {key}: {e}")
+            return None
+
+    def _process_sample(self, sample):
+        """Process a single sample"""
+        # Extract the distance map and sequence
+        latents = sample["latent.npz"]
+        sequence = sample["sequence.npz"]
+
+        # Add channel dimension if needed
+        if len(latents.shape) == 2:
+            latents = latents[np.newaxis, :, :]
+
+        if len(sequence.shape) == 1:
+            sequence = sequence[np.newaxis, :]
+
+        # Return a tuple with all data components
+        return (latents, sequence)
+
+    def _collate_fn(self, batch):
+        """Collate function that handles empty batches"""
+        # Filter out None values
+        batch = [b for b in batch if b is not None]
+        if not batch:
+            return None
+
+        # Stack latent vectors
+        latents = np.stack([item for item in batch[0]])
+
+        # Stack sequences
+        sequences = np.stack([item[0] for item in batch[1]])
+
+        # Get the maximum sequence length
+        max_seq_length = (sequences != 0).sum(axis=1).max()
+
+        # Remove extraneous padding elements
+        sequences = sequences[:, :max_seq_length]
+
+        attention_mask = sequences != 0
+
+        # Convert to torch tensors (on CPU to avoid slowdown)
+        latents = torch.from_numpy(latents)
+        sequences = torch.from_numpy(sequences).to(torch.int32)
+        attention_mask = torch.from_numpy(attention_mask)
+
+        # Return as dictionary for clearer access in training loop
+        return {
+            "latent": latents,
+            "sequence": sequences,
+            "attention_mask": attention_mask,
+        }
 
     def train_dataloader(self):
-        wds_loader = (
+        return (
             wds.WebLoader(
                 self.train_dataset,
-                batch_size=None,
-                num_workers=self.config.num_workers,
+                batch_size=None,  # Already batched
+                num_workers=self.num_workers,
                 pin_memory=True,
-                prefetch_factor=self.config.prefetch_factor,
+                prefetch_factor=self.prefetch_factor,
+                collate_fn=self._collate_fn,
             )
-            .unbatched()
-            .shuffle(4000)
-            .with_epoch(self.n_train_batches)  # sets "epoch" size in iterable dataset
-            .batched(self.batch_size)
-            .with_length(self.n_train_batches)  # defines __len__ for the dataset
+            .with_epoch(self.n_train_batches)
+            .with_length(self.n_train_batches)
         )
-        return wds_loader
 
     def val_dataloader(self):
-        wds_loader = (
+        return (
             wds.WebLoader(
                 self.val_dataset,
                 batch_size=None,
-                num_workers=self.config.num_workers,
+                num_workers=self.num_workers,
                 pin_memory=True,
-                prefetch_factor=self.config.prefetch_factor,
+                prefetch_factor=self.prefetch_factor,
+                collate_fn=self._collate_fn,
             )
-            .unbatched()
-            .shuffle(4000)
             .with_epoch(self.n_val_batches)
-            .batched(self.batch_size, partial=False)
             .with_length(self.n_val_batches)
         )
-        return wds_loader
-
-    def early_collate(self, sample):
-        """Optimized collation that uses numpy operations for speed"""
-        if not sample:
-            return [], []
-
-        # Use numpy's stack for efficient memory usage
-        sequences = np.stack([data[0] for data in sample], axis=0, dtype=np.int32)
-        distance_maps = np.stack([data[1] for data in sample], axis=0)
-
-        distance_maps = distance_maps[:, np.newaxis, :, :]
-        distance_maps = torch.from_numpy(distance_maps).to(torch.bfloat16)
-
-        return distance_maps, sequences
-
-
-def check_shapes(input_ids, attention_mask, labels):
-    assert input_ids.shape[0] == attention_mask.shape[0] == labels.shape[0], (
-        "Batch size mismatch"
-    )
-    assert input_ids.shape[1] == attention_mask.shape[1] == labels.shape[1], (
-        "Sequence length mismatch"
-    )
 
 
 if __name__ == "__main__":
@@ -146,7 +201,7 @@ if __name__ == "__main__":
 
     effective_batch_size = 1 * 4 * 16
 
-    data_module = DDPMDataloader(cfg, effective_batch_size)
+    data_module = DDPMDataLoader(cfg.tar, effective_batch_size)
 
     # Initialize the datasets
     data_module.setup()
