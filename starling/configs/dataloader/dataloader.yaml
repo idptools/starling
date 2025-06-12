@@ -1,14 +1,16 @@
-type: h5 # tar or h5
+type: tar # tar or h5
 
 tar:
-  dataset: /home/borna/packages/starling/starling/data/data
+  dataset: /work/bnovak/projects/sequence2ensemble/lammps_data/combined_data/latents_data
+  batch_size: 16
+  num_workers: 0
+  prefetch_factor: null
+  ionic_strength: 150
+  train_size: 11_420_000 # estimated from num_tar_files * 10_000
+  val_size: 2_450_000 # estimated from num_tar_files * 10_000
 
 h5:
   train: /home/borna/ionic_strength_data/train.csv
   validation: /home/borna/ionic_strength_data/validation.csv
   test: /home/borna/ionic_strength_data/validation.csv
   
-batch_size: 32
-early_batch_size: 128
-num_workers: 8
-prefetch_factor: 5
