@@ -13,8 +13,8 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 import starling.data.ddpm_loader as ddpm_loader
-import starling.data.ddpm_loader_tar as ddpm_loader_tar
 from starling.data.argument_parser import get_params
+from starling.data.ddpm_loader_tar import DDPMDataLoader
 from starling.models.continuous_diffusion import ContinuousDiffusion
 from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
@@ -61,19 +61,22 @@ def get_checkpoint_path(output_path):
     return "last" if checkpoint_files else None
 
 
-def setup_data_module(config):
-    """Set up the data module."""
-    data_config = config.dataloader
-    effective_batch_size = data_config.batch_size * config.trainer.cuda
-    if data_config.type == "tar":
-        dataset = ddpm_loader_tar.DDPMDataloader(
-            data_config, effective_batch_size=effective_batch_size
+def setup_data_module(cfg, effective_batch_size=None):
+    """Set up the data module for VAE training."""
+
+    if cfg.dataloader.type == "h5":
+        dataloader_config = cfg.dataloader.h5
+        dataset = instantiate(dataloader_config)
+        dataset.setup(stage="fit")
+
+    elif cfg.dataloader.type == "tar":
+        dataset = DDPMDataLoader(
+            config=cfg.dataloader.tar, effective_batch_size=effective_batch_size
         )
-    elif data_config.type == "h5":
-        dataset = ddpm_loader.DDPMDataloader(data_config)
+        dataset.setup(stage="fit")
     else:
-        raise ValueError(f"Unsupported data type: {data_config.type}")
-    dataset.setup(stage="fit")
+        raise ValueError(f"Unsupported dataloader type: {cfg.dataloader.type}")
+
     return dataset
 
 
@@ -158,7 +161,14 @@ def train_model(cfg: DictConfig):
     ckpt_path = cfg.trainer.checkpoint
 
     # Setup data module
-    dataset = setup_data_module(cfg)
+    if cfg.dataloader.type == "tar":
+        effective_batch_size = (
+            cfg.trainer.cuda * cfg.trainer.num_nodes * cfg.dataloader.tar.batch_size
+        )
+    else:
+        effective_batch_size = None
+
+    dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
 
     # Setup models
     UNet_model, diffusion_model = setup_models(cfg)
