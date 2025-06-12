@@ -30,9 +30,8 @@ class DDPMDataLoader(pl.LightningDataModule):
         self.num_workers = self.config.num_workers
         self.prefetch_factor = getattr(self.config, "prefetch_factor", 2)
         self.shuffle_buffer = getattr(self.config, "shuffle_buffer", 10000)
-        self.apply_filter = getattr(self.config, "apply_filter", True)
 
-        self.ionic_strength = getattr(self.config, "ionic_strength", "150")
+        self.ionic_strength = getattr(self.config, "ionic_strength", 150)
 
         # Calculate number of batches (can be replaced with metadata file reading)
         train_size = getattr(self.config, "train_size", 1_000_000)
@@ -101,7 +100,7 @@ class DDPMDataLoader(pl.LightningDataModule):
         """Filter samples based on custom training criteria"""
 
         # Example filtering based on distance map properties
-        ionic_strength = str(sample["ionic_strength_mm.npz"])
+        ionic_strength = sample["ionic_strength_mm.npz"]
 
         if ionic_strength == self.ionic_strength:
             return True
