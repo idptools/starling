@@ -5,7 +5,6 @@ import os
 from typing import List, Optional
 
 import numpy as np
-import pandas as pd
 import pytorch_lightning as pl
 import torch
 import webdataset as wds
