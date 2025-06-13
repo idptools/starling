@@ -34,8 +34,21 @@ class DDPMDataLoader(pl.LightningDataModule):
         self.ionic_strength = getattr(self.config, "ionic_strength", 150)
 
         # Calculate number of batches (can be replaced with metadata file reading)
-        train_size = getattr(self.config, "train_size", 1_000_000)
-        val_size = getattr(self.config, "val_size", 100_000)
+        train_size = getattr(self.config, "train_size", None)
+        val_size = getattr(self.config, "val_size", None)
+
+        if train_size is None or val_size is None:
+            metadata_file = os.path.join(self.dataset_dir, "metadata.json")
+            if os.path.exists(metadata_file):
+                with open(metadata_file, "r") as f:
+                    metadata = json.load(f)
+                ionic_strength = str(self.ionic_strength) + "mM"
+                train_size = metadata[ionic_strength].get("train", 0)
+                val_size = metadata[ionic_strength].get("validation", 0)
+            else:
+                raise FileNotFoundError(
+                    f"Metadata file not found at {metadata_file}. Please provide train_size and val_size."
+                )
         self.effective_batch_size = effective_batch_size or self.batch_size
         self.n_train_batches = int(train_size) // int(self.effective_batch_size)
         self.n_val_batches = int(val_size) // int(self.effective_batch_size)
