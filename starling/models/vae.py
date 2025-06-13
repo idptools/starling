@@ -544,12 +544,35 @@ class VAE(pl.LightningModule):
             )
 
         elif self.optimizer == "AdamW":
+            # Separate encoder parameters from other parameters
+            encoder_params = []
+            other_params = []
+
+            for name, param in self.named_parameters():
+                if "encoder" in name:
+                    encoder_params.append(param)
+                else:
+                    other_params.append(param)
+
+            # Define parameter groups with different weight decay settings
+            param_groups = [
+                {
+                    "params": encoder_params,
+                    "weight_decay": 1e-4,
+                },
+                {
+                    "params": other_params,
+                    "weight_decay": 0.0,
+                },
+            ]
+
             optimizer = torch.optim.AdamW(
-                self.parameters(),
+                param_groups,
                 lr=self.set_lr,
                 betas=(0.9, 0.999),
                 eps=1e-08,
             )
+
         elif self.optimizer == "Adam":
             optimizer = torch.optim.Adam(
                 self.parameters(),
