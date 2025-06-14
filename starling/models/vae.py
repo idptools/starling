@@ -1,5 +1,4 @@
 import math
-import pdb
 from typing import List, Tuple
 
 import pytorch_lightning as pl
@@ -21,7 +20,7 @@ torch.set_float32_matmul_precision("high")
 
 class KLDWeightScheduler:
     def __init__(self, max_weight: float, warmup_fraction: float = None):
-        self.max_weight = max_weight
+        self._max_weight = max_weight
         self.warmup_fraction = warmup_fraction
         self.current_step = 0
         self.total_warmup_steps = None
@@ -34,14 +33,19 @@ class KLDWeightScheduler:
     def get_weight(self) -> float:
         """Get current KLD weight and increment step counter"""
         if self.warmup_fraction is None or self.total_warmup_steps is None:
-            return self.max_weight
+            return self._max_weight
 
         weight = min(
-            (self.current_step / self.total_warmup_steps) * self.max_weight,
-            self.max_weight,
+            (self.current_step / self.total_warmup_steps) * self._max_weight,
+            self._max_weight,
         )
         self.current_step += 1
         return weight
+
+    @property
+    def max_weight(self):
+        """Get the maximum KLD weight"""
+        return self._max_weight
 
 
 class VAE(pl.LightningModule):
@@ -379,7 +383,10 @@ class VAE(pl.LightningModule):
         KLD = KLD.mean()
 
         # In vae_loss:
-        KLD_weight = self.kld_scheduler.get_weight()
+        if self.trainer.training:
+            KLD_weight = self.kld_scheduler.get_weight()
+        else:
+            KLD_weight = self.kld_scheduler.max_weight
         loss = recon + KLD_weight * KLD
 
         return {"loss": loss, "recon": recon, "KLD": KLD}
@@ -634,7 +641,7 @@ class VAE(pl.LightningModule):
                 "scheduler": CosineAnnealingLR(
                     optimizer,
                     T_max=num_epochs,
-                    eta_min=1e-4,
+                    eta_min=1e-8,
                 ),
                 "monitor": self.monitor,
                 "interval": "epoch",
