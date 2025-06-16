@@ -680,7 +680,12 @@ class VAE(pl.LightningModule):
         return symmetrized_arrays
 
     def on_train_start(self):
-        self.kld_scheduler.configure(self.trainer.estimated_stepping_batches)
+        train_dataloader = self.trainer.train_dataloader
+        steps_per_epoch = len(train_dataloader)
+        num_devices = max(1, self.trainer.num_devices)
+        steps_per_epoch = steps_per_epoch // num_devices
+        training_steps = steps_per_epoch * self.trainer.max_epochs
+        self.kld_scheduler.configure(training_steps)
 
     def _reset_epoch_metrics(self) -> None:
         """Reset all epoch-level metric accumulators to zero."""
