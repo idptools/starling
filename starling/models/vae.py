@@ -24,6 +24,7 @@ class KLDWeightScheduler:
         self.warmup_fraction = warmup_fraction
         self.current_step = 0
         self.total_warmup_steps = None
+        self._current_weight = 0
 
     def configure(self, total_training_steps: int):
         """Configure the scheduler with training step information"""
@@ -39,6 +40,7 @@ class KLDWeightScheduler:
             (self.current_step / self.total_warmup_steps) * self._max_weight,
             self._max_weight,
         )
+        self._current_weight = weight
         self.current_step += 1
         return weight
 
@@ -46,6 +48,11 @@ class KLDWeightScheduler:
     def max_weight(self):
         """Get the maximum KLD weight"""
         return self._max_weight
+
+    @property
+    def current_weight(self):
+        """Get the current KLD weight"""
+        return self._current_weight
 
 
 class VAE(pl.LightningModule):
@@ -152,9 +159,6 @@ class VAE(pl.LightningModule):
             max_weight=KLD_weight, warmup_fraction=KLD_warmup_fraction
         )
 
-        # Metrics tracking for epoch-level statistics
-        self._reset_epoch_metrics()
-
         # Validation metric to monitor
         self.monitor = "epoch_val_loss"
 
@@ -193,11 +197,8 @@ class VAE(pl.LightningModule):
             nn.Conv2d(latent_dim, final_channels, kernel_size=3, stride=1, padding=1),
         )
 
-        # Decoder
-        decoder_channels = in_channels
-
         self.decoder = resnets[model_type]["decoder"](
-            out_channels=decoder_channels,
+            out_channels=1,
             dimension=dimension,
             base=base,
             norm=norm,
@@ -363,9 +364,7 @@ class VAE(pl.LightningModule):
         elif self.loss_type == "nll":
             # Get the reconstruction loss and convert it to positive values
             recon = -1 * self.gaussian_likelihood(
-                data_reconstructed=data_reconstructed,
-                log_std=self.log_std,
-                data=data,
+                data_reconstructed=data_reconstructed, log_std=self.log_std, data=data
             )
         else:
             raise ValueError(
@@ -433,9 +432,14 @@ class VAE(pl.LightningModule):
         torch.Tensor
             Total training loss of this batch
         """
-        data = batch
+        data, finches = batch["distance_maps"], batch["finches"]
 
-        data_reconstructed, moments = self.forward(data=data)
+        if finches is not None:
+            data_to_encode = torch.cat([data, finches], dim=1)
+        else:
+            data_to_encode = data
+
+        data_reconstructed, moments = self.forward(data=data_to_encode)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
@@ -444,43 +448,14 @@ class VAE(pl.LightningModule):
             logvar=moments.logvar,
         )
 
-        self.total_train_step_losses += loss["loss"].item()
-        self.recon_step_losses += loss["recon"].item()
-        self.KLD_step_losses += loss["KLD"].item()
-        self.num_batches += 1
+        batch_size = data.size(0)
 
-        self.log("train_loss", loss["loss"], prog_bar=True, batch_size=data.size(0))
-        self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=data.size(0))
-        self.log("KLD_loss", loss["KLD"], prog_bar=False, batch_size=data.size(0))
-        self.log(
-            "KLD_weight",
-            self.kld_scheduler.get_weight(),
-            prog_bar=True,
-            batch_size=data.size(0),
-        )
+        self.log("train_loss", loss["loss"], batch_size=batch_size)
+        self.log("recon_loss", loss["recon"], batch_size=batch_size, prog_bar=True)
+        self.log("KLD_loss", loss["KLD"], batch_size=batch_size)
+        self.log("KLD_weight", self.kld_scheduler.current_weight, batch_size=batch_size)
 
         return loss["loss"]
-
-    def on_train_epoch_end(self) -> None:
-        """
-        Calculate and log the mean training losses for the epoch.
-        Reset the loss accumulators for the next epoch.
-        """
-        if self.num_batches == 0:
-            return
-
-        # Calculate and log mean values
-        epoch_mean = self.total_train_step_losses / self.num_batches
-        self.log("epoch_train_loss", epoch_mean, prog_bar=True, sync_dist=True)
-
-        recon_mean = self.recon_step_losses / self.num_batches
-        self.log("epoch_recon_loss", recon_mean, prog_bar=True, sync_dist=True)
-
-        KLD_mean = self.KLD_step_losses / self.num_batches
-        self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
-
-        # Reset metrics for next epoch
-        self._reset_epoch_metrics()
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
         """
@@ -500,9 +475,14 @@ class VAE(pl.LightningModule):
             Total validation loss of this batch
         """
 
-        data = batch
+        data, finches = batch["distance_maps"], batch["finches"]
 
-        data_reconstructed, moments = self.forward(data=data)
+        if finches is not None:
+            data_to_encode = torch.cat([data, finches], dim=1)
+        else:
+            data_to_encode = data
+
+        data_reconstructed, moments = self.forward(data=data_to_encode)
 
         loss = self.vae_loss(
             data_reconstructed=data_reconstructed,
@@ -511,13 +491,9 @@ class VAE(pl.LightningModule):
             logvar=moments.logvar,
         )
 
-        self.log(
-            "epoch_val_loss",
-            loss["loss"],
-            prog_bar=True,
-            sync_dist=True,
-            batch_size=data.size(0),
-        )
+        batch_size = data.size(0)
+
+        self.log("epoch_val_loss", loss["loss"], sync_dist=True, batch_size=batch_size)
 
         return loss["loss"]
 
@@ -680,11 +656,15 @@ class VAE(pl.LightningModule):
         return symmetrized_arrays
 
     def on_train_start(self):
-        train_dataloader = self.trainer.train_dataloader
-        steps_per_epoch = len(train_dataloader)
+        steps_per_epoch = len(self.trainer.train_dataloader)
+
+        # Account for devices
         num_devices = max(1, self.trainer.num_devices)
         steps_per_epoch = steps_per_epoch // num_devices
+
         training_steps = steps_per_epoch * self.trainer.max_epochs
+
+        # Configure the KLD scheduler with the total training steps
         self.kld_scheduler.configure(training_steps)
 
     def _reset_epoch_metrics(self) -> None:
