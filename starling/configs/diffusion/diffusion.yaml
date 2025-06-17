@@ -9,6 +9,7 @@ discrete:
   config_scheduler: CosineAnnealingLR
   min_snr_loss: False
   min_snr_gamma: 5.0
+  distance_map_encoder: /work/bnovak/projects/sequence2ensemble/vae_training/preprint_VAE_cont_training_KLD_1e4/model-kernel-epoch=09-epoch_val_loss=2.04.ckpt
 
 continuous:
   noise_schedule: karras

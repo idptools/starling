@@ -31,7 +31,8 @@ class DDPMDataLoader(pl.LightningDataModule):
         self.prefetch_factor = getattr(self.config, "prefetch_factor", 2)
         self.shuffle_buffer = getattr(self.config, "shuffle_buffer", 10000)
 
-        self.ionic_strength = getattr(self.config, "ionic_strength", 150)
+        self.data_key = getattr(self.config, "data_key", "distance_map.npz")
+        self.ionic_strength = getattr(self.config, "ionic_strength", "150mM")
 
         # Calculate number of batches (can be replaced with metadata file reading)
         train_size = getattr(self.config, "train_size", None)
@@ -42,9 +43,8 @@ class DDPMDataLoader(pl.LightningDataModule):
             if os.path.exists(metadata_file):
                 with open(metadata_file, "r") as f:
                     metadata = json.load(f)
-                ionic_strength = str(self.ionic_strength) + "mM"
-                train_size = metadata[ionic_strength].get("train", 0)
-                val_size = metadata[ionic_strength].get("validation", 0)
+                train_size = metadata[self.ionic_strength].get("train", 0)
+                val_size = metadata[self.ionic_strength].get("validation", 0)
             else:
                 raise FileNotFoundError(
                     f"Metadata file not found at {metadata_file}. Please provide train_size and val_size."
@@ -113,8 +113,8 @@ class DDPMDataLoader(pl.LightningDataModule):
         """Filter samples based on custom training criteria"""
 
         # Example filtering based on distance map properties
-        ionic_strength = sample["ionic_strength_mm.npz"]
-
+        # ionic_strength = sample["ionic_strength_mm.npz"]
+        ionic_strength = sample["__key__"].split("_")[-1]
         if ionic_strength == self.ionic_strength:
             return True
         else:
@@ -132,7 +132,7 @@ class DDPMDataLoader(pl.LightningDataModule):
     def _process_sample(self, sample):
         """Process a single sample"""
         # Extract the distance map and sequence
-        latents = sample["latent.npz"]
+        latents = sample[self.data_key]
         sequence = sample["sequence.npz"]
 
         # Add channel dimension if needed
@@ -173,7 +173,7 @@ class DDPMDataLoader(pl.LightningDataModule):
 
         # Return as dictionary for clearer access in training loop
         return {
-            "latent": latents,
+            "data": latents,
             "sequence": sequences,
             "attention_mask": attention_mask,
         }

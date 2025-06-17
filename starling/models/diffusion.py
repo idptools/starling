@@ -18,6 +18,7 @@ from starling.data.schedulers import (
     linear_beta_schedule,
     sigmoid_beta_schedule,
 )
+from starling.models.vae import VAE
 
 # Adapted from https://github.com/Camaltra/this-is-not-real-aerial-imagery/blob/main/src/ai/diffusion_process.py
 # and https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/classifier_free_guidance.py#L720
@@ -71,6 +72,7 @@ class DiffusionModel(pl.LightningModule):
         self,
         unet_model: nn.Module,
         sequence_encoder: nn.Module,
+        distance_map_encoder: nn.Module,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         set_lr: float = 1e-4,
@@ -126,10 +128,19 @@ class DiffusionModel(pl.LightningModule):
         super().__init__()
 
         # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
-        self.save_hyperparameters(ignore=["unet_model", "sequence_encoder"])
+        self.save_hyperparameters(
+            ignore=["unet_model", "sequence_encoder", "distance_map_encoder"]
+        )
 
         self.unet_model = unet_model
         self.sequence_encoder = sequence_encoder
+
+        if distance_map_encoder is not None:
+            self.distance_map_encoder = VAE.load_from_checkpoint(distance_map_encoder)
+
+            self.__freeze_distance_map_encoder()
+        else:
+            self.distance_map_encoder = None
 
         self.in_channels = self.unet_model.in_channels
 
@@ -178,6 +189,11 @@ class DiffusionModel(pl.LightningModule):
         # Store timesteps information
         self.num_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
+
+    def __freeze_distance_map_encoder(self):
+        self.distance_map_encoder.eval()
+        for param in self.distance_map_encoder.parameters():
+            param.requires_grad = False
 
     # Remove mixed precision from this function, I've experienced numerical instability here
     @autocast(device_type="cuda", enabled=False)
@@ -361,10 +377,16 @@ class DiffusionModel(pl.LightningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         latent_encoding, sequences, sequence_attention_mask = (
-            batch["latent"],
+            batch["data"],
             batch["sequence"],
             batch["attention_mask"],
         )
+
+        if self.distance_map_encoder is not None:
+            with torch.no_grad():
+                latent_encoding = self.distance_map_encoder.encode(
+                    latent_encoding
+                ).mode()
 
         # Calculate scaling factor on first batch (only once during training)
         if self.global_step == 0 and batch_idx == 0:
@@ -387,10 +409,15 @@ class DiffusionModel(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         latent_encoding, sequences, sequence_attention_mask = (
-            batch["latent"],
+            batch["data"],
             batch["sequence"],
             batch["attention_mask"],
         )
+        if self.distance_map_encoder is not None:
+            with torch.no_grad():
+                latent_encoding = self.distance_map_encoder.encode(
+                    latent_encoding
+                ).mode()
 
         # Z-score the latent encoding
         latent_encoding = (
