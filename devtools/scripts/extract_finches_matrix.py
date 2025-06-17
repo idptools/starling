@@ -44,7 +44,7 @@ def frob_norm(matrix):
     return matrix / frob_norm_value
 
 
-def append_to_h5(filename, interaction_matrix):
+def append_to_h5(filename, interaction_matrix, ionic_strength=None):
     interaction_matrix_row_norm = row_normalize(interaction_matrix)
     interaction_matrix_frob_norm = frob_norm(interaction_matrix)
     with h5py.File(filename, "a") as f:
@@ -55,9 +55,13 @@ def append_to_h5(filename, interaction_matrix):
             del f["finches"]
         if "finches_frob_norm" in f:
             del f["finches_frob_norm"]
+        if "ionic_strength" in f:
+            del f["ionic_strength"]
         f.create_dataset("finches", data=interaction_matrix)
         f.create_dataset("finches_row_norm", data=interaction_matrix_row_norm)
         f.create_dataset("finches_frob_norm", data=interaction_matrix_frob_norm)
+        if ionic_strength is not None:
+            f.create_dataset("ionic_strength", data=ionic_strength)
 
 
 def parse_arguments():
@@ -91,8 +95,10 @@ def main():
     # Initialize the appropriate forcefield model based on arguments
     if args.forcefield == "mpipi":
         ff_params = Mpipi_model(version="Mpipi_GGv1", salt=args.salt)
-    else:  # calvados
+    elif args.forcefield == "calvados":  # calvados
         ff_params = calvados_model(version="CALVADOS2", salt=args.salt)
+    else:
+        raise ValueError(f"Unknown forcefield: {args.forcefield}")
 
     print(f"Using {args.forcefield} forcefield with salt concentration {args.salt} M")
 
@@ -111,7 +117,9 @@ def main():
             interaction_matrix = get_interaction_matrix(sequence, IMC)
 
             # Save the interaction matrix to the same file
-            append_to_h5(file_name, interaction_matrix)
+            append_to_h5(
+                file_name, interaction_matrix, ionic_strength=int(args.salt * 1000)
+            )
 
         except Exception as e:
             print(f"Error processing {file_name}: {e}")
