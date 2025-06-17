@@ -201,7 +201,7 @@ class DDIMSampler(nn.Module):
             pbar_inner.close()
 
         # Scale the latents back to the original scale
-        x = (1 / self.ddpm_model.latent_space_scaling_factor) * x
+        x = x * self.ddpm_model.latent_space_std + self.ddpm_model.latent_space_mean
 
         # Decode the latents to get the distance maps
         x = self.encoder_model.decode(x)
