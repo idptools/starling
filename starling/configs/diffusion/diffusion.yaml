@@ -7,7 +7,7 @@ discrete:
   timesteps: 1000
   set_lr: 0.0001
   config_scheduler: CosineAnnealingLR
-  min_snr_loss: True
+  min_snr_loss: False
   min_snr_gamma: 5.0
 
 continuous:

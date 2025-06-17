@@ -6,10 +6,10 @@ latent_dim: 1
 dimension: 384
 loss_type: nll
 weights_type: equal
-KLD_weight: 0.0001
+KLD_weight: 0.00001
 lr_scheduler: CosineAnnealingLR
-set_lr: 0.001
-norm: group
+set_lr: 0.00001
+norm: instance
 base: 64
-optimizer: AdamW
-KLD_warmup_fraction: 0.1
+optimizer: SGD
+KLD_warmup_fraction: 0.005
