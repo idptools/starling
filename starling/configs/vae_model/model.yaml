@@ -12,4 +12,5 @@ set_lr: 0.00001
 norm: instance
 base: 64
 optimizer: SGD
-KLD_warmup_fraction: 0.005
+KLD_warmup_fraction: null
+KLD_mask: false

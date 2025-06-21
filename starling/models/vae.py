@@ -73,6 +73,7 @@ class VAE(pl.LightningModule):
         base: int = 64,
         optimizer: str = "SGD",
         KLD_warmup_fraction: float = 0,
+        KLD_mask: bool = False,
         weights_type: str = None,  # Here for compatibility, not used in VAE
     ) -> None:
         """
@@ -146,6 +147,7 @@ class VAE(pl.LightningModule):
         # Loss params
         self.loss_type = loss_type
         self.weights_type = weights_type
+        self.kld_mask = KLD_mask
 
         # Learning rate params
         self.config_scheduler = lr_scheduler
@@ -411,16 +413,18 @@ class VAE(pl.LightningModule):
         # For more information of KLD loss check out Appendix B:
         # https://arxiv.org/abs/1312.6114
 
-        KLD_mask = self.get_KLD_mask(mask)
-
-        # Apply the mask to KLD calculation
-        KLD = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
-        KLD = KLD * KLD_mask  # Apply mask to exclude padding regions
-        KLD = torch.sum(KLD) / torch.sum(KLD_mask)  # Average over non-padding elements
-
-        # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
-        # # Simple average across batch
-        # KLD = KLD.mean()
+        if self.kld_mask:
+            KLD_mask = self.get_KLD_mask(mask)
+            # Apply the mask to KLD calculation
+            KLD = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+            KLD = KLD * KLD_mask  # Apply mask to exclude padding regions
+            KLD = torch.sum(KLD) / torch.sum(
+                KLD_mask
+            )  # Average over non-padding elements
+        else:
+            KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
+            # Simple average across batch
+            KLD = KLD.mean()
 
         # In vae_loss:
         if self.trainer.training:
