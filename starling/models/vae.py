@@ -24,7 +24,7 @@ class KLDWeightScheduler:
         self.warmup_fraction = warmup_fraction
         self.current_step = 0
         self.total_warmup_steps = None
-        self._current_weight = 0
+        self._current_weight = None
 
     def configure(self, total_training_steps: int):
         """Configure the scheduler with training step information"""
@@ -52,7 +52,10 @@ class KLDWeightScheduler:
     @property
     def current_weight(self):
         """Get the current KLD weight"""
-        return self._current_weight
+        if self._current_weight is None:
+            return self._max_weight
+        else:
+            return self._current_weight
 
 
 class VAE(pl.LightningModule):
@@ -316,6 +319,30 @@ class VAE(pl.LightningModule):
 
         return log_pxz
 
+    def get_KLD_mask(self, mask):
+        seq_length = mask[:, 0, 0, :]
+        seq_length = (seq_length != 0).sum(dim=1) + 1
+
+        KLD_mask = torch.zeros_like(mask)
+
+        batch_size = mask.shape[0]
+        for i in range(batch_size):
+            length = seq_length[i].item()
+            # Set valid region to 1.0 (exclude padding)
+            KLD_mask[i, :, :length, :length] = 1.0
+
+        # Downsample to 24x24 using nearest or average
+        KLD_mask = F.interpolate(
+            KLD_mask.float(), size=(24, 24), mode="nearest"
+        )  # or 'area' or 'bilinear'
+
+        # Optionally binarize again (only needed if you used averaging or bilinear)
+        KLD_mask = (KLD_mask > 0.5).float()  # Shape: (B, 1, 24, 24)
+
+        KLD_mask[:, :, :5, :5] = 1.0
+
+        return KLD_mask
+
     def vae_loss(
         self,
         data_reconstructed: torch.Tensor,
@@ -383,15 +410,24 @@ class VAE(pl.LightningModule):
 
         # For more information of KLD loss check out Appendix B:
         # https://arxiv.org/abs/1312.6114
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
-        # Simple average across batch
-        KLD = KLD.mean()
+
+        KLD_mask = self.get_KLD_mask(mask)
+
+        # Apply the mask to KLD calculation
+        KLD = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+        KLD = KLD * KLD_mask  # Apply mask to exclude padding regions
+        KLD = torch.sum(KLD) / torch.sum(KLD_mask)  # Average over non-padding elements
+
+        # KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
+        # # Simple average across batch
+        # KLD = KLD.mean()
 
         # In vae_loss:
         if self.trainer.training:
             KLD_weight = self.kld_scheduler.get_weight()
         else:
             KLD_weight = self.kld_scheduler.max_weight
+
         loss = recon + KLD_weight * KLD
 
         return {"loss": loss, "recon": recon, "KLD": KLD}
