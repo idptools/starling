@@ -204,7 +204,7 @@ class DDIMSampler(nn.Module):
         x = x * self.ddpm_model.latent_space_std + self.ddpm_model.latent_space_mean
 
         # Decode the latents to get the distance maps
-        x = self.encoder_model.decode(x)
+        x = self.ddpm_model.distance_map_encoder.decode(x)
 
         return x
 

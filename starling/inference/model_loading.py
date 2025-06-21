@@ -45,9 +45,6 @@ class ModelManager:
         if not os.path.exists(ddpm_path):
             raise FileNotFoundError(f"DDPM model {ddpm_path} not found.")
 
-        # Load the encoder model
-        encoder_model = VAE.load_from_checkpoint(encoder_path, map_location=device)
-
         # Load the diffusion model
         sequence_encoder = SequenceEncoder(12, 512, 8)
         diffusion_model = DiffusionModel.load_from_checkpoint(
@@ -62,10 +59,10 @@ class ModelManager:
                 labels_dim=configs.UNET_LABELS_DIM,
             ),
             sequence_encoder=sequence_encoder,
-            # encoder_model=encoder_model,
+            distance_map_encoder=encoder_path,
             map_location=device,
         )
-
+        encoder_model = None
         return encoder_model, diffusion_model
 
     def get_models(
