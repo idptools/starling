@@ -13,4 +13,3 @@ norm: instance
 base: 64
 optimizer: SGD
 KLD_warmup_fraction: null
-KLD_mask: false
