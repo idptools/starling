@@ -391,7 +391,7 @@ class DiffusionModel(pl.LightningModule):
             self._initialize_latent_scaling(latent_encoding)
 
         # Z-score the latent encoding
-        latent_encoding = latent_encoding * self.latent_space_std
+        latent_encoding = latent_encoding * self.latent_space_scaling_factor
 
         # Compute loss
         loss = self.forward(
@@ -416,7 +416,7 @@ class DiffusionModel(pl.LightningModule):
                 ).mode()
 
         # Z-score the latent encoding
-        latent_encoding = latent_encoding * self.latent_space_std
+        latent_encoding = latent_encoding * self.latent_space_scaling_factor
 
         loss = self.forward(
             latent_encoding, labels=sequences, mask=sequence_attention_mask
