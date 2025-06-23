@@ -93,9 +93,10 @@ class DDPMDataLoader(pl.LightningDataModule):
         )
 
         # Start the processing pipeline
+        dataset = dataset.select(self._key_filter)
         pipeline = dataset.shuffle(self.shuffle_buffer).decode(self._npz_decoder)
 
-        pipeline = pipeline.map(self._apply_filter_map)
+        # pipeline = pipeline.map(self._apply_filter_map)
 
         # Complete the processing pipeline
         return pipeline.map(self._process_sample).batched(
@@ -108,6 +109,11 @@ class DDPMDataLoader(pl.LightningDataModule):
             return sample
         else:
             return None
+
+    def _key_filter(self, sample):
+        """Filter based on keys before decoding content"""
+        # Check if the sample key contains the right ionic strength
+        return f"{self.ionic_strength}" in sample["__key__"]
 
     def _filter_sample(self, sample):
         """Filter samples based on custom training criteria"""
