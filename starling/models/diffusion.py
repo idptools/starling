@@ -157,10 +157,8 @@ class DiffusionModel(pl.LightningModule):
 
         # Register scaling factor buffer (calculated during first training step)
         # Used to normalize latent space to unit variance per Reference #3
-        self.register_buffer("latent_space_std", torch.tensor(1.0, dtype=torch.float32))
-
         self.register_buffer(
-            "latent_space_mean", torch.tensor(1.0, dtype=torch.float32)
+            "latent_space_scaling_factor", torch.tensor(1.0, dtype=torch.float32)
         )
 
         # Calculate diffusion process parameters
@@ -361,19 +359,19 @@ class DiffusionModel(pl.LightningModule):
             Batch of encoded latent vectors
         """
         # Calculate local mean and standard deviation
-        local_mean = latent_encoding.mean()
+        # local_mean = latent_encoding.mean()
         local_std = latent_encoding.std()
 
         # Gather from all processes and compute global mean and standard deviation
-        gathered_mean = self.all_gather(local_mean)
+        # gathered_mean = self.all_gather(local_mean)
         gathered_std = self.all_gather(local_std)
 
-        mean_mean = gathered_mean.mean()
-        mean_std = gathered_std.mean()
+        # mean_mean = gathered_mean.mean()
+        mean_std = 1 / gathered_std.mean()
 
         # Update the registered buffers with computed values
-        self.latent_space_mean = mean_mean.float().to(self.device)
-        self.latent_space_std = mean_std.float().to(self.device)
+        # self.latent_space_mean = mean_mean.float().to(self.device)
+        self.latent_space_scaling_factor = mean_std.float().to(self.device)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         latent_encoding, sequences, sequence_attention_mask = (
@@ -393,9 +391,7 @@ class DiffusionModel(pl.LightningModule):
             self._initialize_latent_scaling(latent_encoding)
 
         # Z-score the latent encoding
-        latent_encoding = (
-            latent_encoding - self.latent_space_mean
-        ) / self.latent_space_std
+        latent_encoding = latent_encoding * self.latent_space_std
 
         # Compute loss
         loss = self.forward(
@@ -420,9 +416,7 @@ class DiffusionModel(pl.LightningModule):
                 ).mode()
 
         # Z-score the latent encoding
-        latent_encoding = (
-            latent_encoding - self.latent_space_mean
-        ) / self.latent_space_std
+        latent_encoding = latent_encoding * self.latent_space_std
 
         loss = self.forward(
             latent_encoding, labels=sequences, mask=sequence_attention_mask
