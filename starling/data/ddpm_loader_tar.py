@@ -87,7 +87,7 @@ class DDPMDataLoader(pl.LightningDataModule):
         # Configure the options based on training or validation
         dataset = wds.WebDataset(
             tar_files,
-            nodesplitter=wds.split_by_node,
+            nodesplitter=wds.split_by_worker,
             resampled=is_training,  # Only enable infinite iteration for training
             shardshuffle=True,
         )
@@ -225,7 +225,12 @@ if __name__ == "__main__":
     data_module.setup()
     train_loader = data_module.train_dataloader()
     for batch in tqdm(train_loader):
-        # import pdb
+        # sequence_lengths = (batch["sequence"] != 0).sum(dim=1)
 
-        # pdb.set_trace()
+        # max_seq_length = sequence_lengths.max().item()
+
+        # if max_seq_length == 384:
+        #     import pdb
+
+        #     pdb.set_trace()
         pass

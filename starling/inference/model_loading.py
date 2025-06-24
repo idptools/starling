@@ -62,7 +62,10 @@ class ModelManager:
             distance_map_encoder=encoder_path,
             map_location=device,
         )
-        encoder_model = None
+        encoder_model = VAE.load_from_checkpoint(
+            encoder_path,
+            map_location=device,
+        )
         return encoder_model, diffusion_model
 
     def get_models(
@@ -111,12 +114,16 @@ class ModelManager:
         """
         compile_kwargs = configs.TORCH_COMPILATION["options"].copy()
 
-        self.diffusion_model.model = torch.compile(
-            self.diffusion_model.model, **compile_kwargs
+        self.diffusion_model.unet_model = torch.compile(
+            self.diffusion_model.unet_model, **compile_kwargs
         )
-        self.diffusion_model.encoder_model.decoder = torch.compile(
-            self.diffusion_model.encoder_model.decoder, **compile_kwargs
+        self.encoder_model.decoder = torch.compile(
+            self.encoder_model.decoder, **compile_kwargs
         )
+
+        # self.diffusion_model.sequence_encoder = torch.compile(
+        #     self.diffusion_model.sequence_encoder, **compile_kwargs
+        # )
 
         print(
             "\nCompiling the diffusion model for faster inference, this may take a while..."
