@@ -217,6 +217,14 @@ class VAE(pl.LightningModule):
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
 
+    def setup(self, stage=None):
+        """Set up the model, including optional compilation."""
+        if stage == "fit":
+            # Compile the forward components separately for better optimization
+            self.encode = torch.compile(self.encode, mode="max-autotune")
+            self.decode = torch.compile(self.decode, mode="max-autotune")
+            self.forward = torch.compile(self.forward, mode="max-autotune")
+
     def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
         Takes the data and encodes it into the latent space,
