@@ -9,6 +9,35 @@ from tqdm import tqdm
 from starling.utilities import helix_dm
 
 
+def symmetrize_distance_maps(dist_maps: torch.Tensor) -> torch.Tensor:
+    """
+    Symmetrize a batch of distance maps in PyTorch.
+
+    Parameters
+    ----------
+    dist_maps : torch.Tensor
+        Tensor of shape (B, N, N) representing pairwise distances.
+
+    Returns
+    -------
+    torch.Tensor
+        Symmetrized distance maps with zero diagonal.
+    """
+    B, C, N, _ = dist_maps.shape
+
+    # Clone to avoid modifying input tensor in-place
+    dist_maps = dist_maps.clone()
+
+    # Reflect upper triangle onto lower triangle
+    i, j = torch.triu_indices(N, N, offset=1)
+    dist_maps[:, :, j, i] = dist_maps[:, :, i, j]
+
+    # Set diagonal to zero
+    dist_maps[:, :, torch.arange(N), torch.arange(N)] = 0.0
+
+    return dist_maps
+
+
 class Constraint(ABC):
     def __init__(
         self,
@@ -135,6 +164,7 @@ class Constraint(ABC):
             latents_copy = latents.clone().requires_grad_(True)
             scaled_latents = latents_copy / self.latent_space_scaling_factor
             distance_maps = self.encoder_model.decode(scaled_latents)
+            distance_maps = symmetrize_distance_maps(distance_maps)
 
             # Get per-sample losses and total loss
             per_batch_loss, loss = self.compute_loss(distance_maps)
@@ -146,7 +176,13 @@ class Constraint(ABC):
             time_scale = self.get_time_scale(timestep)
 
             # Calculate per-sample loss scaling
-            loss_scale = per_batch_loss / per_batch_loss.mean()
+            mean_loss = per_batch_loss.mean()
+            if mean_loss > 1e-6:
+                loss_scale = per_batch_loss / mean_loss
+            else:
+                # When mean loss is very small, use a uniform scale
+                loss_scale = torch.ones_like(per_batch_loss)
+            # loss_scale = per_batch_loss / per_batch_loss.mean()
 
             # Prevent extreme scaling
             max_scale_factor = 2.0
@@ -344,7 +380,6 @@ class HelicityConstraint(Constraint):
 
         # Calculate harmonic potential for the excess deviation
         region_loss = 0.5 * self.force_constant * (excess**2) * self.mask
-
         normalization_factor = self.mask.sum()
         per_batch_loss = (
             reduce(region_loss, "b c h w -> b", "sum") / normalization_factor
@@ -422,15 +457,14 @@ class RgConstraint(Constraint):
             Calculated Rg values for each protein in the batch
         """
         sequence_length = torch.tensor(self.sequence_length, device=self.device)
-        #! Should this be self.sequence_length + 1? or self.sequence_length?
         distance_maps = distance_maps[
             :, :, : self.sequence_length, : self.sequence_length
         ]
 
         squared_distances = torch.square(distance_maps)
+
         distances = reduce(squared_distances, "b c h w -> b", "sum")
         rg_vals = torch.sqrt(distances / (2 * torch.pow(sequence_length, 2)))
-
         return rg_vals
 
     def compute_loss(
