@@ -73,6 +73,7 @@ class VAE(pl.LightningModule):
         base: int = 64,
         optimizer: str = "SGD",
         KLD_warmup_fraction: float = 0,
+        compile_mode: str = "max-autotune",
         weights_type: str = None,  # Here for compatibility, not used in VAE
     ) -> None:
         """
@@ -137,6 +138,7 @@ class VAE(pl.LightningModule):
                 "decoder": vae_components.Resnet34_Decoder,
             },
         }
+        self.compile_mode = compile_mode
 
         self.optimizer = optimizer
 
@@ -219,11 +221,11 @@ class VAE(pl.LightningModule):
 
     def setup(self, stage=None):
         """Set up the model, including optional compilation."""
-        if stage == "fit":
+        if stage == "fit" and self.compile_mode is not None:
             # Compile the forward components separately for better optimization
-            self.encode = torch.compile(self.encode, mode="max-autotune")
-            self.decode = torch.compile(self.decode, mode="max-autotune")
-            self.forward = torch.compile(self.forward, mode="max-autotune")
+            self.encode = torch.compile(self.encode, mode=self.compile_mode)
+            self.decode = torch.compile(self.decode, mode=self.compile_mode)
+            self.forward = torch.compile(self.forward, mode=self.compile_mode)
 
     def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
