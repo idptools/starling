@@ -38,7 +38,7 @@ def setup_checkpoints(output_path):
         monitor="epoch_val_loss",
         dirpath=output_path,
         filename="model-kernel-{epoch:02d}-{epoch_val_loss:.2f}",
-        save_top_k=1,
+        save_top_k=-1,
         mode="min",
     )
     save_last_checkpoint = ModelCheckpoint(
