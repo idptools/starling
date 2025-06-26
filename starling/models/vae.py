@@ -31,17 +31,20 @@ class KLDWeightScheduler:
         if self.warmup_fraction is not None:
             self.total_warmup_steps = int(total_training_steps * self.warmup_fraction)
 
-    def get_weight(self) -> float:
-        """Get current KLD weight and increment step counter"""
+    def get_weight(self, step=None) -> float:
+        """Get current KLD weight for a given step (or max weight if no warmup)"""
         if self.warmup_fraction is None or self.total_warmup_steps is None:
             return self._max_weight
 
+        # Use provided step or default to max weight
+        if step is None:
+            return self._max_weight
+
         weight = min(
-            (self.current_step / self.total_warmup_steps) * self._max_weight,
+            (step / self.total_warmup_steps) * self._max_weight,
             self._max_weight,
         )
         self._current_weight = weight
-        self.current_step += 1
         return weight
 
     @property
@@ -329,30 +332,6 @@ class VAE(pl.LightningModule):
 
         return log_pxz
 
-    def get_KLD_mask(self, mask):
-        seq_length = mask[:, 0, 0, :]
-        seq_length = (seq_length != 0).sum(dim=1) + 1
-
-        KLD_mask = torch.zeros_like(mask)
-
-        batch_size = mask.shape[0]
-        for i in range(batch_size):
-            length = seq_length[i].item()
-            # Set valid region to 1.0 (exclude padding)
-            KLD_mask[i, :, :length, :length] = 1.0
-
-        # Downsample to 24x24 using nearest or average
-        KLD_mask = F.interpolate(
-            KLD_mask.float(), size=(24, 24), mode="nearest"
-        )  # or 'area' or 'bilinear'
-
-        # Optionally binarize again (only needed if you used averaging or bilinear)
-        KLD_mask = (KLD_mask > 0.5).float()  # Shape: (B, 1, 24, 24)
-
-        KLD_mask[:, :, :5, :5] = 1.0
-
-        return KLD_mask
-
     def vae_loss(
         self,
         data_reconstructed: torch.Tensor,
@@ -427,7 +406,7 @@ class VAE(pl.LightningModule):
 
         # In vae_loss:
         if self.trainer.training:
-            KLD_weight = self.kld_scheduler.get_weight()
+            KLD_weight = self.kld_scheduler.get_weight(self.trainer.global_step)
         else:
             KLD_weight = self.kld_scheduler.max_weight
 
@@ -683,7 +662,7 @@ class VAE(pl.LightningModule):
                 "scheduler": CosineAnnealingLR(
                     optimizer,
                     T_max=num_epochs,
-                    eta_min=1e-8,
+                    eta_min=1e-6,
                 ),
                 "monitor": self.monitor,
                 "interval": "epoch",
@@ -723,9 +702,9 @@ class VAE(pl.LightningModule):
 
     def on_train_start(self):
         # Calculate correct training steps (not including validation)
-        steps_per_epoch = len(self.trainer.train_dataloader) // self.trainer.num_devices
-        training_steps = steps_per_epoch * self.trainer.max_epochs
-        self.kld_scheduler.configure(training_steps)
+        # steps_per_epoch = len(self.trainer.train_dataloader) // self.trainer.num_devices
+        # training_steps = steps_per_epoch * self.trainer.max_epochs
+        self.kld_scheduler.configure(self.trainer.estimated_stepping_batches)
 
     def _reset_epoch_metrics(self) -> None:
         """Reset all epoch-level metric accumulators to zero."""
