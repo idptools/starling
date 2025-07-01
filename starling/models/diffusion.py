@@ -142,7 +142,7 @@ class DiffusionModel(pl.LightningModule):
         else:
             self.distance_map_encoder = None
 
-        self.in_channels = self.unet_model.in_channels
+        # self.in_channels = self.unet_model.in_channels
 
         # Learning rate params
         self.set_lr = set_lr

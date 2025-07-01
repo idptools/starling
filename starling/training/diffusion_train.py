@@ -20,6 +20,7 @@ from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
+from starling.models.vit import ViT
 
 
 @rank_zero_only
@@ -89,6 +90,7 @@ def setup_models(config):
     unet_config_dict = OmegaConf.to_container(config.unet, resolve=True)
     seq_encoder_dict = OmegaConf.to_container(config.sequence_encoder, resolve=True)
     UNet_model = UNetConditional(**unet_config_dict)
+    vit = ViT(12, 512, 8, 512)
     sequence_encoder = SequenceEncoder(**seq_encoder_dict)
 
     if config.diffusion.type == "continuous":
@@ -105,13 +107,13 @@ def setup_models(config):
     if config.trainer.fine_tune:
         diffusion_model = diffusion_models[config.diffusion.type].load_from_checkpoint(
             model_path,
-            unet_model=UNet_model,
+            unet_model=vit,
             sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )
     else:
         diffusion_model = diffusion_models[config.diffusion.type](
-            unet_model=UNet_model,
+            unet_model=vit,
             sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )
