@@ -11,6 +11,7 @@ from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
+from starling.models.vit import ViT
 
 
 class ModelManager:
@@ -49,15 +50,7 @@ class ModelManager:
         sequence_encoder = SequenceEncoder(12, 512, 8)
         diffusion_model = DiffusionModel.load_from_checkpoint(
             ddpm_path,
-            unet_model=UNetConditional(
-                in_channels=1,
-                out_channels=1,
-                base=64,
-                norm="group",
-                blocks=[2, 2, 2],
-                middle_blocks=2,
-                labels_dim=configs.UNET_LABELS_DIM,
-            ),
+            unet_model=ViT(12, 512, 8, 512),
             sequence_encoder=sequence_encoder,
             distance_map_encoder=encoder_path,
             map_location=device,

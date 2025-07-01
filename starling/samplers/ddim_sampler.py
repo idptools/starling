@@ -155,7 +155,7 @@ class DDIMSampler(nn.Module):
 
         # Initialize the latents with noise
         x = torch.randn(
-            [num_conformations, self.ddpm_model.in_channels, 24, 24],
+            [num_conformations, 1, 24, 24],
             device=device,
         )
 
