@@ -1,12 +1,49 @@
 import torch
-from einops import rearrange
+import torch.nn as nn
+from einops import rearrange, repeat
 from torch import nn
 
 from starling.data.positional_encodings import (
     PositionalEncoding1D,
     PositionalEncoding2D,
 )
-from starling.models.attention import CrossAttention, SelfAttention
+from starling.models.attention import CrossAttention, MultiHeadAttention, SelfAttention
+
+
+class AdaLayerNorm(nn.Module):
+    def __init__(self, embed_dim, cond_dim):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.cond_dim = cond_dim
+
+        # Map conditioning (t + c) to scale and shift
+        self.cond_mlp = nn.Sequential(
+            nn.Linear(cond_dim, embed_dim * 2),  # for gamma and beta
+            nn.SiLU(),
+            nn.Linear(embed_dim * 2, embed_dim * 2),  # outputs [gamma | beta]
+        )
+
+        # no learned gamma/beta
+        self.norm = nn.LayerNorm(embed_dim, elementwise_affine=False)
+
+    def forward(self, x, cond):
+        """
+        x: (B, N, D) - token embeddings
+        cond: (B, cond_dim) - conditioning vector (e.g., t_emb + c_emb)
+        """
+        # Apply vanilla LayerNorm without scale/shift
+        x_norm = self.norm(x)
+
+        # Generate dynamic gamma and beta
+        gamma_beta = self.cond_mlp(cond)  # (B, 2D)
+        gamma, beta = gamma_beta.chunk(2, dim=-1)  # Each is (B, D)
+
+        # Expand for broadcasting over sequence
+        gamma = gamma.unsqueeze(1)  # (B, 1, D)
+        beta = beta.unsqueeze(1)  # (B, 1, D)
+
+        # Apply adaptive scale and shift
+        return gamma * x_norm + beta
 
 
 class GeGLU(nn.Module):
@@ -59,16 +96,8 @@ class FeedForward(nn.Module):
             nn.Linear(embed_dim * 4, embed_dim),
         )
 
-        self.norm = nn.LayerNorm(embed_dim)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dim() == 4:
-            x = rearrange(x, "b c h w -> b h w c")
-
-        x = self.net(self.norm(x))
-
-        if x.dim() == 4:
-            x = rearrange(x, "b h w c -> b c h w")
+        x = self.net(x)
         return x
 
 
@@ -89,15 +118,20 @@ class TransformerEncoder(nn.Module):
         """
         super().__init__()
 
-        self.self_attention = SelfAttention(embed_dim, num_heads)
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.norm2 = nn.LayerNorm(embed_dim)
+
+        self.self_attention = MultiHeadAttention(embed_dim, num_heads)
         self.feed_forward = FeedForward(embed_dim)
 
     def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
-        # Prenorm is happening within the self attention layer
-        x = x + self.self_attention(x, attention_mask=mask)
+        x_normed = self.norm1(x)
+        x = x + self.self_attention(
+            x_normed, context=x_normed, query_mask=mask, context_mask=mask
+        )
 
-        # Prenorm is happening within the feed forward layer
-        x = x + self.feed_forward(x)
+        x_normed = self.norm2(x)
+        x = x + self.feed_forward(x_normed)
         return x
 
 
@@ -128,17 +162,26 @@ class SequenceEncoder(nn.Module):
             [TransformerEncoder(embed_dim, num_heads) for _ in range(num_layers)]
         )
 
+        self.final_norm = nn.LayerNorm(embed_dim)
+
     def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
+        # Convert input sequence to embeddings
         x = self.sequence_learned_embedding(x)
+
         # Add positional encodings to the input data
         x = self.sequence_positional_encoding(x)
+
         for layer in self.layers:
             x = layer(x, mask=mask)
+
+        # Apply final normalization
+        x = self.final_norm(x)
+
         return x
 
 
-class TransformerDecoder(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, context_dim):
+class DiTBlock(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, context_dim: int):
         """
         Transformer decoder layer. The transformer decoder layer consists of a self attention layer,
         cross attention layer and a feed forward layer. The self attention layer is used to capture the
@@ -157,19 +200,29 @@ class TransformerDecoder(nn.Module):
         """
         super().__init__()
 
-        self.self_attention = SelfAttention(embed_dim, num_heads)
-        self.cross_attention = CrossAttention(embed_dim, num_heads, context_dim)
+        self.norm1 = nn.LayerNorm(embed_dim, context_dim)
+        self.norm2 = nn.LayerNorm(embed_dim, context_dim)
+        self.norm3 = nn.LayerNorm(embed_dim, context_dim)
+
+        self.self_attention = MultiHeadAttention(embed_dim, num_heads)
+        self.cross_attention = MultiHeadAttention(embed_dim, num_heads, context_dim)
+
         self.feed_forward = FeedForward(embed_dim)
 
     def forward(self, x: torch.Tensor, context, context_mask) -> torch.Tensor:
-        # Prenorm is happening within the self attention layer
-        x = x + self.self_attention(x)
+        # Prenorm the input to the self attention layer
+        x_normed = self.norm1(x)
+        x = x + self.self_attention(query=x_normed, context=x_normed)
 
-        # Prenorm is happening within the cross attention layer
-        x = x + self.cross_attention(x, context, context_mask=context_mask)
+        # Prenorm the input to the cross attention layer (context is layernormed)
+        x_normed = self.norm2(x)
+        x = x + self.cross_attention(
+            query=x_normed, context=context, context_mask=context_mask
+        )
 
-        # Prenorm is happening within the feed forward layer
-        x = x + self.feed_forward(x)
+        # Prenorm the input to the feed forward layer
+        x_normed = self.norm3(x)
+        x = x + self.feed_forward(x_normed)
         return x
 
 
@@ -197,7 +250,7 @@ class SpatialTransformer(nn.Module):
         self.image_positional_encodings = PositionalEncoding2D(embed_dim)
         self.group_norm = nn.GroupNorm(num_groups=32, num_channels=embed_dim)
         self.conv_in = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
-        self.transformer_block = TransformerDecoder(embed_dim, num_heads, context_dim)
+        # self.transformer_block = TransformerDecoder(embed_dim, num_heads, context_dim)
         self.conv_out = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
 
     def forward(self, x: torch.Tensor, context, mask) -> torch.Tensor:

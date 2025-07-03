@@ -29,10 +29,6 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
 
-        # Normalizations
-        self.query_norm = nn.LayerNorm(embed_dim)
-        self.context_norm = nn.LayerNorm(self.context_dim)
-
         # Projections
         self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.key_proj = nn.Linear(self.context_dim, embed_dim, bias=False)
@@ -40,21 +36,14 @@ class MultiHeadAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, query, context=None, query_mask=None, context_mask=None):
+    def forward(self, query, context, query_mask=None, context_mask=None):
         """
         query:   (B, N, Dq) — tokens to be conditioned
         context: (B, S, Dc) — conditioning source (or None for self-attention)
         """
-        if context is None:
-            context = query
-            context_mask = query_mask
 
         B, N, _ = query.shape
         _, S, _ = context.shape
-
-        # Normalize
-        query = self.query_norm(query)
-        context = self.context_norm(context)
 
         # Project to Q, K, V
         Q = self.query_proj(query)
