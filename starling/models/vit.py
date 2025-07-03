@@ -3,7 +3,7 @@ from einops import rearrange
 from einops.layers.torch import Rearrange
 from torch import nn
 
-from starling.models.transformer import TransformerDecoder
+from starling.models.transformer import DiTBlock
 from starling.models.unet import SinusoidalPosEmb
 
 
@@ -75,10 +75,7 @@ class ViT(nn.Module):
         )
 
         self.transformer_layers = nn.ModuleList(
-            [
-                TransformerDecoder(embed_dim, num_heads, context_dim)
-                for _ in range(num_layers)
-            ]
+            [DiTBlock(embed_dim, num_heads, context_dim) for _ in range(num_layers)]
         )
 
         self.out_projection = nn.Sequential(
@@ -115,7 +112,7 @@ class ViT(nn.Module):
 
         # Run the input through the transformer layers
         for layer in self.transformer_layers:
-            x = layer(x, sequence, context_mask=mask)
+            x = layer(x, context=sequence, context_mask=mask)
 
         # Final linear layer to project the output back to the patch size
         x = self.out_projection(x)
