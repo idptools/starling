@@ -455,8 +455,9 @@ def create_ca_topology_from_coords(sequence, coords):
 
         residue = topology.add_residue(res_three_letter, chain)
 
-        # Add a CA atom to the residue
-        ca_atom = topology.add_atom("CA", md.element.carbon, residue)
+        # Add a CA atom to the residue; added formal_charge=0 to avoid warnings/errors
+        # about missing formal charges in MDTraj >1.10.0
+        ca_atom = topology.add_atom("CA", md.element.carbon, residue, formal_charge=0)
 
         # Connect the CA atom to the previous CA atom (if not the first residue)
         if i > 0:
