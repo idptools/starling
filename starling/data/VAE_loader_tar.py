@@ -35,6 +35,12 @@ class VAEdataloader(pl.LightningDataModule):
             self.bin_ends = self.filter_data["bin_end"].values
             self.accept_probs = self.filter_data["accept_prob"].values
 
+            self.accept_prob_table = np.zeros(384 + 1)
+            for start, end, prob in zip(
+                self.bin_starts, self.bin_ends, self.accept_probs
+            ):
+                self.accept_prob_table[start + 1 : end + 1] = prob
+
         # Calculate number of batches (can be replaced with metadata file reading)
         train_size = getattr(self.config, "train_size", 1_000_000)
         val_size = getattr(self.config, "val_size", 100_000)
@@ -43,12 +49,7 @@ class VAEdataloader(pl.LightningDataModule):
         self.n_val_batches = int(val_size) // int(self.effective_batch_size)
 
     def __get_accept_prob(self, seq_length):
-        # Binary search could be faster if bins are sorted and many
-        # For now, simple linear scan (usually bins < 100)
-
-        for start, end, prob in zip(self.bin_starts, self.bin_ends, self.accept_probs):
-            if start < seq_length <= end:
-                return prob
+        return self.accept_prob_table[seq_length]
 
     def setup(self, stage=None):
         """Create dataset objects for training and validation"""
@@ -116,24 +117,12 @@ class VAEdataloader(pl.LightningDataModule):
             return False
 
         # Example filtering based on distance map properties
-        distance_map = sample["distance_map.npz"]
-
-        # Add 1 because the first residue is False in the distance map
-        sequence_length = (distance_map != 0)[0].sum() + 1
+        sequence_length = (sample["sequence.npz"] != 0).sum()
 
         if np.random.random() < self.__get_accept_prob(sequence_length):
             return True
         else:
             return False
-
-        # if sequence_length >= 249:
-        #     return True
-        # else:
-        #     # Keep some smaller distance maps to avoid forgetting them
-        #     if np.random.random() < 0.15:
-        #         return True
-        #     else:
-        #         return False
 
     def _npz_decoder(self, key, data):
         """Decoder for NPZ files with error handling"""
@@ -204,6 +193,10 @@ class VAEdataloader(pl.LightningDataModule):
 
 
 if __name__ == "__main__":
+    from collections import Counter
+
+    import matplotlib.pyplot as plt
+
     config_path = os.path.join("..", "configs", "dataloader", "vae_dataloader.yaml")
     cfg = OmegaConf.load(config_path)
 
@@ -214,8 +207,38 @@ if __name__ == "__main__":
     # Initialize the datasets
     data_module.setup()
     train_loader = data_module.train_dataloader()
-    for batch in tqdm(train_loader):
-        # import pdb
 
-        # pdb.set_trace()  # Debugging breakpoint
-        pass
+    size_counter = Counter()
+    total = 0
+
+    for i, batch in enumerate(tqdm(train_loader)):
+        sizes = (batch[:, 0, 0, :] != 0).sum(dim=-1) + 1
+        for s in sizes.tolist():
+            size_counter[s] += 1
+            total += 1
+
+        # if (i + 1) % 100 == 0:
+        # print(f"\nFinal size distribution after {i + 1} batches:")
+        # for size, count in sorted(size_counter.items()):
+        #     print(f"Size {size}: {count}/{total} ({count / total:.4f})")
+
+        if (i + 1) % 100 == 0:
+            # Plot and save bar plot
+            plt.figure(figsize=(10, 5))
+            sorted_items = sorted(size_counter.items())
+            x = [size for size, _ in sorted_items]
+            y = [count / total for _, count in sorted_items]
+            plt.bar(x, y, color="skyblue")
+            plt.xlabel("Size")
+            plt.ylabel("Fraction of Total")
+            plt.title(f"Size Distribution after {i + 1} Batches")
+            plt.tight_layout()
+            plt.savefig("size_distribution.png")
+            plt.close()
+
+    # for batch in tqdm(train_loader):
+    #     sizes = (batch[:, 0, 0, :] != 0).sum(dim=-1) + 1
+    #     import pdb
+
+    #     pdb.set_trace()  # Debugging breakpoint
+    #     pass
