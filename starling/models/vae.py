@@ -19,15 +19,22 @@ torch.set_float32_matmul_precision("high")
 
 
 class KLDWeightScheduler:
-    def __init__(self, max_weight: float, warmup_fraction: float = None):
+    def __init__(
+        self,
+        max_weight: float,
+        warmup_fraction: float = None,
+        scheduler_type="cyclical",
+    ):
         self._max_weight = max_weight
         self.warmup_fraction = warmup_fraction
         self.current_step = 0
         self.total_warmup_steps = None
         self._current_weight = None
+        self.scheduler_type = scheduler_type
 
     def configure(self, total_training_steps: int):
         """Configure the scheduler with training step information"""
+        self.total_steps = total_training_steps
         if self.warmup_fraction is not None:
             self.total_warmup_steps = int(total_training_steps * self.warmup_fraction)
 
@@ -40,10 +47,25 @@ class KLDWeightScheduler:
         if step is None:
             return self._max_weight
 
-        weight = min(
-            (step / self.total_warmup_steps) * self._max_weight,
-            self._max_weight,
-        )
+        if self.scheduler_type == "linear":
+            weight = min(
+                (step / self.total_warmup_steps) * self._max_weight,
+                self._max_weight,
+            )
+        elif self.scheduler_type == "cyclical":
+            # 1 cycle is 20% of the total steps which amounts to 5 cycles
+            cycle_length = int(0.20 * self.total_steps)
+
+            # 50% of the cycle is the warmup-phase
+            ramp_steps = int(self.warmup_fraction * cycle_length)
+
+            cycle_step = step % cycle_length
+
+            if cycle_step < ramp_steps:
+                weight = (cycle_step / ramp_steps) * self._max_weight
+            else:
+                weight = self._max_weight
+
         self._current_weight = weight
         return weight
 
@@ -76,6 +98,7 @@ class VAE(pl.LightningModule):
         base: int = 64,
         optimizer: str = "SGD",
         KLD_warmup_fraction: float = 0,
+        KLD_scheduler_type: str = "cyclical",
         compile_mode: str = "max-autotune",
         weights_type: str = None,  # Here for compatibility, not used in VAE
     ) -> None:
@@ -159,12 +182,15 @@ class VAE(pl.LightningModule):
         # KLD loss parameters
         self.KLD_weight = KLD_weight
         self.KLD_warmup_fraction = KLD_warmup_fraction
+        self.KLD_scheduler_type = KLD_scheduler_type
         self.current_step = 0
 
         # Initialize KL scheduler if warmup is enabled
         # (Will be properly configured in on_train_start with actual step count)
         self.kld_scheduler = KLDWeightScheduler(
-            max_weight=KLD_weight, warmup_fraction=KLD_warmup_fraction
+            max_weight=KLD_weight,
+            warmup_fraction=KLD_warmup_fraction,
+            scheduler_type=self.KLD_scheduler_type,
         )
 
         # Metrics tracking for epoch-level statistics
