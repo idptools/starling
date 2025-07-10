@@ -1,10 +1,12 @@
 cuda: 1
 num_nodes: 1
 num_workers: 8
-num_epochs: 25
+num_epochs: 1
 gradient_clip_val: 1.0
 precision: bf16-mixed
 output_path: ionic-strength-model
 project_name: vae-ionic-strength
-checkpoint: /home/borna/.starling_weights/model-kernel-epoch=99-epoch_val_loss=1.72.ckpt
+wandb_id: null
+checkpoint: /work/bnovak/projects/sequence2ensemble/vae_training/resnet18_KLD_1e8_warmup_0_1_Adam_1e4/model-kernel-epoch=31-epoch_val_loss=1.75.ckpt
+# checkpoint: null
 fine_tune: true

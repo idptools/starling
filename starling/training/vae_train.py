@@ -17,8 +17,8 @@ from starling.models.vae import VAE
 
 
 @rank_zero_only
-def wandb_init(project: str = "starling"):
-    wandb.init(project=project)
+def wandb_init(project: str = "starling", id=None):
+    wandb.init(project=project, resume="allow", id=id)
 
 
 def setup_directories(output_path):
@@ -122,7 +122,7 @@ def train_vae(cfg: DictConfig):
     OmegaConf.save(cfg, f"{output_path}/config.yaml")
 
     # Initialize WandB
-    wandb_init(cfg.trainer.project_name)
+    wandb_init(cfg.trainer.project_name, id=cfg.trainer.get("wandb_id", None))
 
     """Set up model checkpoint callbacks."""
     checkpoint_callback = ModelCheckpoint(
