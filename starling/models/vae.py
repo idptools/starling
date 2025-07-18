@@ -407,6 +407,9 @@ class VAE(pl.LightningModule):
         # Mean squared error weighted by ground truth distance
         if self.loss_type == "mse":
             recon = F.mse_loss(data_reconstructed, data, reduction="none")
+            # Weights according to the distance between residues in the ground truth distance map
+            weights = 1 / (data + 1e-6)
+            recon = recon * weights
 
         # Negative log likelihood of the input data given the latent space
         elif self.loss_type == "nll":
