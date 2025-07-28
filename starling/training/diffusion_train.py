@@ -25,6 +25,7 @@ from starling.models.vit import ViT
 
 @rank_zero_only
 def wandb_init(project: str = "starling"):
+def wandb_init(project: str = "starling"):
     wandb.init(project=project)
 
 
@@ -41,20 +42,31 @@ def save_config(config, output_path):
 
 def setup_checkpoints(output_path):
     """Set up model checkpoint callbacks."""
+def setup_checkpoints(output_path):
+    """Set up model checkpoint callbacks."""
     checkpoint_callback = ModelCheckpoint(
+        monitor="epoch_val_loss",
+        dirpath=output_path,
+        filename="model-kernel-{epoch:02d}-{epoch_val_loss:.2f}",
         monitor="epoch_val_loss",
         dirpath=output_path,
         filename="model-kernel-{epoch:02d}-{epoch_val_loss:.2f}",
         save_top_k=1,
         mode="min",
+        mode="min",
     )
     save_last_checkpoint = ModelCheckpoint(
+        dirpath=output_path,
         dirpath=output_path,
         filename="last",
     )
     return checkpoint_callback, save_last_checkpoint
+    return checkpoint_callback, save_last_checkpoint
 
 
+def get_checkpoint_path(output_path):
+    """Determine the checkpoint path to resume training if available."""
+    checkpoint_pattern = os.path.join(output_path, "last.ckpt")
 def get_checkpoint_path(output_path):
     """Determine the checkpoint path to resume training if available."""
     checkpoint_pattern = os.path.join(output_path, "last.ckpt")
@@ -125,6 +137,8 @@ def setup_logger(config, diffusion_model):
     """Set up the WandB logger."""
     wandb_logger = WandbLogger(project=config.trainer.project_name)
     wandb_logger.watch(diffusion_model)
+    return wandb_logger
+
     return wandb_logger
 
 
@@ -198,6 +212,7 @@ def train_model(cfg: DictConfig):
         diffusion_model, dataset, ckpt_path=None if cfg.trainer.fine_tune else ckpt_path
     )
 
+    # Detach WandB logging
     # Detach WandB logging
     wandb_logger.experiment.unwatch(diffusion_model)
     wandb.finish()

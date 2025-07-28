@@ -171,6 +171,7 @@ def generate(
     show_per_step_progress_bar=True,
     pdb_trajectory=False,
     return_single_ensemble=False,
+    constraint=None,
     encoder_path=None,
     ddpm_path=None,
 ):
@@ -444,6 +445,7 @@ def generate(
         show_progress_bar,
         show_per_step_progress_bar,
         pdb_trajectory,
+        constraint=constraint,
         model_manager=generation.model_manager,
         encoder_path=encoder_path,
         ddpm_path=ddpm_path,

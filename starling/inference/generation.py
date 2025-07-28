@@ -12,6 +12,7 @@ from starling import configs
 from starling.data.tokenizer import StarlingTokenizer
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
+from starling.samplers.ddpm_sampler import DDPMSampler
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
     generate_3d_coordinates_from_distances,
@@ -242,6 +243,7 @@ def generate_backend(
     show_per_step_progress_bar,
     pdb_trajectory,
     model_manager=model_manager,
+    constraint=None,
     encoder_path=None,
     ddpm_path=None,
 ):
@@ -352,7 +354,7 @@ def generate_backend(
             ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps
         )
     else:
-        sampler = diffusion
+        sampler = DDPMSampler(ddpm_model=diffusion, encoder_model=encoder_model)
 
     # get num_batchs and remaining samples
     num_batches = conformations // batch_size
@@ -397,6 +399,7 @@ def generate_backend(
                 show_per_step_progress_bar=show_per_step_progress_bar,
                 batch_count=batch + 1,
                 max_batch_count=real_batch_count,
+                constraint=constraint,
             )
             starling_dm.append(
                 [
@@ -413,6 +416,7 @@ def generate_backend(
                 show_per_step_progress_bar=show_per_step_progress_bar,
                 batch_count=real_batch_count,
                 max_batch_count=real_batch_count,
+                constraint=constraint,
             )
             starling_dm.append(
                 [
