@@ -1,10 +1,10 @@
 import glob
 import io
-import json
 import os
 from typing import List, Optional
 
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 import webdataset as wds
@@ -13,11 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 
-def npy_decoder(key, data):
-    return np.load(io.BytesIO(data), allow_pickle=False)
-
-
-class DDPMDataLoader(pl.LightningDataModule):
+class VAEdataloader(pl.LightningDataModule):
     def __init__(
         self,
         config,
@@ -30,28 +26,30 @@ class DDPMDataLoader(pl.LightningDataModule):
         self.num_workers = self.config.num_workers
         self.prefetch_factor = getattr(self.config, "prefetch_factor", 2)
         self.shuffle_buffer = getattr(self.config, "shuffle_buffer", 10000)
+        self.apply_filter = getattr(self.config, "apply_filter", True)
+        if self.apply_filter:
+            self.filter_data = pd.read_csv(
+                os.path.join(self.dataset_dir, "acceptance_probs.csv")
+            )
+            self.bin_starts = self.filter_data["bin_start"].values
+            self.bin_ends = self.filter_data["bin_end"].values
+            self.accept_probs = self.filter_data["accept_prob"].values
 
-        self.data_key = getattr(self.config, "data_key", "distance_map.npz")
-        self.ionic_strength = getattr(self.config, "ionic_strength", "150mM")
+            self.accept_prob_table = np.zeros(384 + 1)
+            for start, end, prob in zip(
+                self.bin_starts, self.bin_ends, self.accept_probs
+            ):
+                self.accept_prob_table[start + 1 : end + 1] = prob
 
         # Calculate number of batches (can be replaced with metadata file reading)
-        train_size = getattr(self.config, "train_size", None)
-        val_size = getattr(self.config, "val_size", None)
-
-        if train_size is None or val_size is None:
-            metadata_file = os.path.join(self.dataset_dir, "metadata.json")
-            if os.path.exists(metadata_file):
-                with open(metadata_file, "r") as f:
-                    metadata = json.load(f)
-                train_size = metadata[self.ionic_strength].get("train", 0)
-                val_size = metadata[self.ionic_strength].get("validation", 0)
-            else:
-                raise FileNotFoundError(
-                    f"Metadata file not found at {metadata_file}. Please provide train_size and val_size."
-                )
+        train_size = getattr(self.config, "train_size", 1_000_000)
+        val_size = getattr(self.config, "val_size", 100_000)
         self.effective_batch_size = effective_batch_size or self.batch_size
         self.n_train_batches = int(train_size) // int(self.effective_batch_size)
         self.n_val_batches = int(val_size) // int(self.effective_batch_size)
+
+    def __get_accept_prob(self, seq_length):
+        return self.accept_prob_table[seq_length]
 
     def setup(self, stage=None):
         """Create dataset objects for training and validation"""
@@ -71,32 +69,34 @@ class DDPMDataLoader(pl.LightningDataModule):
 
         # Create datasets - simpler pipeline with clear stages
         self.train_dataset = self._create_dataset(
-            tar_files=train_tar_files, is_training=True
+            tar_files=train_tar_files, is_training=True, apply_filter=self.apply_filter
         )
 
         self.val_dataset = self._create_dataset(
-            tar_files=val_tar_files, is_training=False
+            tar_files=val_tar_files, is_training=False, apply_filter=False
         )
 
     def _create_dataset(
         self,
         tar_files: List[str],
         is_training: bool = False,
+        apply_filter: bool = False,
     ):
         """Create a WebDataset with appropriate processing"""
         # Configure the options based on training or validation
         dataset = wds.WebDataset(
             tar_files,
-            nodesplitter=wds.split_by_worker,
+            nodesplitter=wds.split_by_node,
             resampled=is_training,  # Only enable infinite iteration for training
             shardshuffle=True,
         )
 
         # Start the processing pipeline
-        dataset = dataset.select(self._key_filter)
         pipeline = dataset.shuffle(self.shuffle_buffer).decode(self._npz_decoder)
 
-        # pipeline = pipeline.map(self._apply_filter_map)
+        # Apply filter only if requested (for training)
+        if apply_filter:
+            pipeline = pipeline.map(self._apply_filter_map)
 
         # Complete the processing pipeline
         return pipeline.map(self._process_sample).batched(
@@ -110,18 +110,16 @@ class DDPMDataLoader(pl.LightningDataModule):
         else:
             return None
 
-    def _key_filter(self, sample):
-        """Filter based on keys before decoding content"""
-        # Check if the sample key contains the right ionic strength
-        return f"{self.ionic_strength}" in sample["__key__"]
-
     def _filter_sample(self, sample):
         """Filter samples based on custom training criteria"""
+        # Your filtering criteria here
+        if sample is None or "distance_map.npz" not in sample:
+            return False
 
         # Example filtering based on distance map properties
-        # ionic_strength = sample["ionic_strength_mm.npz"]
-        ionic_strength = sample["__key__"].split("_")[-1]
-        if ionic_strength == self.ionic_strength:
+        sequence_length = (sample["sequence.npz"] != 0).sum()
+
+        if np.random.random() < self.__get_accept_prob(sequence_length):
             return True
         else:
             return False
@@ -137,19 +135,17 @@ class DDPMDataLoader(pl.LightningDataModule):
 
     def _process_sample(self, sample):
         """Process a single sample"""
-        # Extract the distance map and sequence
-        latents = sample[self.data_key]
-        sequence = sample["sequence.npz"]
+        if sample is None or "distance_map.npz" not in sample:
+            return None  # Skip bad samples
+
+        # Extract the distance map
+        distance_map = sample["distance_map.npz"]
 
         # Add channel dimension if needed
-        if len(latents.shape) == 2:
-            latents = latents[np.newaxis, :, :]
+        if len(distance_map.shape) == 2:
+            distance_map = distance_map[np.newaxis, :, :]
 
-        if len(sequence.shape) == 1:
-            sequence = sequence[np.newaxis, :]
-
-        # Return a tuple with all data components
-        return (latents, sequence)
+        return (distance_map,)
 
     def _collate_fn(self, batch):
         """Collate function that handles empty batches"""
@@ -158,31 +154,14 @@ class DDPMDataLoader(pl.LightningDataModule):
         if not batch:
             return None
 
-        # Stack latent vectors
-        latents = np.stack([item for item in batch[0]])
+        # Stack distance maps
+        distance_maps = np.stack([item for item in batch[0]])
 
-        # Stack sequences
-        sequences = np.stack([item[0] for item in batch[1]])
+        # Convert to torch tensor and desired data type (on CPU to avoid slowdown)
+        distance_maps = torch.from_numpy(distance_maps)
 
-        # Get the maximum sequence length
-        max_seq_length = (sequences != 0).sum(axis=1).max()
-
-        # Remove extraneous padding elements
-        sequences = sequences[:, :max_seq_length]
-
-        attention_mask = sequences != 0
-
-        # Convert to torch tensors (on CPU to avoid slowdown)
-        latents = torch.from_numpy(latents)
-        sequences = torch.from_numpy(sequences).to(torch.int32)
-        attention_mask = torch.from_numpy(attention_mask)
-
-        # Return as dictionary for clearer access in training loop
-        return {
-            "data": latents,
-            "sequence": sequences,
-            "attention_mask": attention_mask,
-        }
+        # BFloat16 conversion can happen on GPU during training
+        return distance_maps
 
     def train_dataloader(self):
         return (
@@ -214,23 +193,52 @@ class DDPMDataLoader(pl.LightningDataModule):
 
 
 if __name__ == "__main__":
-    config_path = os.path.join("..", "configs", "dataloader", "dataloader.yaml")
+    from collections import Counter
+
+    import matplotlib.pyplot as plt
+
+    config_path = os.path.join("..", "configs", "dataloader", "vae_dataloader.yaml")
     cfg = OmegaConf.load(config_path)
 
     effective_batch_size = 1 * 4 * 16
 
-    data_module = DDPMDataLoader(cfg.tar, effective_batch_size)
+    data_module = VAEdataloader(cfg.tar, effective_batch_size)
 
     # Initialize the datasets
     data_module.setup()
     train_loader = data_module.train_dataloader()
-    for batch in tqdm(train_loader):
-        # sequence_lengths = (batch["sequence"] != 0).sum(dim=1)
 
-        # max_seq_length = sequence_lengths.max().item()
+    size_counter = Counter()
+    total = 0
 
-        # if max_seq_length == 384:
-        #     import pdb
+    for i, batch in enumerate(tqdm(train_loader)):
+        sizes = (batch[:, 0, 0, :] != 0).sum(dim=-1) + 1
+        for s in sizes.tolist():
+            size_counter[s] += 1
+            total += 1
 
-        #     pdb.set_trace()
-        pass
+        # if (i + 1) % 100 == 0:
+        # print(f"\nFinal size distribution after {i + 1} batches:")
+        # for size, count in sorted(size_counter.items()):
+        #     print(f"Size {size}: {count}/{total} ({count / total:.4f})")
+
+        if (i + 1) % 100 == 0:
+            # Plot and save bar plot
+            plt.figure(figsize=(10, 5))
+            sorted_items = sorted(size_counter.items())
+            x = [size for size, _ in sorted_items]
+            y = [count / total for _, count in sorted_items]
+            plt.bar(x, y, color="skyblue")
+            plt.xlabel("Size")
+            plt.ylabel("Fraction of Total")
+            plt.title(f"Size Distribution after {i + 1} Batches")
+            plt.tight_layout()
+            plt.savefig("size_distribution.png")
+            plt.close()
+
+    # for batch in tqdm(train_loader):
+    #     sizes = (batch[:, 0, 0, :] != 0).sum(dim=-1) + 1
+    #     import pdb
+
+    #     pdb.set_trace()  # Debugging breakpoint
+    #     pass

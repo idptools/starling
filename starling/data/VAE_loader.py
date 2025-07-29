@@ -35,18 +35,20 @@ class MatrixDataset(torch.utils.data.Dataset):
 class MatrixDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        train_data=None,
-        val_data=None,
-        test_data=None,
-        batch_size=None,
-        num_workers=None,
+        train,
+        validation,
+        test,
+        batch_size,
+        num_workers,
+        prefetch_factor,
     ):
         super().__init__()
-        self.train_data = train_data
-        self.val_data = val_data
-        self.test_data = test_data
+        self.train_data = train
+        self.val_data = validation
+        self.test_data = test
         self.batch_size = batch_size
-        self.num_workers = num_workers  # Set this to 16
+        self.num_workers = num_workers
+        self.prefetch_factor = prefetch_factor
 
     def prepare_data(self):
         # Implement any data download or preprocessing here
@@ -77,7 +79,7 @@ class MatrixDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
-            prefetch_factor=5,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def val_dataloader(self):
@@ -87,7 +89,7 @@ class MatrixDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=True,
-            prefetch_factor=5,
+            prefetch_factor=self.prefetch_factor,
         )
 
     def test_dataloader(self):
@@ -96,6 +98,30 @@ class MatrixDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             persistent_workers=True,
-            prefetch_factor=5,
+            prefetch_factor=self.prefetch_factor,
             pin_memory=True,
         )
+
+
+if __name__ == "__main__":
+    from tqdm import tqdm
+
+    # Example usage
+    train_tsv = "/work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/train_dm_small.csv"
+    val_tsv = "/work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/validation_dm_small.csv"
+    test_tsv = "/work/bnovak/projects/sequence2ensemble/lammps_data/combined_ionic_strength_model/train_dm_small.csv"
+
+    data_module = MatrixDataModule(
+        train=train_tsv,
+        validation=val_tsv,
+        test=test_tsv,
+        batch_size=32,
+        num_workers=8,
+        prefetch_factor=5,
+    )
+
+    data_module.prepare_data()
+    data_module.setup("fit")
+
+    for batch in tqdm(data_module.train_dataloader()):
+        pass

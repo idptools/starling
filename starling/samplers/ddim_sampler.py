@@ -3,10 +3,17 @@ from typing import Tuple
 
 import numpy as np
 import torch
+from einops import rearrange
 from torch import nn
 from tqdm.auto import tqdm
 
-from starling.data.data_wrangler import one_hot_encode
+from starling.data.tokenizer import StarlingTokenizer
+from starling.inference.constraints import (
+    ConstraintLogger,
+    DistanceConstraint,
+    HelicityConstraint,
+    RgConstraint,
+)
 
 
 class DDIMSampler(nn.Module):
@@ -54,6 +61,9 @@ class DDIMSampler(nn.Module):
         self.n_steps = self.ddpm_model.num_timesteps
         self.ddim_discretize = ddim_discretize
         self.ddim_eta = ddim_eta
+        self.tokenizer = StarlingTokenizer()
+
+        self.device = self.ddpm_model.device
 
         # Ways to discretize the generative process
         if ddim_discretize == "uniform":
@@ -99,20 +109,14 @@ class DDIMSampler(nn.Module):
         torch.Tensor
             The labels to condition the generative process on.
         """
-        labels = (
-            torch.argmax(
-                torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
-            )
-            .to(torch.int64)
-            .squeeze()
-            .to(self.ddpm_model.device)
-        )
 
-        labels = self.ddpm_model.sequence2labels(labels)
+        labels = torch.tensor(self.tokenizer.encode(labels), device=self.device)
+        labels = rearrange(labels, "f -> 1 f")
+        attention_mask = torch.ones_like(labels, device=self.device, dtype=torch.bool)
 
-        labels = labels.unsqueeze(0)
+        labels = self.ddpm_model.sequence2labels(labels, attention_mask)
 
-        return labels
+        return labels, attention_mask
 
     @torch.no_grad()
     def sample(
@@ -124,6 +128,7 @@ class DDIMSampler(nn.Module):
         show_per_step_progress_bar: bool = True,
         batch_count: int = 1,
         max_batch_count: int = 1,
+        constraint=None,
     ) -> torch.Tensor:
         """
         Sample the generative process using the DDIM model.
@@ -156,18 +161,21 @@ class DDIMSampler(nn.Module):
         torch.Tensor
             The generated distance maps.
         """
-        device = self.ddpm_model.device
+
+        sequence_length = len(labels)
 
         # Initialize the latents with noise
         x = torch.randn(
-            [num_conformations, self.ddpm_model.in_channels, 24, 24],
-            device=device,
+            [num_conformations, 1, 24, 24],
+            device=self.device,
         )
 
         time_steps = np.flip(self.ddim_time_steps)
 
         # Get the labels to condition the generative process on
-        labels = self.generate_labels(labels)
+        labels, attention_mask = self.generate_labels(
+            labels,
+        )
 
         # initialize progress bar if we want to show it
         if show_per_step_progress_bar:
@@ -175,7 +183,21 @@ class DDIMSampler(nn.Module):
                 total=len(time_steps),
                 position=1,
                 leave=False,
-                desc=f"DDPM steps (batch {batch_count} of {max_batch_count})",
+                desc=f"DDIM steps (batch {batch_count} of {max_batch_count})",
+            )
+
+        if constraint is not None:
+            constraint_logger = ConstraintLogger(
+                n_steps=self.n_steps,
+                verbose=True,
+            )
+            constraint_logger.setup()
+
+            constraint.initialize(
+                self.encoder_model,
+                self.latent_space_scaling_factor,
+                self.n_steps,
+                sequence_length,
             )
 
         # Denoise the initial latent
@@ -187,24 +209,35 @@ class DDIMSampler(nn.Module):
 
             # Sample the generative process
             x, *_ = self.p_sample(
-                x,
-                labels,
-                ts,
-                step,
+                x=x,
+                c=labels,
+                t=ts,
+                attention_mask=attention_mask,
+                step=step,
                 index=index,
                 repeat_noise=repeat_noise,
                 temperature=temperature,
             )
+
+            # Apply custom constraint
+            if constraint is not None and step != 0:
+                x = constraint.apply(x, step, logger=constraint_logger)
+
             # update progress bar if we are showing it
             if show_per_step_progress_bar:
                 pbar_inner.update(1)
+
+        if constraint is not None:
+            constraint_logger.close()
 
         # if we have progress bar, close after finishing the steps.
         if show_per_step_progress_bar:
             pbar_inner.close()
 
         # Scale the latents back to the original scale
-        x = (1 / self.ddpm_model.latent_space_scaling_factor) * x
+        # x = x * self.ddpm_model.latent_space_std + self.ddpm_model.latent_space_mean
+
+        x = x * (1 / self.ddpm_model.latent_space_scaling_factor)
 
         # Decode the latents to get the distance maps
         x = self.encoder_model.decode(x)
@@ -217,6 +250,7 @@ class DDIMSampler(nn.Module):
         x: torch.Tensor,
         c: torch.Tensor,
         t: torch.Tensor,
+        attention_mask: torch.Tensor,
         step: int,
         index: int,
         repeat_noise: bool = False,
@@ -250,7 +284,10 @@ class DDIMSampler(nn.Module):
 
         # Predict the amount of noise in the latent based on the timestep and labels
 
-        predicted_noise = self.ddpm_model.model(x, t, c)
+        # print(f"x shape: {x.shape}")
+        # print(f"c shape: {c.shape}")
+
+        predicted_noise = self.ddpm_model.unet_model(x, t, c, attention_mask)
 
         # Calculate the previous latent and the predicted latent
         x_prev, pred_x0 = self.get_x_prev_and_pred_x0(

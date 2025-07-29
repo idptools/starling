@@ -158,7 +158,7 @@ def generate(
     conformations=configs.DEFAULT_NUMBER_CONFS,
     device=None,
     steps=configs.DEFAULT_STEPS,
-    ddim=True,
+    sampler="ddim",
     return_structures=False,
     batch_size=configs.DEFAULT_BATCH_SIZE,
     num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
@@ -171,6 +171,7 @@ def generate(
     show_per_step_progress_bar=True,
     pdb_trajectory=False,
     return_single_ensemble=False,
+    constraint=None,
     encoder_path=None,
     ddpm_path=None,
 ):
@@ -393,9 +394,9 @@ def generate(
                 f"Error: Directory {output_directory} does not exist."
             )
 
-    # check ddim is a bool
-    if not isinstance(ddim, bool):
-        raise ValueError("Error: DDIM must True or False.")
+    # check sampler is a string
+    if not isinstance(sampler, str):
+        raise ValueError("Error: sampler must be a string.")
 
     # check return_structures is a bool
     if not isinstance(return_structures, bool):
@@ -433,7 +434,7 @@ def generate(
         conformations,
         device,
         steps,
-        ddim,
+        sampler,
         return_structures,
         batch_size,
         num_cpus_mds,
@@ -444,6 +445,7 @@ def generate(
         show_progress_bar,
         show_per_step_progress_bar,
         pdb_trajectory,
+        constraint=constraint,
         model_manager=generation.model_manager,
         encoder_path=encoder_path,
         ddpm_path=ddpm_path,
@@ -455,3 +457,29 @@ def generate(
         return list(ensemble_return.values())[0]
     else:
         return ensemble_return
+
+
+def sequence_encoder(
+    sequence_dict,
+    batch_size=32,
+    device=None,
+    output_directory=None,
+    encoder_path=None,
+    ddpm_path=None,
+):
+    # check device, get back a torch.device (not a str!)
+    device = utilities.check_device(device)
+
+    sequence_dict = handle_input(sequence_dict)
+
+    embeddings = generation.sequence_encoder_backend(
+        sequence_dict=sequence_dict,
+        device=device,
+        batch_size=batch_size,
+        output_directory=output_directory,
+        model_manager=generation.model_manager,
+        encoder_path=encoder_path,
+        ddpm_path=ddpm_path,
+    )
+
+    return embeddings

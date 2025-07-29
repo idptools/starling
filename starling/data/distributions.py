@@ -44,9 +44,7 @@ class DiagonalGaussianDistribution(object):
         torch.Tensor
             The sampled value.
         """
-        x = self.mean + self.std * torch.randn(self.mean.shape).to(
-            device=self.parameters.device
-        )
+        x = self.mean + self.std * torch.randn(self.mean.shape, device=self.mean.device)
         return x
 
     def kl(self, other=None):

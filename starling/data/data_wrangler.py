@@ -86,20 +86,23 @@ def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
 
     Parameters:
         - file_path (str): Path to the HDF5 file.
-        - frame (int, optional): Specific frame to load from datasets. If None, loads the entire dataset.
-        - keys_to_load (list, optional): List of keys to load. If None, loads all keys.
+        - frame (int, optional): Specific frame to load from 'dm' or 'latents'. If None, loads full datasets.
+        - keys_to_load (list, optional): Specific dataset keys to load. If None, loads all available keys.
 
     Returns:
-        - dict: Dictionary containing loaded data with keys as dataset names and values as dataset contents.
+        - dict: {key: np.ndarray or np.ndarray slice}
     """
+    special_keys = {"dm", "latents"}
     data = {}
+
     with h5py.File(file_path, "r") as f:
-        keys = keys_to_load if keys_to_load else list(f.keys())
+        keys = keys_to_load if keys_to_load is not None else list(f.keys())
         for key in keys:
-            if frame is not None and key == "dm" or key == "latents":
-                data[key] = f[key][frame]
+            dataset = f[key]
+            if frame is not None and key in special_keys and dataset.shape[0] > frame:
+                data[key] = dataset[frame]
             else:
-                data[key] = f[key][...]
+                data[key] = dataset[()]
     return data
 
 

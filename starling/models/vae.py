@@ -1,5 +1,4 @@
 import math
-import pdb
 from typing import List, Tuple
 
 import pytorch_lightning as pl
@@ -19,21 +18,69 @@ from starling.models import vae_components
 torch.set_float32_matmul_precision("high")
 
 
-class LinearKLDScheduler:
-    def __init__(self, total_steps: int, max_weight: float = 1e-4):
-        """
-        Args:
-            total_steps (int): The number of steps to reach the max weight.
-            max_weight (float): The maximum weight for the KLD term.
-        """
-        self.total_steps = total_steps
-        self.max_weight = max_weight
+class KLDWeightScheduler:
+    def __init__(
+        self,
+        max_weight: float,
+        warmup_fraction: float = None,
+        scheduler_type="cyclical",
+    ):
+        self._max_weight = max_weight
+        self.warmup_fraction = warmup_fraction
+        self.current_step = 0
+        self.total_warmup_steps = None
+        self._current_weight = None
+        self.scheduler_type = scheduler_type
 
-    def get_weight(self, current_step: int) -> float:
-        """Compute the weight for the current step."""
-        if current_step >= self.total_steps:
-            return self.max_weight
-        return (self.max_weight / self.total_steps) * current_step
+    def configure(self, total_training_steps: int):
+        """Configure the scheduler with training step information"""
+        self.total_steps = total_training_steps
+        if self.warmup_fraction is not None:
+            self.total_warmup_steps = int(total_training_steps * self.warmup_fraction)
+
+    def get_weight(self, step=None) -> float:
+        """Get current KLD weight for a given step (or max weight if no warmup)"""
+        if self.warmup_fraction is None or self.total_warmup_steps is None:
+            return self._max_weight
+
+        # Use provided step or default to max weight
+        if step is None:
+            return self._max_weight
+
+        if self.scheduler_type == "linear":
+            weight = min(
+                (step / self.total_warmup_steps) * self._max_weight,
+                self._max_weight,
+            )
+        elif self.scheduler_type == "cyclical":
+            # 1 cycle is 20% of the total steps which amounts to 5 cycles
+            cycle_length = int(0.20 * self.total_steps)
+
+            # 50% of the cycle is the warmup-phase
+            ramp_steps = int(self.warmup_fraction * cycle_length)
+
+            cycle_step = step % cycle_length
+
+            if cycle_step < ramp_steps:
+                weight = (cycle_step / ramp_steps) * self._max_weight
+            else:
+                weight = self._max_weight
+
+        self._current_weight = weight
+        return weight
+
+    @property
+    def max_weight(self):
+        """Get the maximum KLD weight"""
+        return self._max_weight
+
+    @property
+    def current_weight(self):
+        """Get the current KLD weight"""
+        if self._current_weight is None:
+            return self._max_weight
+        else:
+            return self._current_weight
 
 
 class VAE(pl.LightningModule):
@@ -44,14 +91,16 @@ class VAE(pl.LightningModule):
         latent_dim: int,
         dimension: int,
         loss_type: str,
-        weights_type: str,
         KLD_weight: float,
         lr_scheduler: str,
         set_lr: float,
         norm: str = "instance",
         base: int = 64,
         optimizer: str = "SGD",
-        KLD_warmup_fraction: float = 0.1,
+        KLD_warmup_fraction: float = 0,
+        KLD_scheduler_type: str = "cyclical",
+        compile_mode: str = "max-autotune",
+        weights_type: str = None,  # Here for compatibility, not used in VAE
     ) -> None:
         """
         The variational autoencoder (VAE) model that is used to learn the latent space of
@@ -115,6 +164,7 @@ class VAE(pl.LightningModule):
                 "decoder": vae_components.Resnet34_Decoder,
             },
         }
+        self.compile_mode = compile_mode
 
         self.optimizer = optimizer
 
@@ -129,38 +179,39 @@ class VAE(pl.LightningModule):
         self.config_scheduler = lr_scheduler
         self.set_lr = set_lr
 
-        # KLD loss params
+        # KLD loss parameters
         self.KLD_weight = KLD_weight
         self.KLD_warmup_fraction = KLD_warmup_fraction
+        self.KLD_scheduler_type = KLD_scheduler_type
+        self.current_step = 0
 
-        if self.KLD_warmup_fraction is not None:
-            # This needs to be initialized here but will be updated in on_train_start
-            self.kl_scheduler = LinearKLDScheduler(
-                total_steps=1, max_weight=self.KLD_weight
-            )
-            self.current_step = 0
-
-        # these are used to monitor the training losses for the *EPOCH*
-        self.total_train_step_losses = 0
-        self.recon_step_losses = 0
-        self.KLD_step_losses = 0
-        self.num_batches = 0
-
-        self.monitor = "epoch_val_loss"
-
-        # Encoder
-        encoder_chanel = in_channels
-
-        self.encoder = resnets[model_type]["encoder"](
-            in_channels=encoder_chanel, base=base, norm=norm
+        # Initialize KL scheduler if warmup is enabled
+        # (Will be properly configured in on_train_start with actual step count)
+        self.kld_scheduler = KLDWeightScheduler(
+            max_weight=KLD_weight,
+            warmup_fraction=KLD_warmup_fraction,
+            scheduler_type=self.KLD_scheduler_type,
         )
 
-        # This is usually 4 in ResNets
-        num_stages = 4
+        # Metrics tracking for epoch-level statistics
+        self._reset_epoch_metrics()
+
+        # Validation metric to monitor
+        self.monitor = "epoch_val_loss"
+
+        # Initialize encoder
+        self.encoder = resnets[model_type]["encoder"](
+            in_channels=in_channels,  # Use the parameter directly
+            base=base,
+            norm=norm,
+        )
+
+        # Calculate network dimensions based on ResNet architecture
+        num_stages = 4  # Standard in ResNets
         expansion = self.encoder.block_type.expansion
         exponent = num_stages - 1 if expansion == 1 else num_stages + 1
 
-        # Spatial size of the distance map after the final encoding layer
+        # Calculate spatial dimensions after encoding
         self.compressed_size = dimension / (2**num_stages)
         final_channels = int(base * 2**exponent)
         self.shape_from_final_encoding_layer = (
@@ -196,6 +247,14 @@ class VAE(pl.LightningModule):
         # Params to learn for reconstruction loss
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
+
+    def setup(self, stage=None):
+        """Set up the model, including optional compilation."""
+        if stage == "fit" and self.compile_mode is not None:
+            # Compile the forward components separately for better optimization
+            self.encode = torch.compile(self.encode, mode=self.compile_mode)
+            self.decode = torch.compile(self.decode, mode=self.compile_mode)
+            self.forward = torch.compile(self.forward, mode=self.compile_mode)
 
     def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
@@ -262,55 +321,6 @@ class VAE(pl.LightningModule):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
-
-    def get_weights(self, ground_truth: torch.Tensor, scale: str) -> torch.Tensor:
-        """
-        A function that calculates weights for the reconstruction loss based on the
-        distance between the residues in the ground truth distance map. The weights
-        are calculated based on the scale parameter.
-
-        Parameters
-        ----------
-        ground_truth : torch.Tensor
-            Input data or the ground truth distance map
-        scale : str
-            A string that determines how the weights will be calculated. The options
-            are "linear", "reciprocal", and "equal"
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the weights for the reconstruction loss
-
-        Raises
-        ------
-        ValueError
-            If the scale parameter is not one of the three options
-        """
-        #! not sure linear is correct rn
-        if scale == "linear":
-            max_distance = ground_truth.max()
-            min_distance = ground_truth.min()
-            weights = 1 - (ground_truth - min_distance) / (max_distance - min_distance)
-            weights = weights / weights.sum()
-            return weights
-        # Reciprocal of the distance between the two residues is taken as the weight
-        elif scale == "reciprocal":
-            # Handling division by zero
-            nonzero_indices = ground_truth != 0
-            weights = torch.zeros_like(ground_truth)
-            weights[nonzero_indices] = torch.reciprocal(ground_truth[nonzero_indices])
-            weights = weights / weights.sum()
-            return weights
-        # We assign equal weight to each distance here
-        elif scale == "equal":
-            weights = torch.ones_like(ground_truth)
-            # Set diagonal elements to zero
-            weights = weights - torch.diag(torch.diag(weights))
-            weights = weights / weights.sum()
-            return weights
-        else:
-            raise ValueError(f"Variable name '{scale}' for get_weights does not exist")
 
     def gaussian_likelihood(
         self,
@@ -397,14 +407,15 @@ class VAE(pl.LightningModule):
         # Mean squared error weighted by ground truth distance
         if self.loss_type == "mse":
             recon = F.mse_loss(data_reconstructed, data, reduction="none")
+            # Weights according to the distance between residues in the ground truth distance map
+            weights = 1 / (data + 1e-6)
+            recon = recon * weights
 
         # Negative log likelihood of the input data given the latent space
         elif self.loss_type == "nll":
             # Get the reconstruction loss and convert it to positive values
             recon = -1 * self.gaussian_likelihood(
-                data_reconstructed=data_reconstructed,
-                log_std=self.log_std,
-                data=data,
+                data_reconstructed=data_reconstructed, log_std=self.log_std, data=data
             )
         else:
             raise ValueError(
@@ -417,14 +428,16 @@ class VAE(pl.LightningModule):
 
         # For more information of KLD loss check out Appendix B:
         # https://arxiv.org/abs/1312.6114
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
-        KLD = torch.logsumexp(KLD, dim=0) / mu.size(0)  # Mean over batch
 
-        if self.KLD_warmup_fraction is not None:
-            KLD_weight = self.kl_scheduler.get_weight(self.current_step)
-            self.current_step += 1
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=[1, 2, 3])
+        # Simple average across batch
+        KLD = KLD.mean()
+
+        # In vae_loss:
+        if self.trainer.training:
+            KLD_weight = self.kld_scheduler.get_weight(self.trainer.global_step)
         else:
-            KLD_weight = self.KLD_weight
+            KLD_weight = self.kld_scheduler.max_weight
 
         loss = recon + KLD_weight * KLD
 
@@ -488,26 +501,29 @@ class VAE(pl.LightningModule):
         self.KLD_step_losses += loss["KLD"].item()
         self.num_batches += 1
 
-        self.log("train_loss", loss["loss"], prog_bar=True, batch_size=data.size(0))
-        self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=data.size(0))
-        self.log("KLD_loss", loss["KLD"], prog_bar=False, batch_size=data.size(0))
+        batch_size = data.size(0)
+
+        self.log("train_loss", loss["loss"], prog_bar=True, batch_size=batch_size)
+        self.log("recon_loss", loss["recon"], prog_bar=True, batch_size=batch_size)
+        self.log("KLD_loss", loss["KLD"], prog_bar=False, batch_size=batch_size)
         self.log(
             "KLD_weight",
-            self.kl_scheduler.get_weight(self.current_step)
-            if self.KLD_warmup_fraction is not None
-            else self.KLD_weight,
+            self.kld_scheduler.current_weight,
             prog_bar=True,
-            batch_size=data.size(0),
+            batch_size=batch_size,
         )
 
         return loss["loss"]
 
     def on_train_epoch_end(self) -> None:
         """
-        At the end of the epoch, calculate the mean of the training losses.
-        Clear the lists that have been filled with losses during the epoch
-        for memory management.
+        Calculate and log the mean training losses for the epoch.
+        Reset the loss accumulators for the next epoch.
         """
+        if self.num_batches == 0:
+            return
+
+        # Calculate and log mean values
         epoch_mean = self.total_train_step_losses / self.num_batches
         self.log("epoch_train_loss", epoch_mean, prog_bar=True, sync_dist=True)
 
@@ -517,11 +533,8 @@ class VAE(pl.LightningModule):
         KLD_mean = self.KLD_step_losses / self.num_batches
         self.log("epoch_KLD_loss", KLD_mean, prog_bar=True, sync_dist=True)
 
-        # Reset the total losses
-        self.total_train_step_losses = 0
-        self.recon_step_losses = 0
-        self.KLD_step_losses = 0
-        self.num_batches = 0
+        # Reset metrics for next epoch
+        self._reset_epoch_metrics()
 
     def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
         """
@@ -552,13 +565,9 @@ class VAE(pl.LightningModule):
             logvar=moments.logvar,
         )
 
-        self.log(
-            "epoch_val_loss",
-            loss["loss"],
-            prog_bar=True,
-            sync_dist=True,
-            batch_size=data.size(0),
-        )
+        batch_size = data.size(0)
+
+        self.log("epoch_val_loss", loss["loss"], sync_dist=True, batch_size=batch_size)
 
         return loss["loss"]
 
@@ -583,45 +592,47 @@ class VAE(pl.LightningModule):
             If the scheduler is not implemented
         """
 
-        optimizer_params = [
-            {
-                "params": [
-                    param
-                    for name, param in self.named_parameters()
-                    if not any(nd in name for nd in ["bn"]) and name != "log_std"
-                ],
-                "weight_decay": 1 / 32768,  # Include weight decay for other parameters
-            },
-            {
-                "params": [
-                    param
-                    for name, param in self.named_parameters()
-                    if any(nd in name for nd in ["bn"])
-                ],
-                "weight_decay": 0.0,  # Exclude weight decay for parameters with 'bn' in name
-            },
-        ]
-
-        # Conditionally add parameter group for log_std based on self.loss_type
-        if self.loss_type == "nll":
-            optimizer_params.append(
-                {
-                    "params": [self.log_std],  # Separate parameter group for log_std
-                    "weight_decay": 0.0,  # Exclude weight decay for log_std
-                }
-            )
-
         if self.optimizer == "SGD":
             optimizer = torch.optim.SGD(
-                optimizer_params,
+                self.parameters(),
                 lr=self.set_lr,
                 momentum=0.875,
                 nesterov=True,
             )
 
         elif self.optimizer == "AdamW":
+            # Separate encoder parameters from other parameters
+            encoder_params = []
+            other_params = []
+
+            for name, param in self.named_parameters():
+                if "encoder" in name:
+                    encoder_params.append(param)
+                else:
+                    other_params.append(param)
+
+            # Define parameter groups with different weight decay settings
+            param_groups = [
+                {
+                    "params": encoder_params,
+                    "weight_decay": 1e-4,
+                },
+                {
+                    "params": other_params,
+                    "weight_decay": 0.0,
+                },
+            ]
+
             optimizer = torch.optim.AdamW(
-                optimizer_params,
+                param_groups,
+                lr=self.set_lr,
+                betas=(0.9, 0.999),
+                eps=1e-08,
+            )
+
+        elif self.optimizer == "Adam":
+            optimizer = torch.optim.Adam(
+                self.parameters(),
                 lr=self.set_lr,
                 betas=(0.9, 0.999),
                 eps=1e-08,
@@ -653,7 +664,7 @@ class VAE(pl.LightningModule):
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
-            warmup_steps = steps_per_epoch * int(num_epochs * 0.05)
+            warmup_steps = int(steps_per_epoch * num_epochs * 0.01)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:
@@ -680,7 +691,7 @@ class VAE(pl.LightningModule):
                 "scheduler": CosineAnnealingLR(
                     optimizer,
                     T_max=num_epochs,
-                    eta_min=1e-4,
+                    eta_min=1e-6,
                 ),
                 "monitor": self.monitor,
                 "interval": "epoch",
@@ -718,28 +729,16 @@ class VAE(pl.LightningModule):
 
         return symmetrized_arrays
 
-    # def on_fit_start(self):
-    #     def init_weights(m):
-    #         if isinstance(m, (nn.Linear, nn.Conv2d)):
-    #             nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
-    #             if m.bias is not None:
-    #                 nn.init.constant_(m.bias, 0)
-
-    #     # Initialize weights for encoder and decoder
-    #     self.encoder.apply(init_weights)
-    #     self.decoder.apply(init_weights)
-    #     # Apply initialization to the encoder_to_latent and latent_to_decoder layers (as they are part of the model)
-    #     self.encoder_to_latent.apply(init_weights)
-    #     self.latent_to_decoder.apply(init_weights)
-
     def on_train_start(self):
-        if self.KLD_warmup_fraction is not None:
-            # Access the trainer and total steps after training starts
-            total_steps = self.trainer.estimated_stepping_batches
-            # Calculate the warm-up steps (fraction of the total steps)
-            kl_warmup_steps = int(total_steps * self.KLD_warmup_fraction)
+        # Calculate correct training steps (not including validation)
+        steps_per_epoch = len(self.trainer.train_dataloader)
+        total_training_steps = steps_per_epoch * self.trainer.max_epochs
+        self.kld_scheduler.configure(total_training_steps)
 
-            # Initialize the KLD scheduler with warm-up steps
-            self.kl_scheduler = LinearKLDScheduler(
-                total_steps=kl_warmup_steps, max_weight=self.KLD_weight
-            )
+    def _reset_epoch_metrics(self) -> None:
+        """Reset all epoch-level metric accumulators to zero."""
+
+        self.KLD_step_losses = 0
+        self.recon_step_losses = 0
+        self.total_train_step_losses = 0
+        self.num_batches = 0

@@ -5,4 +5,3 @@
   blocks: [2, 2, 2]
   middle_blocks: 2
   labels_dim: 512
-  custom_attention: false

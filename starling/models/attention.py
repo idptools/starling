@@ -1,9 +1,82 @@
 import torch
-from einops import rearrange
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange, repeat
 from torch import nn
 from torch.nn import functional as F
 
 from starling.models.normalization import RMSNorm
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, context_dim: int = None):
+        """
+        Multi-head attention module supporting both self- and cross-attention.
+
+        Parameters
+        ----------
+        embed_dim : int
+            Dimension of the query input (and output)
+        num_heads : int
+            Number of attention heads
+        context_dim : int, optional
+            Dimension of context input. If None, defaults to `embed_dim` (i.e., self-attention).
+        """
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.context_dim = context_dim or embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+
+        # Projections
+        self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.key_proj = nn.Linear(self.context_dim, embed_dim, bias=False)
+        self.value_proj = nn.Linear(self.context_dim, embed_dim, bias=False)
+
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, query, context, query_mask=None, context_mask=None):
+        """
+        query:   (B, N, Dq) — tokens to be conditioned
+        context: (B, S, Dc) — conditioning source (or None for self-attention)
+        """
+
+        B, N, _ = query.shape
+        _, S, _ = context.shape
+
+        # Project to Q, K, V
+        Q = self.query_proj(query)
+        K = self.key_proj(context)
+        V = self.value_proj(context)
+
+        # Reshape for multi-head attention
+        Q = rearrange(Q, "b n (h d) -> b h n d", h=self.num_heads)
+        K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
+        V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
+
+        # Build attention mask (broadcasted)
+        if query_mask is not None or context_mask is not None:
+            if query_mask is None:
+                query_mask = torch.ones(B, N, device=query.device, dtype=torch.bool)
+            if context_mask is None:
+                context_mask = torch.ones(B, S, device=query.device, dtype=torch.bool)
+
+            attn_mask = rearrange(query_mask, "b n -> b 1 n 1") & rearrange(
+                context_mask, "b s -> b 1 1 s"
+            )  # (B, 1, N, S)
+            attn_mask = repeat(attn_mask, "b 1 n s -> b h n s", h=self.num_heads)
+            attn_mask = attn_mask.bool()
+        else:
+            attn_mask = None
+
+        # Scaled dot-product attention (Fused version in PyTorch ≥2.0)
+        out = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask)
+
+        # Merge heads
+        out = rearrange(out, "b h n d -> b n (h d)")
+
+        return self.out_proj(out)
 
 
 class CrossAttention(nn.Module):
@@ -12,31 +85,24 @@ class CrossAttention(nn.Module):
         embed_dim: int,
         num_heads: int,
         context_dim: int,
-        custom,
-        channel_last=False,
     ) -> None:
         """
-        CrossAttention module for use in UNet models. This module is used to
-        perform attention on query (distance maps/2D data) using key and value
-        (sequence labels). It is used to attend to 2D features using text/sequence
-        embeddings, effectively conditioning the model on the text/sequence labels.
+        Cross-attention between query (tokens) and context (e.g., protein sequence).
 
         Parameters
         ----------
         embed_dim : int
-            Dimension of the input embedding
+            Dimensionality of the query tokens
         num_heads : int
-            Number of heads for multi-head attention
-        kernel_size : int, optional
-            Size of the kernel for generating query, by default 1
+            Number of attention heads
+        context_dim : int
+            Dimensionality of the context (keys/values)
         """
-        super(CrossAttention, self).__init__()
+        super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
-        self.channel_last = channel_last
         self.context_dim = context_dim
-        self.custom = custom
 
         assert self.head_dim * num_heads == embed_dim, (
             "embed_dim must be divisible by num_heads"
@@ -51,53 +117,51 @@ class CrossAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, query, context=None):
-        batch_size, channels, height, width = query.size()
+    def forward(self, query, context, query_mask=None, context_mask=None):
+        """
+        query:   (B, N, D)     — tokens to be conditioned
+        context: (B, S, C)     — context (e.g., sequence embeddings)
+        """
+        B, N, D = query.shape
+        _, S, _ = context.shape
 
-        if not self.channel_last:
-            query = rearrange(query, "b c h w -> b h w c")
-
-        # Prenormalization of the query and context
+        # Normalize and project
         query = self.query_norm(query)
         context = self.context_norm(context)
 
-        # Linear projection for the query (image features)
-        Q = self.query_proj(query)  # [batch_size, height, width, channels]
+        Q = self.query_proj(query)  # (B, N, D)
+        K = self.key_proj(context)  # (B, S, D)
+        V = self.value_proj(context)  # (B, S, D)
 
-        # Linear projections for the key and value (text embeddings)
-        K = self.key_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
-        V = self.value_proj(context)  # [batch_size, seq_len, head_dim * num_heads]
-
-        # Reshape query (image features) to match multi-head attention dimensions
-        Q = rearrange(Q, "b x y (h d) -> b h (x y) d", h=self.num_heads)
-
-        # Reshape key and value (text embeddings) for multi-head attention
+        # Multi-head reshape
+        Q = rearrange(Q, "b n (h d) -> b h n d", h=self.num_heads)
         K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
         V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
 
-        # Use scaled_dot_product_attention
-        if self.custom:
-            scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
-            attention_weights = F.softmax(scores, dim=-1)
-            attention_output = torch.matmul(attention_weights, V)
+        # Attention masks
+        if query_mask is not None or context_mask is not None:
+            if query_mask is None:
+                query_mask = torch.ones((B, N), device=query.device)
+            if context_mask is None:
+                context_mask = torch.ones((B, S), device=query.device)
+
+            query_mask = rearrange(query_mask, "b n -> b 1 n 1")
+            context_mask = rearrange(context_mask, "b s -> b 1 1 s")
+            attention_mask = query_mask * context_mask  # (B, 1, N, S)
+            attention_mask = repeat(
+                attention_mask, "b 1 n s -> b h n s", h=self.num_heads
+            )
+            attention_mask = attention_mask.bool()
         else:
-            attention_output = F.scaled_dot_product_attention(Q, K, V)
-
-        # Reshape back to original dimensions
-        attention_output = rearrange(
-            attention_output, "b h (x y) d -> b x y (h d)", x=height, y=width
-        )
-        attention_output = self.out_proj(attention_output)
-
-        if not self.channel_last:
-            attention_output = rearrange(attention_output, "b h w c -> b c h w")
-
-        return attention_output
+            attention_mask = None
+        out = F.scaled_dot_product_attention(Q, K, V, attn_mask=attention_mask)
+        out = rearrange(out, "b h n d -> b n (h d)")  # back to (B, N, D)
+        return self.out_proj(out)
 
 
 class SelfAttention(nn.Module):
     def __init__(
-        self, embed_dim: int, num_heads: int, custom, channels_last: bool = False
+        self, embed_dim: int, num_heads: int, channels_last: bool = False
     ) -> None:
         """
         This is a basic self-attention module. It uses linear layers to project
@@ -119,7 +183,6 @@ class SelfAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         self.channels_last = channels_last
-        self.custom = custom
 
         assert self.head_dim * num_heads == embed_dim, (
             "embed_dim must be divisible by num_heads"
@@ -133,7 +196,7 @@ class SelfAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim)
 
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         input_dim = x.dim()
 
         if input_dim == 4:
@@ -164,14 +227,15 @@ class SelfAttention(nn.Module):
             Q = rearrange(Q, "b x (h d) -> b h x d", h=self.num_heads)
             K = rearrange(K, "b x (h d) -> b h x d", h=self.num_heads)
             V = rearrange(V, "b x (h d) -> b h x d", h=self.num_heads)
+            if attention_mask is not None:
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+                attention_mask = attention_mask.expand(
+                    batch_size, self.num_heads, seq_len, seq_len
+                )
 
-        # Scaled Dot-Product Attention
-        if self.custom:
-            scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim**0.5)
-            attention_weights = F.softmax(scores, dim=-1)
-            attention_output = torch.matmul(attention_weights, V)
-        else:
-            attention_output = F.scaled_dot_product_attention(Q, K, V)
+        attention_output = F.scaled_dot_product_attention(
+            Q, K, V, attn_mask=attention_mask
+        )
 
         # Concatenate heads and reshape back to original dimensions
         if input_dim == 4:

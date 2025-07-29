@@ -13,15 +13,18 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 import starling.data.ddpm_loader as ddpm_loader
-import starling.data.ddpm_loader_tar as ddpm_loader_tar
 from starling.data.argument_parser import get_params
+from starling.data.ddpm_loader_tar import DDPMDataLoader
 from starling.models.continuous_diffusion import ContinuousDiffusion
 from starling.models.diffusion import DiffusionModel
+from starling.models.transformer import SequenceEncoder
 from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
+from starling.models.vit import ViT
 
 
 @rank_zero_only
+def wandb_init(project: str = "starling"):
 def wandb_init(project: str = "starling"):
     wandb.init(project=project)
 
@@ -39,20 +42,31 @@ def save_config(config, output_path):
 
 def setup_checkpoints(output_path):
     """Set up model checkpoint callbacks."""
+def setup_checkpoints(output_path):
+    """Set up model checkpoint callbacks."""
     checkpoint_callback = ModelCheckpoint(
+        monitor="epoch_val_loss",
+        dirpath=output_path,
+        filename="model-kernel-{epoch:02d}-{epoch_val_loss:.2f}",
         monitor="epoch_val_loss",
         dirpath=output_path,
         filename="model-kernel-{epoch:02d}-{epoch_val_loss:.2f}",
         save_top_k=1,
         mode="min",
+        mode="min",
     )
     save_last_checkpoint = ModelCheckpoint(
+        dirpath=output_path,
         dirpath=output_path,
         filename="last",
     )
     return checkpoint_callback, save_last_checkpoint
+    return checkpoint_callback, save_last_checkpoint
 
 
+def get_checkpoint_path(output_path):
+    """Determine the checkpoint path to resume training if available."""
+    checkpoint_pattern = os.path.join(output_path, "last.ckpt")
 def get_checkpoint_path(output_path):
     """Determine the checkpoint path to resume training if available."""
     checkpoint_pattern = os.path.join(output_path, "last.ckpt")
@@ -60,19 +74,22 @@ def get_checkpoint_path(output_path):
     return "last" if checkpoint_files else None
 
 
-def setup_data_module(config):
-    """Set up the data module."""
-    data_config = config.dataloader
-    effective_batch_size = data_config.batch_size * config.trainer.cuda
-    if data_config.type == "tar":
-        dataset = ddpm_loader_tar.DDPMDataloader(
-            data_config, effective_batch_size=effective_batch_size
+def setup_data_module(cfg, effective_batch_size=None):
+    """Set up the data module for VAE training."""
+
+    if cfg.dataloader.type == "h5":
+        dataloader_config = cfg.dataloader.h5
+        dataset = instantiate(dataloader_config)
+        dataset.setup(stage="fit")
+
+    elif cfg.dataloader.type == "tar":
+        dataset = DDPMDataLoader(
+            config=cfg.dataloader.tar, effective_batch_size=effective_batch_size
         )
-    elif data_config.type == "h5":
-        dataset = ddpm_loader.DDPMDataloader(data_config)
+        dataset.setup(stage="fit")
     else:
-        raise ValueError(f"Unsupported data type: {data_config.type}")
-    dataset.setup(stage="fit")
+        raise ValueError(f"Unsupported dataloader type: {cfg.dataloader.type}")
+
     return dataset
 
 
@@ -83,7 +100,10 @@ def setup_models(config):
     diffusion_models = {"discrete": DiffusionModel, "continuous": ContinuousDiffusion}
 
     unet_config_dict = OmegaConf.to_container(config.unet, resolve=True)
+    seq_encoder_dict = OmegaConf.to_container(config.sequence_encoder, resolve=True)
     UNet_model = UNetConditional(**unet_config_dict)
+    vit = ViT(12, 512, 8, 512)
+    sequence_encoder = SequenceEncoder(**seq_encoder_dict)
 
     if config.diffusion.type == "continuous":
         diffusion_config_dict = OmegaConf.to_container(
@@ -99,12 +119,14 @@ def setup_models(config):
     if config.trainer.fine_tune:
         diffusion_model = diffusion_models[config.diffusion.type].load_from_checkpoint(
             model_path,
-            model=UNet_model,
+            unet_model=vit,
+            sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )
     else:
         diffusion_model = diffusion_models[config.diffusion.type](
-            model=UNet_model,
+            unet_model=vit,
+            sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )
 
@@ -115,6 +137,8 @@ def setup_logger(config, diffusion_model):
     """Set up the WandB logger."""
     wandb_logger = WandbLogger(project=config.trainer.project_name)
     wandb_logger.watch(diffusion_model)
+    return wandb_logger
+
     return wandb_logger
 
 
@@ -153,7 +177,14 @@ def train_model(cfg: DictConfig):
     ckpt_path = cfg.trainer.checkpoint
 
     # Setup data module
-    dataset = setup_data_module(cfg)
+    if cfg.dataloader.type == "tar":
+        effective_batch_size = (
+            cfg.trainer.cuda * cfg.trainer.num_nodes * cfg.dataloader.tar.batch_size
+        )
+    else:
+        effective_batch_size = None
+
+    dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
 
     # Setup models
     UNet_model, diffusion_model = setup_models(cfg)
@@ -181,6 +212,7 @@ def train_model(cfg: DictConfig):
         diffusion_model, dataset, ckpt_path=None if cfg.trainer.fine_tune else ckpt_path
     )
 
+    # Detach WandB logging
     # Detach WandB logging
     wandb_logger.experiment.unwatch(diffusion_model)
     wandb.finish()
