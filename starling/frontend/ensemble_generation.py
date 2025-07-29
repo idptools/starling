@@ -158,7 +158,7 @@ def generate(
     conformations=configs.DEFAULT_NUMBER_CONFS,
     device=None,
     steps=configs.DEFAULT_STEPS,
-    ddim=True,
+    sampler="ddim",
     return_structures=False,
     batch_size=configs.DEFAULT_BATCH_SIZE,
     num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
@@ -394,9 +394,9 @@ def generate(
                 f"Error: Directory {output_directory} does not exist."
             )
 
-    # check ddim is a bool
-    if not isinstance(ddim, bool):
-        raise ValueError("Error: DDIM must True or False.")
+    # check sampler is a string
+    if not isinstance(sampler, str):
+        raise ValueError("Error: sampler must be a string.")
 
     # check return_structures is a bool
     if not isinstance(return_structures, bool):
@@ -434,7 +434,7 @@ def generate(
         conformations,
         device,
         steps,
-        ddim,
+        sampler,
         return_structures,
         batch_size,
         num_cpus_mds,

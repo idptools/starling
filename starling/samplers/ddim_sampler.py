@@ -183,7 +183,7 @@ class DDIMSampler(nn.Module):
                 total=len(time_steps),
                 position=1,
                 leave=False,
-                desc=f"DDPM steps (batch {batch_count} of {max_batch_count})",
+                desc=f"DDIM steps (batch {batch_count} of {max_batch_count})",
             )
 
         if constraint is not None:

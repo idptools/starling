@@ -13,6 +13,7 @@ from starling.data.tokenizer import StarlingTokenizer
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.samplers.ddpm_sampler import DDPMSampler
+from starling.samplers.plms_sampler import PLMSSampler
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
     generate_3d_coordinates_from_distances,
@@ -231,7 +232,7 @@ def generate_backend(
     conformations,
     device,
     steps,
-    ddim,
+    sampler,
     return_structures,
     batch_size,
     num_cpus_mds,
@@ -349,12 +350,23 @@ def generate_backend(
     )
 
     # Construct a sampler
-    if ddim:
+    if sampler.lower() == "plms":
+        print("Using PLMS sampler")
+        sampler = PLMSSampler(
+            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps
+        )
+    elif sampler.lower() == "ddim":
+        print("Using DDIM sampler")
         sampler = DDIMSampler(
             ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps
         )
-    else:
+    elif sampler.lower() == "ddpm":
+        print("Using DDPM sampler")
         sampler = DDPMSampler(ddpm_model=diffusion, encoder_model=encoder_model)
+    else:
+        raise ValueError(
+            f"Error: sampler must be one of 'plms', 'ddim', or 'ddpm'. Got {sampler}."
+        )
 
     # get num_batchs and remaining samples
     num_batches = conformations // batch_size

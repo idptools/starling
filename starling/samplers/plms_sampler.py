@@ -286,7 +286,6 @@ class PLMSSampler(object):
         attention_mask,
         index,
         temperature=1.0,
-        noise_dropout=0.0,
         old_eps=None,
         t_next=None,
     ):
@@ -311,8 +310,7 @@ class PLMSSampler(object):
             # direction pointing to x_t
             dir_xt = (1.0 - a_prev - sigma_t**2).sqrt() * e_t
             noise = sigma_t * torch.randn(x.shape, device=device) * temperature
-            if noise_dropout > 0.0:
-                noise = torch.nn.functional.dropout(noise, p=noise_dropout)
+
             x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
             return x_prev, pred_x0
 
