@@ -168,6 +168,18 @@ E_dict = generate(sequences)
 - **`show_progress_bar`** : `bool`  
     If `True`, displays a progress bar during generation. Default is `True`.
 
+## Ensemble-aware sequence embeddings
+
+STARLING jointly trains a Vision Transformer (ViT) that operates in the VAE latent space alongside a transformer-based sequence encoder designed to produce sequence embeddings optimized for ensemble generation. These embeddings can be extracted independently of the ensemble generation process. We observe that sequences with similar ensemble properties tend to have similar embeddings, making them useful for search and design applications. To extract these sequence embeddings, use the following code block:
+
+```python
+from starling.frontend.ensemble_generation import sequence_encoder
+
+sequence_embeddings = sequence_encoder(fasta)
+```
+
+The output of this function consists of residue-level embeddings, which can be aggregated into a protein-level embedding using a mean-pooling operation.
+
 ## Constrained generation of ensembles
 
 STARLING allows you to generate structural ensembles with constraints or restraints — such as experimentally measured distances or local/global shape features. These can be directly incorporated into sampling by passing them as arguments to the `generate` function. To do this, simply include the following code block as part of your generate call:
