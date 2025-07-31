@@ -195,7 +195,7 @@ class DDIMSampler(nn.Module):
 
             constraint.initialize(
                 self.encoder_model,
-                self.latent_space_scaling_factor,
+                self.ddpm_model.latent_space_scaling_factor,
                 self.n_steps,
                 sequence_length,
             )
