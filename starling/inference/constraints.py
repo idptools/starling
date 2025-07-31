@@ -4,7 +4,7 @@ from typing import Tuple
 
 import torch
 from einops import rearrange, reduce
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from starling.utilities import helix_dm
 
@@ -613,7 +613,6 @@ class ConstraintLogger:
         """Set up the progress bar."""
         if self.verbose:
             self.progress_bar = tqdm(
-                total=self.n_steps,
                 desc="Applying constraints",
                 position=1,
                 leave=False,
