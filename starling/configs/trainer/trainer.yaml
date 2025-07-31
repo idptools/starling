@@ -7,5 +7,6 @@ precision: bf16-mixed
 output_path: 20mM_model
 project_name: starling-ionic-strength
 # checkpoint: /home/borna/.starling_weights/ddpm_no_encoder_weights.ckpt
+wandb_id: null
 checkpoint: null
 fine_tune: false
