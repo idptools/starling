@@ -225,7 +225,9 @@ class DiffusionModel(pl.LightningModule):
         # Return the noised tensor based on the timestamp
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-    def sequence2labels(self, sequences: List, sequence_mask) -> torch.Tensor:
+    def sequence2labels(
+        self, sequences: List, sequence_mask, ionic_strength
+    ) -> torch.Tensor:
         """
         Converts sequences to labels based on user defined models,
 
@@ -244,7 +246,7 @@ class DiffusionModel(pl.LightningModule):
         ValueError
             If the labels are not one of the three options
         """
-        encoded = self.sequence_encoder(sequences, sequence_mask)
+        encoded = self.sequence_encoder(sequences, sequence_mask, ionic_strength)
 
         return encoded
 
@@ -254,6 +256,7 @@ class DiffusionModel(pl.LightningModule):
         t: int,
         labels: torch.Tensor,
         mask: torch.Tensor,
+        ionic_strengths: torch.Tensor,
         noise: torch.Tensor = None,
     ) -> torch.Tensor:
         """
@@ -293,7 +296,7 @@ class DiffusionModel(pl.LightningModule):
         x_noised = self.q_sample(x_start, t, noise=noise)
 
         # Get the labels to condition the model on
-        labels = self.sequence2labels(labels, mask)
+        labels = self.sequence2labels(labels, mask, ionic_strengths)
 
         # Run the model to predict the noise
         predicted_noise = self.unet_model(x_noised, t, labels, mask)
@@ -322,7 +325,9 @@ class DiffusionModel(pl.LightningModule):
 
         return loss
 
-    def forward(self, x: torch.Tensor, labels: torch.Tensor, mask) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, labels: torch.Tensor, mask, ionic_strengths
+    ) -> torch.Tensor:
         """
         Forward pass of the model, calculates the loss based on the
         predicted noise and the actual noise.
@@ -344,7 +349,7 @@ class DiffusionModel(pl.LightningModule):
         # Generate random timestamps to noise the tensor and learn the denoising process
         timestamps = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
-        return self.p_loss(x, timestamps, labels, mask)
+        return self.p_loss(x, timestamps, labels, mask, ionic_strengths)
 
     def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
         """
@@ -372,10 +377,11 @@ class DiffusionModel(pl.LightningModule):
         self.latent_space_scaling_factor = mean_std.float().to(self.device)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        latent_encoding, sequences, sequence_attention_mask = (
+        latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
             batch["data"],
             batch["sequence"],
             batch["attention_mask"],
+            batch["ionic_strengths"],
         )
 
         if self.distance_map_encoder is not None:
@@ -393,7 +399,10 @@ class DiffusionModel(pl.LightningModule):
 
         # Compute loss
         loss = self.forward(
-            latent_encoding, labels=sequences, mask=sequence_attention_mask
+            latent_encoding,
+            labels=sequences,
+            mask=sequence_attention_mask,
+            ionic_strengths=ionic_strengths,
         )
 
         # Log training metrics
@@ -402,11 +411,13 @@ class DiffusionModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        latent_encoding, sequences, sequence_attention_mask = (
+        latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
             batch["data"],
             batch["sequence"],
             batch["attention_mask"],
+            batch["ionic_strengths"],
         )
+
         if self.distance_map_encoder is not None:
             with torch.no_grad():
                 latent_encoding = self.distance_map_encoder.encode(
@@ -416,8 +427,12 @@ class DiffusionModel(pl.LightningModule):
         # Z-score the latent encoding
         latent_encoding = latent_encoding * self.latent_space_scaling_factor
 
+        # Compute loss
         loss = self.forward(
-            latent_encoding, labels=sequences, mask=sequence_attention_mask
+            latent_encoding,
+            labels=sequences,
+            mask=sequence_attention_mask,
+            ionic_strengths=ionic_strengths,
         )
 
         self.log(
