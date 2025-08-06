@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 from einops import rearrange, repeat
@@ -8,6 +10,94 @@ from starling.data.positional_encodings import (
     PositionalEncoding2D,
 )
 from starling.models.attention import CrossAttention, MultiHeadAttention, SelfAttention
+
+
+class SinusoidalPosEmb(nn.Module):
+    def __init__(self, dim: int, theta: int = 10000):
+        """
+        Generates sinusoidal positional embeddings that are used in the denoising-diffusion
+        models to encode the timestep information. The positional embeddings are generated
+        using sine and cosine functions. It takes in time in the shape of (batch_size, 1)
+        and returns the positional embeddings in the shape of (batch_size, dim). The positional
+        encodings are later used in each of the ResNet blocks to encode the timestep information.
+
+        Parameters
+        ----------
+        dim : int
+            Dimension of the input data.
+        theta : int, optional
+            A scaling factor for the positional embeddings. The default value is 10000.
+        """
+        super().__init__()
+        self.dim = dim
+        self.theta = theta
+
+    def forward(self, time: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the positional (timestep) embeddings.
+
+        Parameters
+        ----------
+        time : torch.Tensor
+            Timestep information in the shape of (batch_size, 1).
+
+        Returns
+        -------
+        torch.Tensor
+            Positional (timestep) embeddings in the shape of (batch_size, dim).
+        """
+        device = time.device
+
+        # The number of unique frequencies in the positional embeddings, half
+        # will be used for sine and the other half for cosine functions
+        half_dim = self.dim // 2
+        emb = math.log(self.theta) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = time[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return emb
+
+
+class MLP(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int, expansion_factor: int = 4):
+        """
+        A simple Multi-Layer Perceptron with a single hidden layer and layer normalization.
+
+        The MLP first projects the input to a higher dimension (output_dim * expansion_factor),
+        applies a ReLU activation, then projects back to the output dimension. Finally,
+        layer normalization is applied to the output.
+
+        Parameters
+        ----------
+        input_dim : int
+            The dimension of the input features.
+        output_dim : int
+            The dimension of the output features.
+        expansion_factor : int, optional
+            The factor by which to expand the hidden dimension, by default 4.
+        """
+        super().__init__()
+
+        hidden_dim = output_dim * expansion_factor
+
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    #     self._init_weights()
+
+    # def _init_weights(self):
+    #     # Initialize weights for all linear layers in the sequential
+    #     for module in self.net:
+    #         if isinstance(module, nn.Linear):
+    #             nn.init.xavier_uniform_(module.weight)
+    #             if module.bias is not None:
+    #                 nn.init.zeros_(module.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
 
 
 class AdaLayerNorm(nn.Module):
@@ -120,17 +210,23 @@ class TransformerEncoder(nn.Module):
 
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
+        self.norm3 = nn.LayerNorm(embed_dim)
 
         self.self_attention = MultiHeadAttention(embed_dim, num_heads)
+        self.cross_attention = MultiHeadAttention(embed_dim, num_heads, embed_dim)
         self.feed_forward = FeedForward(embed_dim)
 
-    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask, ionic_strengths) -> torch.Tensor:
         x_normed = self.norm1(x)
         x = x + self.self_attention(
             x_normed, context=x_normed, query_mask=mask, context_mask=mask
         )
 
         x_normed = self.norm2(x)
+
+        x = x + self.cross_attention(x_normed, context=ionic_strengths, query_mask=mask)
+
+        x_normed = self.norm3(x)
         x = x + self.feed_forward(x_normed)
         return x
 
@@ -154,6 +250,12 @@ class SequenceEncoder(nn.Module):
         """
         super().__init__()
 
+        self.ionic_strength_emb = nn.Sequential(
+            SinusoidalPosEmb(embed_dim),
+            MLP(embed_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+        )
+
         self.sequence_learned_embedding = nn.Embedding(21, embed_dim)
 
         self.sequence_positional_encoding = PositionalEncoding1D(embed_dim)
@@ -164,7 +266,18 @@ class SequenceEncoder(nn.Module):
 
         self.final_norm = nn.LayerNorm(embed_dim)
 
-    def forward(self, x: torch.Tensor, mask) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask, ionic_strengths) -> torch.Tensor:
+        # Embed ionic strengths and expand for each token
+        ionic_strengths = self.ionic_strength_emb(ionic_strengths)
+
+        if self.training:
+            # Randomly mask some of the ionic strength values
+            mask_ionic = (
+                torch.rand(ionic_strengths.shape[0], device=ionic_strengths.device)
+                < 0.2
+            )
+            ionic_strengths[mask_ionic] = torch.zeros_like(ionic_strengths[mask_ionic])
+
         # Convert input sequence to embeddings
         x = self.sequence_learned_embedding(x)
 
@@ -172,7 +285,7 @@ class SequenceEncoder(nn.Module):
         x = self.sequence_positional_encoding(x)
 
         for layer in self.layers:
-            x = layer(x, mask=mask)
+            x = layer(x, mask=mask, ionic_strengths=ionic_strengths)
 
         # Apply final normalization
         x = self.final_norm(x)
