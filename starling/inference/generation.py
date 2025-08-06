@@ -227,6 +227,78 @@ def sequence_encoder_backend(
     return embedding_dict
 
 
+def ensemble_encoder_backend(
+    ensemble,
+    device,
+    batch_size,
+    output_directory=None,
+    model_manager=model_manager,
+    encoder_path=None,
+    ddpm_path=None,
+):
+    encoder_model, diffusion = model_manager.get_models(
+        device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
+    )
+
+    assert isinstance(ensemble, np.ndarray), (
+        "ensemble must be a numpy array. If you have a torch tensor, convert it to numpy first."
+    )
+    assert ensemble.ndim == 3, "ensemble must be a 3D array (batch, height, width)."
+
+    if ensemble.shape[2] != 384:
+        H_pad = max(0, 384 - ensemble.shape[1])  # vertical padding (bottom)
+        W_pad = max(0, 384 - ensemble.shape[2])  # horizontal padding (right)
+
+        ensemble = np.pad(
+            ensemble,
+            pad_width=(
+                (0, 0),
+                (0, H_pad),
+                (0, W_pad),
+            ),  # (N axis, bottom of H axis, right of W axis)
+            mode="constant",
+            constant_values=0,
+        )
+
+    # get num_batches and remaining samples
+    num_batches = ensemble.shape[0] // batch_size
+    remaining_samples = ensemble.shape[0] % batch_size
+
+    latent_spaces = []
+
+    if remaining_samples > 0:
+        real_batch_count = num_batches + 1
+    else:
+        real_batch_count = num_batches
+
+    ensemble = torch.from_numpy(ensemble)
+    ensemble = ensemble.unsqueeze(1)  # Add a channel dimension
+
+    for batch in range(num_batches):
+        start_idx = batch * batch_size
+        end_idx = (batch + 1) * batch_size
+
+        batch_ensemble = ensemble[start_idx:end_idx]
+
+        latent_space = encoder_model.encode(
+            batch_ensemble.to(device),
+        ).mode()
+
+        latent_spaces.append(latent_space.detach().squeeze().cpu().numpy())
+
+    if remaining_samples > 0:
+        start_idx = num_batches * batch_size
+        batch_ensemble = ensemble[start_idx:]
+
+        latent_space = encoder_model.encode(
+            batch_ensemble.to(device),
+        ).mode()
+
+        latent_spaces.append(latent_space.detach().squeeze().cpu().numpy())
+
+    return np.concatenate(latent_spaces)
+
+
 def generate_backend(
     sequence_dict,
     conformations,

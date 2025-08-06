@@ -459,6 +459,30 @@ def generate(
         return ensemble_return
 
 
+def ensemble_encoder(
+    ensemble,
+    batch_size=32,
+    device=None,
+    output_directory=None,
+    encoder_path=None,
+    ddpm_path=None,
+):
+    # check device, get back a torch.device (not a str!)
+    device = utilities.check_device(device)
+
+    embeddings = generation.ensemble_encoder_backend(
+        ensemble=ensemble,
+        device=device,
+        batch_size=batch_size,
+        output_directory=output_directory,
+        model_manager=generation.model_manager,
+        encoder_path=encoder_path,
+        ddpm_path=ddpm_path,
+    )
+
+    return embeddings
+
+
 def sequence_encoder(
     sequence_dict,
     batch_size=32,
