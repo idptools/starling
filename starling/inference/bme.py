@@ -133,7 +133,7 @@ class BME:
             print("Minimization using %s failed\n" % (mini_method))
             print("Message: %s\n" % (result.message))
             self.niter = -1
-            return np.NaN, np.NaN, np.NaN
+            return np.nan, np.nan, np.nan
 
     def predict(self, new_data):
         """
