@@ -22,7 +22,10 @@ class BME:
             np.ones(self.calculated_data.shape[0]) / self.calculated_data.shape[0]
         )
 
-        self.lambdas = np.zeros(self.experimental_data.shape[0], dtype=np.longdouble)
+        # self.lambdas = np.zeros(self.experimental_data.shape[0], dtype=np.longdouble)
+        self.lambdas = np.random.normal(
+            loc=0.0, scale=1e-3, size=self.experimental_data.shape[0]
+        ).astype(np.float64)
         print("Lagrange multipliers initialized from zero\n")
 
         self.bounds = []
