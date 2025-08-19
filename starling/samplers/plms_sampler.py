@@ -62,6 +62,7 @@ class PLMSSampler(object):
         ddpm_model,
         encoder_model,
         n_steps,
+        salt=150,
         ddim_discretize="uniform",
         schedule="linear",
         **kwargs,
@@ -73,6 +74,7 @@ class PLMSSampler(object):
         self.n_steps = n_steps
         self.schedule = schedule
         self.device = ddpm_model.device
+        self.salt = torch.tensor([salt], device=self.device).unsqueeze(0)
 
         self.tokenizer = StarlingTokenizer()
 
@@ -133,7 +135,7 @@ class PLMSSampler(object):
         labels = rearrange(labels, "f -> 1 f")
         attention_mask = torch.ones_like(labels, device=self.device, dtype=torch.bool)
 
-        labels = self.ddpm_model.sequence2labels(labels, attention_mask)
+        labels = self.ddpm_model.sequence2labels(labels, attention_mask, self.salt)
 
         return labels, attention_mask
 

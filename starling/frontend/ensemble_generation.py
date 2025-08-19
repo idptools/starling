@@ -156,6 +156,7 @@ def check_positive_int(val):
 def generate(
     user_input,
     conformations=configs.DEFAULT_NUMBER_CONFS,
+    salt=150,
     device=None,
     steps=configs.DEFAULT_STEPS,
     sampler="ddim",
@@ -445,6 +446,7 @@ def generate(
         show_progress_bar,
         show_per_step_progress_bar,
         pdb_trajectory,
+        salt=salt,
         constraint=constraint,
         model_manager=generation.model_manager,
         encoder_path=encoder_path,

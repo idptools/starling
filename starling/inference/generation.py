@@ -316,6 +316,7 @@ def generate_backend(
     show_per_step_progress_bar,
     pdb_trajectory,
     model_manager=model_manager,
+    salt=150,
     constraint=None,
     encoder_path=None,
     ddpm_path=None,
@@ -425,16 +426,18 @@ def generate_backend(
     if sampler.lower() == "plms":
         print("Using PLMS sampler")
         sampler = PLMSSampler(
-            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps
+            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps, salt=salt
         )
     elif sampler.lower() == "ddim":
         print("Using DDIM sampler")
         sampler = DDIMSampler(
-            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps
+            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps, salt=salt
         )
     elif sampler.lower() == "ddpm":
         print("Using DDPM sampler")
-        sampler = DDPMSampler(ddpm_model=diffusion, encoder_model=encoder_model)
+        sampler = DDPMSampler(
+            ddpm_model=diffusion, encoder_model=encoder_model, salt=salt
+        )
     else:
         raise ValueError(
             f"Error: sampler must be one of 'plms', 'ddim', or 'ddpm'. Got {sampler}."
