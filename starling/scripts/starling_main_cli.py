@@ -10,7 +10,7 @@ import psutil
 from starling import configs
 from starling._version import __version__
 from starling.frontend.ensemble_generation import generate
-from starling.utilities import check_device, check_file_exists
+from starling.utilities import check_device
 
 
 def print_starling():
@@ -185,8 +185,7 @@ def main():
         user_input=args.user_input,
         conformations=args.conformations,
         device=args.device,
-        steps=args.steps,
-        ddim=args.ddim,
+        steps=args.steps,        
         return_structures=args.return_structures,
         batch_size=args.batch_size,
         num_cpus_mds=args.num_cpus,

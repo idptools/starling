@@ -10,6 +10,7 @@ dist/
 *~
 
 starling/tests/test_scratch.ipynb
+idptools_starling.egg-info/
 
 # added to avoid local version clashes on buil
 starling/_version.py
