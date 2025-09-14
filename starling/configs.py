@@ -17,6 +17,8 @@ DEFAULT_MDS_NUM_INIT = 4
 DEFAULT_STRUCTURE_GEN = "mds"
 CONVERT_ANGSTROM_TO_NM = 10
 MAX_SEQUENCE_LENGTH = 384  # set longest sequence the model can work on
+DEFAULT_SALT = 150  # default salt concentration in mM
+DEFAULT_SAMPLER = "ddim"  # default sampler for diffusion model
 
 # Model compilation settings
 

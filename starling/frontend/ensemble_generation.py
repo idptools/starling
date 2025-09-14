@@ -156,10 +156,10 @@ def check_positive_int(val):
 def generate(
     user_input,
     conformations=configs.DEFAULT_NUMBER_CONFS,
-    salt=150,
+    salt=configs.DEFAULT_SALT,
     device=None,
     steps=configs.DEFAULT_STEPS,
-    sampler="ddim",
+    sampler=configs.DEFAULT_SAMPLER,
     return_structures=False,
     batch_size=configs.DEFAULT_BATCH_SIZE,
     num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
