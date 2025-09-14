@@ -123,11 +123,11 @@ def main():
         help=f"Sets the number of MDS jobs to be run in parallel. More may give better reconstruction but requires 1:1 with #CPUs to avoid performance penalty. Default: {configs.DEFAULT_MDS_NUM_INIT}.",
     )
     parser.add_argument(
-        "--no-ddim",
-        dest="ddim",
-        default=True,
-        action="store_false",
-        help="Disable DDIM for sampling.",
+        "--salt",
+        dest="salt",
+        type=int,
+        default=configs.DEFAULT_SALT,
+        help=f"Salt (in mM) for the prediction. Default: {configs.DEFAULT_SALT} mM.",
     )
     parser.add_argument(
         "--disable_progress_bar",
@@ -180,10 +180,12 @@ def main():
     if args.verbose:
         print_starling()
 
+    print(args.salt)
     # Call the generate function with parsed arguments
     generate(
         user_input=args.user_input,
         conformations=args.conformations,
+        salt=args.salt,
         device=args.device,
         steps=args.steps,
         return_structures=args.return_structures,
