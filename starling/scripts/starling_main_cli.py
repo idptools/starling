@@ -186,7 +186,6 @@ def main():
         conformations=args.conformations,
         device=args.device,
         steps=args.steps,
-        ddim=args.ddim,
         return_structures=args.return_structures,
         batch_size=args.batch_size,
         num_cpus_mds=args.num_cpus,
