@@ -1,3 +1,11 @@
+![STARLING-UNET](https://img.shields.io/badge/branch-STARLING--UNET-blue)
+![Frozen](https://img.shields.io/badge/status-frozen-lightgrey)
+![Use Main](https://img.shields.io/badge/use-main-brightgreen)
+
+> ⚠️ **Notice:** This is the `STARLING-UNET` branch. It is frozen for **backwards compatibility** with the code used in the preprint.  
+> For the actively maintained version, see [`main`](../main).
+
+
 <!-- ![STARLING_LOGO_FULL](Lamprotornis_hildebrandti_-Tanzania-8-2c.jpg) -->
 STARLING
 ==============================
@@ -7,6 +15,7 @@ STARLING
 <br>
 <img src="starling_logo-1.png" alt="My Image" width="150"/>
 <br>
+
 
 # About
 STARLING (con**ST**ruction of intrinsic**A**lly diso**R**dered proteins ensembles efficient**L**y v**I**a multi-dime**N**sional **G**enerative models) is a latent-space probabilistic denoising diffusion model for predicting coarse-grained ensembles of intrinsically disordered regions.  
