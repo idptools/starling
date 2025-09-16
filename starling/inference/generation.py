@@ -65,6 +65,7 @@ def sequence_encoder_backend(
     sequence_dict,
     device,
     batch_size,
+    salt,
     output_directory=None,
     model_manager=model_manager,
     encoder_path=None,
@@ -100,6 +101,8 @@ def sequence_encoder_backend(
     _, diffusion = model_manager.get_models(
         device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
     )
+
+    ionic_strength = torch.tensor([salt], device=device).unsqueeze(0)
 
     # Create output directory if it doesn't exist
     if output_directory is not None:
@@ -150,7 +153,9 @@ def sequence_encoder_backend(
         # Process batch through encoder
         with torch.no_grad():
             batch_embeddings = diffusion.sequence2labels(
-                sequences=sequence_tensor, sequence_mask=attention_mask
+                sequences=sequence_tensor,
+                sequence_mask=attention_mask,
+                ionic_strength=ionic_strength,
             )
 
         # Store embeddings in dictionary or save to disk
@@ -202,7 +207,9 @@ def sequence_encoder_backend(
         # Process final batch through encoder
         with torch.no_grad():
             batch_embeddings = diffusion.sequence2labels(
-                sequences=sequence_tensor, sequence_mask=attention_mask
+                sequences=sequence_tensor,
+                sequence_mask=attention_mask,
+                ionic_strength=ionic_strength,
             )
 
         # Store embeddings in dictionary or save to disk
