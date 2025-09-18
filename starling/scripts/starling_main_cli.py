@@ -180,7 +180,7 @@ def main():
     if args.verbose:
         print_starling()
 
-    print(args.salt)
+    print("Salt concentration: ", args.salt, " mM")
     # Call the generate function with parsed arguments
     generate(
         user_input=args.user_input,
