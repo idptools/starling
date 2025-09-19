@@ -70,6 +70,10 @@ def sequence_encoder_backend(
     model_manager=model_manager,
     encoder_path=None,
     ddpm_path=None,
+    pretokenized: bool = False,
+    bucket: bool = False,
+    bucket_size: int = 32,
+    free_cuda_cache: bool = False,
 ):
     """
     Generate embeddings for sequences and optionally save them to disk.
@@ -82,6 +86,8 @@ def sequence_encoder_backend(
         Device to use for computation
     batch_size : int
         Batch size for processing
+    salt : float
+        Salt concentration
     output_directory : str, optional
         If provided, embeddings will be saved to this directory with sequence name as filename
     model_manager : ModelManager
@@ -90,21 +96,32 @@ def sequence_encoder_backend(
         Custom encoder path
     ddpm_path : str, optional
         Custom diffusion model path
+    pretokenized : bool, default False
+        If True, values of sequence_dict are assumed to already be iterable collections
+        of integer token ids (lists/tuples/torch tensors). Skips tokenization.
+    bucket : bool, default False
+        If True, sequences are grouped into coarse length buckets (multiple of bucket_size)
+        to reduce padding waste. Beneficial when length distribution is broad.
+    bucket_size : int, default 32
+        Length resolution for bucketing when bucket=True. Sequences with lengths that
+        fall into the same bucket ( (L//bucket_size) ) are batched together.
+    free_cuda_cache : bool, default False
+        If True and running on CUDA, calls torch.cuda.empty_cache() after each batch.
 
     Returns
     -------
     dict or None
-        If output_directory is None, returns dictionary of embeddings.
-        Otherwise returns None (embeddings are saved to disk).
+        If output_directory is None, returns dictionary name -> tensor (L_i, D).
+        Otherwise returns None (embeddings written to disk as <name>.pt).
     """
-    tokenizer = StarlingTokenizer()
+    tokenizer = None if pretokenized else StarlingTokenizer()
     _, diffusion = model_manager.get_models(
         device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
     )
 
     ionic_strength = torch.tensor([salt], device=device).unsqueeze(0)
 
-    # Create output directory if it doesn't exist
+    # Prepare output handling
     if output_directory is not None:
         os.makedirs(output_directory, exist_ok=True)
         print(f"Saving embeddings to: {os.path.abspath(output_directory)}")
@@ -112,124 +129,89 @@ def sequence_encoder_backend(
     else:
         embedding_dict = {}
 
-    # Sort sequences by length in descending order for efficient batching
-    sorted_items = sorted(sequence_dict.items(), key=lambda x: len(x[1]), reverse=True)
-    sorted_names = [item[0] for item in sorted_items]
-    sorted_sequences = [tokenizer.encode(item[1]) for item in sorted_items]
+    # Normalize sequences -> (name, token_list)
+    prepared = []
+    for name, seq in sequence_dict.items():
+        if pretokenized:
+            # Accept list/tuple/torch.Tensor of ints
+            if isinstance(seq, torch.Tensor):
+                tokens = seq.tolist()
+            else:
+                tokens = list(seq)
+        else:
+            tokens = tokenizer.encode(seq)
+        prepared.append((name, tokens))
 
-    # get num_batches and remaining samples
-    num_batches = len(sorted_sequences) // batch_size
-    remaining = len(sorted_sequences) % batch_size
+    # Optional bucketing to reduce padding
+    if bucket:
+        bucketed = {}
+        for name, toks in prepared:
+            key = (len(toks) // bucket_size) * bucket_size
+            bucketed.setdefault(key, []).append((name, toks))
+        # Flatten buckets ordered by descending key (longer first)
+        ordered = []
+        for key in sorted(bucketed.keys(), reverse=True):
+            # within bucket sort descending length
+            ordered.extend(sorted(bucketed[key], key=lambda x: len(x[1]), reverse=True))
+        prepared = ordered
+    else:
+        # Just sort by length descending
+        prepared.sort(key=lambda x: len(x[1]), reverse=True)
 
-    # Process full batches
-    for batch in range(num_batches):
-        start_idx = batch * batch_size
-        end_idx = (batch + 1) * batch_size
+    names = [n for n, _ in prepared]
+    seqs = [t for _, t in prepared]
+    total = len(seqs)
 
-        batch_names = sorted_names[start_idx:end_idx]
-        batch_sequences = sorted_sequences[start_idx:end_idx]
+    # Single unified batching loop (inference_mode can yield speedups vs no_grad)
+    _inference_ctx = (
+        torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
+    )
+    with _inference_ctx():
+        for start in range(0, total, batch_size):
+            end = min(start + batch_size, total)
+            batch_sequences = seqs[start:end]
+            batch_names = names[start:end]
+            current_bs = end - start
+            max_length = len(
+                batch_sequences[0]
+            )  # descending order ensures first longest
 
-        # Get the maximum sequence length in this batch
-        max_length = len(batch_sequences[0])  # First is longest due to sorting
-
-        # Create input tensor and attention mask
-        sequence_tensor = torch.zeros(
-            (batch_size, max_length), dtype=torch.long, device=device
-        )
-        attention_mask = torch.zeros(
-            (batch_size, max_length), dtype=torch.bool, device=device
-        )
-
-        # Fill the tensors with sequence data
-        for i, seq in enumerate(batch_sequences):
-            seq_length = len(seq)
-            # Add the actual sequence tokens to the tensor
-            sequence_tensor[i, :seq_length] = torch.tensor(
-                seq, dtype=torch.long, device=device
+            sequence_tensor = torch.zeros(
+                (current_bs, max_length), dtype=torch.long, device=device
             )
-            # Set attention mask (1 for actual tokens, 0 for padding)
-            attention_mask[i, :seq_length] = True
+            attention_mask = torch.zeros(
+                (current_bs, max_length), dtype=torch.bool, device=device
+            )
+            for i, seq_tokens in enumerate(batch_sequences):
+                L = len(seq_tokens)
+                sequence_tensor[i, :L] = torch.as_tensor(
+                    seq_tokens, dtype=torch.long, device=device
+                )
+                attention_mask[i, :L] = True
 
-        # Process batch through encoder
-        with torch.no_grad():
             batch_embeddings = diffusion.sequence2labels(
                 sequences=sequence_tensor,
                 sequence_mask=attention_mask,
                 ionic_strength=ionic_strength,
             )
 
-        # Store embeddings in dictionary or save to disk
-        for i, name in enumerate(batch_names):
-            # Get the actual sequence length from attention mask
-            seq_length = torch.sum(attention_mask[i]).item()
-            # Only store the embeddings for actual sequence tokens (remove padding)
-            embedding = batch_embeddings[i, :seq_length].cpu()
+            for i, name in enumerate(batch_names):
+                seq_len = int(attention_mask[i].sum().item())
+                emb = batch_embeddings[i, :seq_len].cpu()
+                if output_directory is not None:
+                    torch.save(emb, os.path.join(output_directory, f"{name}.pt"))
+                    del emb
+                else:
+                    embedding_dict[name] = emb
 
-            if output_directory is not None:
-                # Save embedding to file and clear from memory
-                torch.save(embedding, os.path.join(output_directory, f"{name}.pt"))
-                del embedding
-            else:
-                embedding_dict[name] = embedding
-
-        # Clear memory after each batch
-        del batch_embeddings
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    # Process remaining samples if any
-    if remaining > 0:
-        start_idx = num_batches * batch_size
-        batch_names = sorted_names[start_idx:]
-        batch_sequences = sorted_sequences[start_idx:]
-
-        # Get the maximum sequence length in the final batch
-        max_length = len(batch_sequences[0])
-
-        # Create input tensor and attention mask
-        sequence_tensor = torch.zeros(
-            (remaining, max_length), dtype=torch.long, device=device
-        )
-        attention_mask = torch.zeros(
-            (remaining, max_length), dtype=torch.bool, device=device
-        )
-
-        # Fill the tensors with sequence data
-        for i, seq in enumerate(batch_sequences):
-            seq_length = len(seq)
-            # Add the actual sequence tokens to the tensor
-            sequence_tensor[i, :seq_length] = torch.tensor(
-                seq, dtype=torch.long, device=device
-            )
-            # Set attention mask
-            attention_mask[i, :seq_length] = True
-
-        # Process final batch through encoder
-        with torch.no_grad():
-            batch_embeddings = diffusion.sequence2labels(
-                sequences=sequence_tensor,
-                sequence_mask=attention_mask,
-                ionic_strength=ionic_strength,
-            )
-
-        # Store embeddings in dictionary or save to disk
-        for i, name in enumerate(batch_names):
-            # Get the actual sequence length from attention mask
-            seq_length = torch.sum(attention_mask[i]).item()
-            # Only store the embeddings for actual sequence tokens (remove padding)
-            embedding = batch_embeddings[i, :seq_length].cpu()
-
-            if output_directory is not None:
-                # Save embedding to file and clear from memory
-                torch.save(embedding, os.path.join(output_directory, f"{name}.pt"))
-                del embedding
-            else:
-                embedding_dict[name] = embedding
-
-        # Clear memory after processing
-        del batch_embeddings
-        torch.cuda.empty_cache()
-        gc.collect()
+            del batch_embeddings, sequence_tensor, attention_mask
+            if (
+                free_cuda_cache
+                and torch.cuda.is_available()
+                and device.startswith("cuda")
+            ):
+                torch.cuda.empty_cache()
+            gc.collect()
 
     return embedding_dict
 
@@ -273,10 +255,7 @@ def ensemble_encoder_backend(
 
     latent_spaces = []
 
-    if remaining_samples > 0:
-        real_batch_count = num_batches + 1
-    else:
-        real_batch_count = num_batches
+    # real_batch_count no longer needed (legacy from previous implementation)
 
     ensemble = torch.from_numpy(ensemble)
     ensemble = ensemble.unsqueeze(1)  # Add a channel dimension
