@@ -66,6 +66,7 @@ def sequence_encoder_backend(
     device,
     batch_size,
     salt,
+    aggregate=True,
     output_directory=None,
     model_manager=model_manager,
     encoder_path=None,
@@ -165,6 +166,9 @@ def sequence_encoder_backend(
             # Only store the embeddings for actual sequence tokens (remove padding)
             embedding = batch_embeddings[i, :seq_length].cpu()
 
+            if aggregate:
+                embedding = embedding.mean(axis=0)
+
             if output_directory is not None:
                 # Save embedding to file and clear from memory
                 torch.save(embedding, os.path.join(output_directory, f"{name}.pt"))
@@ -218,6 +222,9 @@ def sequence_encoder_backend(
             seq_length = torch.sum(attention_mask[i]).item()
             # Only store the embeddings for actual sequence tokens (remove padding)
             embedding = batch_embeddings[i, :seq_length].cpu()
+
+            if aggregate:
+                embedding = embedding.mean(axis=0)
 
             if output_directory is not None:
                 # Save embedding to file and clear from memory
