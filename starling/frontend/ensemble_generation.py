@@ -489,6 +489,7 @@ def sequence_encoder(
     sequence_dict,
     salt,
     batch_size=32,
+    aggregate=False,
     device=None,
     output_directory=None,
     encoder_path=None,
@@ -502,6 +503,7 @@ def sequence_encoder(
     embeddings = generation.sequence_encoder_backend(
         sequence_dict=sequence_dict,
         salt=salt,
+        aggregate=aggregate,
         device=device,
         batch_size=batch_size,
         output_directory=output_directory,

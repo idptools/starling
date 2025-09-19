@@ -66,6 +66,7 @@ def sequence_encoder_backend(
     device,
     batch_size,
     salt,
+    aggregate=True,
     output_directory=None,
     model_manager=model_manager,
     encoder_path=None,
@@ -198,6 +199,10 @@ def sequence_encoder_backend(
             for i, name in enumerate(batch_names):
                 seq_len = int(attention_mask[i].sum().item())
                 emb = batch_embeddings[i, :seq_len].cpu()
+
+                if aggregate:
+                    emb = emb.mean(axis=0)
+
                 if output_directory is not None:
                     torch.save(emb, os.path.join(output_directory, f"{name}.pt"))
                     del emb
