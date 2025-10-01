@@ -75,6 +75,7 @@ def sequence_encoder_backend(
     bucket: bool = False,
     bucket_size: int = 32,
     free_cuda_cache: bool = False,
+    return_on_cpu: bool = True,
 ):
     """
     Generate embeddings for sequences and optionally save them to disk.
@@ -102,12 +103,16 @@ def sequence_encoder_backend(
         of integer token ids (lists/tuples/torch tensors). Skips tokenization.
     bucket : bool, default False
         If True, sequences are grouped into coarse length buckets (multiple of bucket_size)
-        to reduce padding waste. Beneficial when length distribution is broad.
+        to reduce padding waste. Beneficial when length distribution is very broad.
     bucket_size : int, default 32
         Length resolution for bucketing when bucket=True. Sequences with lengths that
         fall into the same bucket ( (L//bucket_size) ) are batched together.
     free_cuda_cache : bool, default False
         If True and running on CUDA, calls torch.cuda.empty_cache() after each batch.
+    return_on_cpu : bool, default True
+        If True, embeddings are transferred to CPU before being returned or saved.
+        If False, embeddings remain on the original device (e.g., GPU), which can be
+        useful when performing downstream tensor operations on the same device.
 
     Returns
     -------
@@ -162,33 +167,37 @@ def sequence_encoder_backend(
     names = [n for n, _ in prepared]
     seqs = [t for _, t in prepared]
     total = len(seqs)
+    lengths = [len(t) for t in seqs]
 
-    # Single unified batching loop (inference_mode can yield speedups vs no_grad)
     _inference_ctx = (
         torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
     )
+
     with _inference_ctx():
         for start in range(0, total, batch_size):
             end = min(start + batch_size, total)
             batch_sequences = seqs[start:end]
             batch_names = names[start:end]
-            current_bs = end - start
-            max_length = len(
-                batch_sequences[0]
-            )  # descending order ensures first longest
+            batch_lengths = lengths[start:end]
 
+            current_bs = end - start
+            max_length = batch_lengths[0]
+
+            # Build tensors (only CPU→GPU transfer)
             sequence_tensor = torch.zeros(
                 (current_bs, max_length), dtype=torch.long, device=device
             )
             attention_mask = torch.zeros(
                 (current_bs, max_length), dtype=torch.bool, device=device
             )
-            for i, seq_tokens in enumerate(batch_sequences):
-                L = len(seq_tokens)
-                sequence_tensor[i, :L] = torch.as_tensor(
+
+            for i, (seq_tokens, length_i) in enumerate(
+                zip(batch_sequences, batch_lengths)
+            ):
+                sequence_tensor[i, :length_i] = torch.as_tensor(
                     seq_tokens, dtype=torch.long, device=device
                 )
-                attention_mask[i, :L] = True
+                attention_mask[i, :length_i] = True
 
             batch_embeddings = diffusion.sequence2labels(
                 sequences=sequence_tensor,
@@ -196,16 +205,19 @@ def sequence_encoder_backend(
                 ionic_strength=ionic_strength,
             )
 
-            for i, name in enumerate(batch_names):
-                seq_len = int(attention_mask[i].sum().item())
-                emb = batch_embeddings[i, :seq_len].cpu()
+            # Transfer to CPU if requested
+            if return_on_cpu:
+                batch_embeddings = batch_embeddings.cpu()
+
+            # Process results
+            for i, (name, length_i) in enumerate(zip(batch_names, batch_lengths)):
+                emb = batch_embeddings[i, :length_i]
 
                 if aggregate:
                     emb = emb.mean(axis=0)
 
                 if output_directory is not None:
                     torch.save(emb, os.path.join(output_directory, f"{name}.pt"))
-                    del emb
                 else:
                     embedding_dict[name] = emb
 
@@ -216,7 +228,6 @@ def sequence_encoder_backend(
                 and device.startswith("cuda")
             ):
                 torch.cuda.empty_cache()
-            gc.collect()
 
     return embedding_dict
 
