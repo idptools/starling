@@ -1,7 +1,4 @@
-import sys
-
 import numpy as np
-import scipy.optimize as opt
 from scipy.optimize import minimize
 from scipy.special import logsumexp
 
@@ -65,36 +62,45 @@ class BME:
         return (diff / exp_std) ** 2
 
     def maxent(self, lambdas):
-        # weights
-        unnormalized_weights = (
-            -np.sum(lambdas * self.calculated_data, axis=1)
-            - self.tmax
-            + np.log(self.weights)
+        # Compute log weights: log(w_i) = -lambda^T * O_calc_i + log(w0_i)
+        log_unnormalized_weights = -np.sum(
+            lambdas * self.calculated_data, axis=1
+        ) + np.log(self.weights)
+
+        # Compute log partition function Z = log(sum(exp(log_unnormalized_weights)))
+        log_partition_function = logsumexp(log_unnormalized_weights)
+        reweighted_probabilities = np.exp(
+            log_unnormalized_weights - log_partition_function
         )
 
-        normalization_constant = logsumexp(unnormalized_weights)
-        normalized_weights = np.exp(unnormalized_weights - normalization_constant)
+        # Compute ensemble average of calculated observables: <O_calc>
+        ensemble_avg_calculated = np.sum(
+            reweighted_probabilities[:, np.newaxis] * self.calculated_data, axis=0
+        )
 
-        avg = np.sum(normalized_weights[:, np.newaxis] * self.calculated_data, axis=0)
+        # Regularization term: (theta/2) * sum(lambda_i^2 * sigma_i^2)
+        experimental_uncertainties_squared = self.experimental_data[:, 1] ** 2
+        regularization_term = (
+            self.theta / 2 * np.sum(lambdas**2 * experimental_uncertainties_squared)
+        )
 
-        # gaussian integral
-        theta_sigma2 = np.sum((lambdas**2 * self.experimental_data[:, 1] ** 2))
-        eps2 = self.theta / 2 * theta_sigma2
+        # Constraint term: lambda^T * O_exp
+        constraint_term = np.dot(lambdas, self.experimental_data[:, 0])
 
-        # experimental value
-        sum1 = np.dot(lambdas, self.experimental_data[:, 0])
+        # Objective function: L = lambda^T * O_exp + (theta/2) * lambda^T * Sigma^2 * lambda + log(Z)
+        objective = constraint_term + regularization_term + log_partition_function
 
-        fun = sum1 + eps2 + normalization_constant
+        # Gradient: dL/dlambda = O_exp + theta * Sigma^2 * lambda - <O_calc>
+        gradient = (
+            self.experimental_data[:, 0]
+            + self.theta * lambdas * experimental_uncertainties_squared
+            - ensemble_avg_calculated
+        )
 
-        # gradient
-        jac = self.experimental_data[:, 0] + lambdas * theta_sigma2 - avg
-
-        # divide by theta to avoid numerical problems
-        return fun / self.theta, jac / self.theta
+        # Divide by theta to avoid numerical problems
+        return objective / self.theta, gradient / self.theta
 
     def fit(self):
-        self.tmax = np.log((sys.float_info.max) / 5.0)
-
         chi2_before = self.get_chi()
 
         print("CHI2 before optimization: %8.4f \n" % (chi2_before))
@@ -114,11 +120,10 @@ class BME:
                 "Minimization using %s successful (iterations:%d)\n"
                 % (mini_method, result.nit)
             )
-            arg = (
-                -np.sum(result.x[np.newaxis, :] * self.calculated_data, axis=1)
-                - self.tmax
-            )
-            w_opt = self.weights * np.exp(arg)
+            log_w_opt = -np.sum(
+                result.x[np.newaxis, :] * self.calculated_data, axis=1
+            ) + np.log(self.weights)
+            w_opt = np.exp(log_w_opt - logsumexp(log_w_opt))
             w_opt /= np.sum(w_opt)
             self.lambdas = np.copy(result.x)
             self.w_opt = np.copy(w_opt)
