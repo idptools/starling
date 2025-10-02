@@ -164,10 +164,12 @@ def sequence_encoder_backend(
             # Get the actual sequence length from attention mask
             seq_length = torch.sum(attention_mask[i]).item()
             # Only store the embeddings for actual sequence tokens (remove padding)
-            embedding = batch_embeddings[i, :seq_length].cpu()
+            embedding = batch_embeddings[i, :seq_length]
 
             if aggregate:
-                embedding = embedding.mean(axis=0)
+                embedding = embedding.mean(axis=0).cpu()
+            else:
+                embedding = embedding.cpu()
 
             if output_directory is not None:
                 # Save embedding to file and clear from memory
@@ -221,10 +223,12 @@ def sequence_encoder_backend(
             # Get the actual sequence length from attention mask
             seq_length = torch.sum(attention_mask[i]).item()
             # Only store the embeddings for actual sequence tokens (remove padding)
-            embedding = batch_embeddings[i, :seq_length].cpu()
+            embedding = batch_embeddings[i, :seq_length]
 
             if aggregate:
-                embedding = embedding.mean(axis=0)
+                embedding = embedding.mean(axis=0).cpu()
+            else:
+                embedding = embedding.cpu()
 
             if output_directory is not None:
                 # Save embedding to file and clear from memory
