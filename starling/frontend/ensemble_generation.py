@@ -494,6 +494,11 @@ def sequence_encoder(
     output_directory=None,
     encoder_path=None,
     ddpm_path=None,
+    pretokenized: bool = False,
+    bucket: bool = False,
+    bucket_size: int = 32,
+    free_cuda_cache: bool = False,
+    return_on_cpu: bool = True,
 ):
     # check device, get back a torch.device (not a str!)
     device = utilities.check_device(device)
@@ -510,6 +515,11 @@ def sequence_encoder(
         model_manager=generation.model_manager,
         encoder_path=encoder_path,
         ddpm_path=ddpm_path,
+        pretokenized=pretokenized,
+        bucket=bucket,
+        bucket_size=bucket_size,
+        free_cuda_cache=free_cuda_cache,
+        return_on_cpu=return_on_cpu,
     )
 
     return embeddings
