@@ -6,7 +6,6 @@ tar:
   num_workers: 8
   prefetch_factor: 4
   data_key: distance_map.npz
-  ionic_strength: 150mM
   train_size: null 
   val_size: null
 

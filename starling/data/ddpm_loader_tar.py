@@ -32,7 +32,6 @@ class DDPMDataLoader(pl.LightningDataModule):
         self.shuffle_buffer = getattr(self.config, "shuffle_buffer", 10000)
 
         self.data_key = getattr(self.config, "data_key", "distance_map.npz")
-        self.ionic_strength = getattr(self.config, "ionic_strength", "150mM")
 
         # Calculate number of batches (can be replaced with metadata file reading)
         train_size = getattr(self.config, "train_size", None)
@@ -43,8 +42,10 @@ class DDPMDataLoader(pl.LightningDataModule):
             if os.path.exists(metadata_file):
                 with open(metadata_file, "r") as f:
                     metadata = json.load(f)
-                train_size = metadata[self.ionic_strength].get("train", 0)
-                val_size = metadata[self.ionic_strength].get("validation", 0)
+                    train_size = np.sum([v.get("train", 0) for v in metadata.values()])
+                    val_size = np.sum(
+                        [v.get("validation", 0) for v in metadata.values()]
+                    )
             else:
                 raise FileNotFoundError(
                     f"Metadata file not found at {metadata_file}. Please provide train_size and val_size."
@@ -93,7 +94,6 @@ class DDPMDataLoader(pl.LightningDataModule):
         )
 
         # Start the processing pipeline
-        dataset = dataset.select(self._key_filter)
         pipeline = dataset.shuffle(self.shuffle_buffer).decode(self._npz_decoder)
 
         # pipeline = pipeline.map(self._apply_filter_map)
@@ -140,6 +140,7 @@ class DDPMDataLoader(pl.LightningDataModule):
         # Extract the distance map and sequence
         latents = sample[self.data_key]
         sequence = sample["sequence.npz"]
+        ionic_strength = int(sample["__key__"].split("_")[-1].split("mM")[0])
 
         # Add channel dimension if needed
         if len(latents.shape) == 2:
@@ -149,7 +150,7 @@ class DDPMDataLoader(pl.LightningDataModule):
             sequence = sequence[np.newaxis, :]
 
         # Return a tuple with all data components
-        return (latents, sequence)
+        return (latents, sequence, ionic_strength)
 
     def _collate_fn(self, batch):
         """Collate function that handles empty batches"""
@@ -164,6 +165,9 @@ class DDPMDataLoader(pl.LightningDataModule):
         # Stack sequences
         sequences = np.stack([item[0] for item in batch[1]])
 
+        # Stack ionic strengths
+        ionic_strengths = np.stack([item for item in batch[2]])
+
         # Get the maximum sequence length
         max_seq_length = (sequences != 0).sum(axis=1).max()
 
@@ -176,12 +180,14 @@ class DDPMDataLoader(pl.LightningDataModule):
         latents = torch.from_numpy(latents)
         sequences = torch.from_numpy(sequences).to(torch.int32)
         attention_mask = torch.from_numpy(attention_mask)
+        ionic_strengths = torch.from_numpy(ionic_strengths).to(torch.int32).unsqueeze(1)
 
         # Return as dictionary for clearer access in training loop
         return {
             "data": latents,
             "sequence": sequences,
             "attention_mask": attention_mask,
+            "ionic_strengths": ionic_strengths,
         }
 
     def train_dataloader(self):
@@ -233,4 +239,7 @@ if __name__ == "__main__":
         #     import pdb
 
         #     pdb.set_trace()
+        import pdb
+
+        pdb.set_trace()
         pass

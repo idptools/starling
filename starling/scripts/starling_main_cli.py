@@ -7,6 +7,7 @@ from argparse import ArgumentParser
 import numpy as np
 import psutil
 
+import starling
 from starling import configs
 from starling._version import __version__
 from starling.frontend.ensemble_generation import generate
@@ -73,7 +74,7 @@ def main():
         type=int,
         default=configs.DEFAULT_STEPS,
         help=f"Number of steps to run the DDPM model (default: {configs.DEFAULT_STEPS})",
-    )    
+    )
     parser.add_argument(
         "-b",
         "--batch_size",
@@ -123,11 +124,11 @@ def main():
         help=f"Sets the number of MDS jobs to be run in parallel. More may give better reconstruction but requires 1:1 with #CPUs to avoid performance penalty. Default: {configs.DEFAULT_MDS_NUM_INIT}.",
     )
     parser.add_argument(
-        "--no-ddim",
-        dest="ddim",
-        default=True,
-        action="store_false",
-        help="Disable DDIM for sampling.",
+        "--salt",
+        dest="salt",
+        type=int,
+        default=configs.DEFAULT_SALT,
+        help=f"Salt (in mM) for the prediction. Default: {configs.DEFAULT_SALT} mM.",
     )
     parser.add_argument(
         "--disable_progress_bar",
@@ -184,8 +185,9 @@ def main():
     generate(
         user_input=args.user_input,
         conformations=args.conformations,
+        salt=args.salt,
         device=args.device,
-        steps=args.steps,        
+        steps=args.steps,
         return_structures=args.return_structures,
         batch_size=args.batch_size,
         num_cpus_mds=args.num_cpus,
@@ -207,7 +209,13 @@ ALPHA_SYN = "MDVFMKGLSKAKEGVVAAAEKTKQGVAEAAGKTKEGVLYVGSKTKEGVVHGVATVAEKTKEQVTNVG
 
 
 def measure_runtime(
-    user_input, steps=25, batch_size=100, device=None, cooltime=600, single_run=0
+    user_input,
+    steps=configs.DEFAULT_STEPS,
+    batch_size=configs.DEFAULT_BATCH_SIZE,
+    device=None,
+    cooltime=600,
+    single_run=0,
+    compile=False,
 ):
     """
     Measure runtime of Starling conformational generation for a given sequence.
@@ -264,24 +272,29 @@ def measure_runtime(
         )
         end_time = time.perf_counter()
 
-        runtime_matrix[i,0] = conf
-        runtime_matrix[i,1] = end_time - start_time
+        runtime_matrix[i, 0] = conf
+        runtime_matrix[i, 1] = end_time - start_time
 
         rg_matrix[i, 0] = conf
         rg_matrix[i, 1] = data.radius_of_gyration(return_mean=True)
 
+        if compile:
+            compile_string = "compile_on"
+        else:
+            compile_string = "compile_off"
+
         np.savetxt(
-            f"rg_matrix_{steps}_steps_{device_name}_{batch_size}_batchsize.csv",
+            f"rg_matrix_{steps}_steps_{device_name}_{batch_size}_batchsize_{compile_string}.csv",
             rg_matrix,
             delimiter=", ",
         )
         np.savetxt(
-            f"runtime_matrix_{steps}_steps_{device_name}_{batch_size}_batchsize.csv",
+            f"runtime_matrix_{steps}_steps_{device_name}_{batch_size}_batchsize_{compile_string}.csv",
             runtime_matrix,
             delimiter=", ",
         )
 
-        # have a snoozle to cool down the hardware (could use -80 alternatively? TBD).        
+        # have a snoozle to cool down the hardware (could use -80 alternatively? TBD).
         if i != len(conformations_list) - 1:
             time.sleep(cooltime)
 
@@ -300,14 +313,14 @@ def starling_benchmark():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=100,
-        help="Batch size for processing (default: 100)",
+        default=configs.DEFAULT_BATCH_SIZE,
+        help=f"Batch size for processing (default: {configs.DEFAULT_BATCH_SIZE})",
     )
     parser.add_argument(
         "--steps",
         type=int,
-        default=25,
-        help="Number of steps to run the DDPM model (default: 25)",
+        default=configs.DEFAULT_STEPS,
+        help=f"Number of steps to run the DDPM model (default: {configs.DEFAULT_STEPS})",
     )
     parser.add_argument(
         "--sequence",
@@ -328,7 +341,19 @@ def starling_benchmark():
         help="By default, starling-benchmark runs a series of 10 predictions for 10-1000 confomers. If you want to run a single prediction, specify the number of conformations here.",
     )
 
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        default=False,
+        help="Enable compilation (default: False). NB: As of 2025-09-20, compilation is only supported on CUDA devices.",
+    )
+
     args = parser.parse_args()
+
+    if args.compile:
+        print("Compiling models...")
+        starling.set_compilation_options(enabled=True)
+        print("Compilation complete.")
 
     measure_runtime(
         args.sequence,
@@ -337,4 +362,5 @@ def starling_benchmark():
         device=args.device,
         cooltime=args.cooltime,
         single_run=args.single_run,
+        compile=args.compile,
     )
