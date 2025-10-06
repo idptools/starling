@@ -288,7 +288,7 @@ class DDIMSampler(nn.Module):
         # print(f"x shape: {x.shape}")
         # print(f"c shape: {c.shape}")
 
-        predicted_noise = self.ddpm_model.unet_model(x, t, c, attention_mask)
+        predicted_noise = self.ddpm_model.model(x, t, c, attention_mask)
 
         # Calculate the previous latent and the predicted latent
         x_prev, pred_x0 = self.get_x_prev_and_pred_x0(

@@ -70,7 +70,7 @@ class DiffusionModel(pl.LightningModule):
 
     def __init__(
         self,
-        unet_model: nn.Module,
+        model: nn.Module,
         sequence_encoder: nn.Module,
         distance_map_encoder: nn.Module,
         beta_scheduler: str = "cosine",
@@ -129,10 +129,10 @@ class DiffusionModel(pl.LightningModule):
 
         # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
         self.save_hyperparameters(
-            ignore=["unet_model", "sequence_encoder", "distance_map_encoder"]
+            ignore=["model", "sequence_encoder", "distance_map_encoder"]
         )
 
-        self.unet_model = unet_model
+        self.model = model
         self.sequence_encoder = sequence_encoder
 
         if distance_map_encoder is not None:
@@ -299,7 +299,7 @@ class DiffusionModel(pl.LightningModule):
         labels = self.sequence2labels(labels, mask, ionic_strengths)
 
         # Run the model to predict the noise
-        predicted_noise = self.unet_model(x_noised, t, labels, mask)
+        predicted_noise = self.model(x_noised, t, labels, mask)
 
         # The following adapted from:
         # https://github.com/huggingface/diffusers/blob/78a78515d64736469742e5081337dbcf60482750/examples/text_to_image/train_text_to_image.py#L927
@@ -480,8 +480,7 @@ class DiffusionModel(pl.LightningModule):
             If the scheduler is not implemented
         """
         optimizer = torch.optim.AdamW(
-            list(self.unet_model.parameters())
-            + list(self.sequence_encoder.parameters()),
+            list(self.model.parameters()) + list(self.sequence_encoder.parameters()),
             lr=self.set_lr,
             betas=(0.9, 0.999),
             eps=1e-08,

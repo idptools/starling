@@ -117,9 +117,7 @@ class DDPMSampler(nn.Module):
             (b,), timestamp, device=device, dtype=torch.long
         )
 
-        preds = self.ddpm_model.unet_model(
-            x, batched_timestamps, labels, attention_mask
-        )
+        preds = self.ddpm_model.model(x, batched_timestamps, labels, attention_mask)
 
         # Extract the necessary values from the buffers to calculate the predicted mean
         betas_t = extract(self.betas, batched_timestamps, x.shape)

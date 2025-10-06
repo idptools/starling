@@ -316,12 +316,12 @@ class PLMSSampler(object):
             x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
             return x_prev, pred_x0
 
-        e_t = self.ddpm_model.unet_model(x, t, c, attention_mask)
+        e_t = self.ddpm_model.model(x, t, c, attention_mask)
 
         if len(old_eps) == 0:
             # Pseudo Improved Euler (2nd order)
             x_prev, pred_x0 = get_x_prev_and_pred_x0(e_t, index)
-            e_t_next = self.ddpm_model.unet_model(x_prev, t_next, c, attention_mask)
+            e_t_next = self.ddpm_model.model(x_prev, t_next, c, attention_mask)
             e_t_prime = (e_t + e_t_next) / 2
         elif len(old_eps) == 1:
             # 2nd order Pseudo Linear Multistep (Adams-Bashforth)
