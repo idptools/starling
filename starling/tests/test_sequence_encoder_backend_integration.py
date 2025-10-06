@@ -41,7 +41,7 @@ def test_sequence_encoder_backend_real_models():
         sequence_dict=sequences,
         device="cpu",  # keep CPU to avoid GPU requirement in generic environments
         batch_size=2,
-        salt=150,
+        ionic_strength=150,
         output_directory=None,
         model_manager=mm,
         encoder_path=enc_path,

@@ -42,11 +42,13 @@ def extract(
 
 
 class DDPMSampler(nn.Module):
-    def __init__(self, ddpm_model, encoder_model, salt=150):
+    def __init__(self, ddpm_model, encoder_model, ionic_strength=150):
         super(DDPMSampler, self).__init__()
         self.ddpm_model = ddpm_model
         self.n_steps = self.ddpm_model.num_timesteps
-        self.salt = torch.tensor([salt], device=self.device).unsqueeze(0)
+        self.ionic_strength = torch.tensor(
+            [ionic_strength], device=self.device
+        ).unsqueeze(0)
 
         self.encoder_model = encoder_model
         self.device = ddpm_model.device
@@ -81,7 +83,9 @@ class DDPMSampler(nn.Module):
         labels = rearrange(labels, "f -> 1 f")
         attention_mask = torch.ones_like(labels, device=self.device, dtype=torch.bool)
 
-        labels = self.ddpm_model.sequence2labels(labels, attention_mask, self.salt)
+        labels = self.ddpm_model.sequence2labels(
+            labels, attention_mask, self.ionic_strength
+        )
 
         return labels, attention_mask
 

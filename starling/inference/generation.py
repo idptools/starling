@@ -65,7 +65,7 @@ def sequence_encoder_backend(
     sequence_dict,
     device,
     batch_size,
-    salt,
+    ionic_strength,
     aggregate=True,
     output_directory=None,
     model_manager=model_manager,
@@ -88,8 +88,8 @@ def sequence_encoder_backend(
         Device to use for computation
     batch_size : int
         Batch size for processing
-    salt : float
-        Salt concentration
+    ionic_strength : float
+        Ionic strength [mM] to condition the model
     output_directory : str, optional
         If provided, embeddings will be saved to this directory with sequence name as filename
     model_manager : ModelManager
@@ -125,7 +125,7 @@ def sequence_encoder_backend(
         device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
     )
 
-    ionic_strength = torch.tensor([salt], device=device).unsqueeze(0)
+    ionic_strength = torch.tensor([ionic_strength], device=device).unsqueeze(0)
 
     # Prepare output handling
     if output_directory is not None:
@@ -318,7 +318,7 @@ def generate_backend(
     show_per_step_progress_bar,
     pdb_trajectory,
     model_manager=model_manager,
-    salt=150,
+    ionic_strength=150,
     constraint=None,
     encoder_path=None,
     ddpm_path=None,
@@ -428,17 +428,25 @@ def generate_backend(
     if sampler.lower() == "plms":
         print("Using PLMS sampler")
         sampler = PLMSSampler(
-            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps, salt=salt
+            ddpm_model=diffusion,
+            encoder_model=encoder_model,
+            n_steps=steps,
+            ionic_strength=ionic_strength,
         )
     elif sampler.lower() == "ddim":
         print("Using DDIM sampler")
         sampler = DDIMSampler(
-            ddpm_model=diffusion, encoder_model=encoder_model, n_steps=steps, salt=salt
+            ddpm_model=diffusion,
+            encoder_model=encoder_model,
+            n_steps=steps,
+            ionic_strength=ionic_strength,
         )
     elif sampler.lower() == "ddpm":
         print("Using DDPM sampler")
         sampler = DDPMSampler(
-            ddpm_model=diffusion, encoder_model=encoder_model, salt=salt
+            ddpm_model=diffusion,
+            encoder_model=encoder_model,
+            ionic_strength=ionic_strength,
         )
     else:
         raise ValueError(

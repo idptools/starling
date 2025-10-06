@@ -127,8 +127,8 @@ def main():
         "--ionic_strength",
         dest="ionic_strength",
         type=int,
-        default=configs.DEFAULT_SALT,
-        help=f"Ionic strength (in mM) for the prediction. Default: {configs.DEFAULT_SALT} mM.",
+        default=configs.DEFAULT_IONIC_STRENGTH,
+        help=f"Ionic strength (in mM) for the prediction. Default: {configs.DEFAULT_IONIC_STRENGTH} mM.",
     )
     parser.add_argument(
         "--disable_progress_bar",
@@ -185,7 +185,7 @@ def main():
     generate(
         user_input=args.user_input,
         conformations=args.conformations,
-        salt=args.ionic_strength,
+        ionic_strength=args.ionic_strength,
         device=args.device,
         steps=args.steps,
         return_structures=args.return_structures,

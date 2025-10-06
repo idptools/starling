@@ -22,7 +22,7 @@ class DDIMSampler(nn.Module):
         ddpm_model,
         encoder_model,
         n_steps: int,
-        salt=150,
+        ionic_strength: float = 150,
         ddim_discretize: str = "uniform",
         ddim_eta: float = 0.0,
     ):
@@ -65,7 +65,9 @@ class DDIMSampler(nn.Module):
         self.tokenizer = StarlingTokenizer()
 
         self.device = self.ddpm_model.device
-        self.salt = torch.tensor([salt], device=self.device).unsqueeze(0)
+        self.ionic_strength = torch.tensor(
+            [ionic_strength], device=self.device
+        ).unsqueeze(0)
 
         # Ways to discretize the generative process
         if ddim_discretize == "uniform":
@@ -115,7 +117,9 @@ class DDIMSampler(nn.Module):
         labels = torch.tensor(self.tokenizer.encode(labels), device=self.device)
         labels = rearrange(labels, "f -> 1 f")
         attention_mask = torch.ones_like(labels, device=self.device, dtype=torch.bool)
-        labels = self.ddpm_model.sequence2labels(labels, attention_mask, self.salt)
+        labels = self.ddpm_model.sequence2labels(
+            labels, attention_mask, self.ionic_strength
+        )
 
         return labels, attention_mask
 

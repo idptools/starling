@@ -46,7 +46,7 @@ def test_sequence_encoder_backend_basic(dummy_manager):
         sequence_dict=sequences,
         device="cpu",
         batch_size=2,
-        salt=150,
+        ionic_strength=150,
         output_directory=None,
         model_manager=dummy_manager,
     )
@@ -69,7 +69,7 @@ def test_sequence_encoder_backend_remainder_batch(dummy_manager):
         sequence_dict=sequences,
         device="cpu",
         batch_size=2,
-        salt=150,
+        ionic_strength=150,
         output_directory=None,
         model_manager=dummy_manager,
     )
@@ -84,7 +84,7 @@ def test_sequence_encoder_backend_saves_files(tmp_path, dummy_manager):
         sequence_dict=sequences,
         device="cpu",
         batch_size=2,
-        salt=150,
+        ionic_strength=150,
         output_directory=str(tmp_path),
         model_manager=dummy_manager,
     )
@@ -109,7 +109,7 @@ def test_sequence_encoder_backend_pretokenized(dummy_manager):
         sequence_dict=sequences,
         device="cpu",
         batch_size=2,
-        salt=150,
+        ionic_strength=150,
         output_directory=None,
         model_manager=dummy_manager,
         pretokenized=True,

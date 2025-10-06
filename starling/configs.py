@@ -20,7 +20,7 @@ DEFAULT_MDS_NUM_INIT = 4
 DEFAULT_STRUCTURE_GEN = "mds"
 CONVERT_ANGSTROM_TO_NM = 10
 MAX_SEQUENCE_LENGTH = 380  # set longest sequence the model can work on
-DEFAULT_SALT = 150  # default salt concentration in mM
+DEFAULT_IONIC_STRENGTH = 150  # default ionic strength in mM
 DEFAULT_SAMPLER = "ddim"  # default sampler for diffusion model
 
 # Model compilation settings
@@ -79,7 +79,9 @@ DEFAULT_DDPM_WEIGHTS_PATH = fix_ref_to_home(
 )
 
 # Github Releases URLs for model weights
-GITHUB_ENCODER_URL = "https://github.com/idptools/starling/releases/download/v2.0.0-alpha/vae.ckpt"
+GITHUB_ENCODER_URL = (
+    "https://github.com/idptools/starling/releases/download/v2.0.0-alpha/vae.ckpt"
+)
 GITHUB_DDPM_URL = "https://github.com/idptools/starling/releases/download/v2.0.0-alpha/diffusion_model.ckpt"
 
 # Update default paths to check Hub first
