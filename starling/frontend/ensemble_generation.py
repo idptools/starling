@@ -156,7 +156,7 @@ def check_positive_int(val):
 def generate(
     user_input,
     conformations=configs.DEFAULT_NUMBER_CONFS,
-    salt=configs.DEFAULT_SALT,
+    ionic_strength=configs.DEFAULT_SALT,
     device=None,
     steps=configs.DEFAULT_STEPS,
     sampler=configs.DEFAULT_SAMPLER,
@@ -446,7 +446,7 @@ def generate(
         show_progress_bar,
         show_per_step_progress_bar,
         pdb_trajectory,
-        salt=salt,
+        salt=ionic_strength,
         constraint=constraint,
         model_manager=generation.model_manager,
         encoder_path=encoder_path,
@@ -487,7 +487,7 @@ def ensemble_encoder(
 
 def sequence_encoder(
     sequence_dict,
-    salt,
+    ionic_strength=configs.DEFAULT_SALT,
     batch_size=32,
     aggregate=False,
     device=None,
@@ -507,7 +507,7 @@ def sequence_encoder(
 
     embeddings = generation.sequence_encoder_backend(
         sequence_dict=sequence_dict,
-        salt=salt,
+        salt=ionic_strength,
         aggregate=aggregate,
         device=device,
         batch_size=batch_size,

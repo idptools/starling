@@ -124,11 +124,11 @@ def main():
         help=f"Sets the number of MDS jobs to be run in parallel. More may give better reconstruction but requires 1:1 with #CPUs to avoid performance penalty. Default: {configs.DEFAULT_MDS_NUM_INIT}.",
     )
     parser.add_argument(
-        "--salt",
-        dest="salt",
+        "--ionic_strength",
+        dest="ionic_strength",
         type=int,
         default=configs.DEFAULT_SALT,
-        help=f"Salt (in mM) for the prediction. Default: {configs.DEFAULT_SALT} mM.",
+        help=f"Ionic strength (in mM) for the prediction. Default: {configs.DEFAULT_SALT} mM.",
     )
     parser.add_argument(
         "--disable_progress_bar",
@@ -185,7 +185,7 @@ def main():
     generate(
         user_input=args.user_input,
         conformations=args.conformations,
-        salt=args.salt,
+        salt=args.ionic_strength,
         device=args.device,
         steps=args.steps,
         return_structures=args.return_structures,
