@@ -9,7 +9,6 @@ from starling import configs
 from starling.configs import DEFAULT_DDPM_WEIGHTS_PATH, DEFAULT_ENCODER_WEIGHTS_PATH
 from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
-from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
 from starling.models.vit import ViT
 
@@ -50,7 +49,7 @@ class ModelManager:
         sequence_encoder = SequenceEncoder(12, 512, 8)
         diffusion_model = DiffusionModel.load_from_checkpoint(
             ddpm_path,
-            unet_model=ViT(12, 512, 8, 512),
+            model=ViT(12, 512, 8, 512),
             sequence_encoder=sequence_encoder,
             distance_map_encoder=encoder_path,
             map_location=device,
@@ -107,8 +106,8 @@ class ModelManager:
         """
         compile_kwargs = configs.TORCH_COMPILATION["options"].copy()
 
-        self.diffusion_model.unet_model = torch.compile(
-            self.diffusion_model.unet_model, **compile_kwargs
+        self.diffusion_model.model = torch.compile(
+            self.diffusion_model.model, **compile_kwargs
         )
         self.encoder_model.decoder = torch.compile(
             self.encoder_model.decoder, **compile_kwargs
