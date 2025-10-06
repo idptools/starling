@@ -5,7 +5,7 @@ import starling.configs
 
 # Import submodules to make them accessible as part of the top-level package
 from starling.data import *
-from starling.frontend.ensemble_generation import generate
+from starling.frontend.ensemble_generation import generate, sequence_encoder
 from starling.models import *
 from starling.structure.ensemble import load_ensemble
 from starling.training import *
