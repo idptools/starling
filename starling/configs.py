@@ -11,8 +11,8 @@ DEFAULT_MODEL_DIR = os.path.join(
 # DEFAULT_ENCODE_WEIGHTS = "model-kernel-epoch=99-epoch_val_loss=1.72.ckpt"
 # DEFAULT_DDPM_WEIGHTS = "model-kernel-epoch=47-epoch_val_loss=0.03.ckpt"
 
-DEFAULT_ENCODE_WEIGHTS = "model-kernel-epoch=99-epoch_val_loss=1.65.ckpt"
-DEFAULT_DDPM_WEIGHTS = "model-kernel-epoch=153-epoch_val_loss=0.05.ckpt"
+DEFAULT_ENCODE_WEIGHTS = "vae.ckpt"
+DEFAULT_DDPM_WEIGHTS = "diffusion_model.ckpt"
 DEFAULT_NUMBER_CONFS = 400
 DEFAULT_BATCH_SIZE = 100
 DEFAULT_STEPS = 30
@@ -22,8 +22,6 @@ CONVERT_ANGSTROM_TO_NM = 10
 MAX_SEQUENCE_LENGTH = 380  # set longest sequence the model can work on
 DEFAULT_SALT = 150  # default salt concentration in mM
 DEFAULT_SAMPLER = "ddim"  # default sampler for diffusion model
-
-# Model compilation settings
 
 # Model compilation settings
 TORCH_COMPILATION = {
@@ -81,8 +79,8 @@ DEFAULT_DDPM_WEIGHTS_PATH = fix_ref_to_home(
 )
 
 # Github Releases URLs for model weights
-GITHUB_ENCODER_URL = "https://github.com/idptools/starling/releases/download/v1.0.0/model-kernel-epoch.99-epoch_val_loss.1.72.ckpt"
-GITHUB_DDPM_URL = "https://github.com/idptools/starling/releases/download/v1.0.0/model-kernel-epoch.47-epoch_val_loss.0.03.ckpt"
+GITHUB_ENCODER_URL = "https://github.com/idptools/starling/releases/download/v2.0.0-alpha/vae.ckpt"
+GITHUB_DDPM_URL = "https://github.com/idptools/starling/releases/download/v2.0.0-alpha/diffusion_model.ckpt"
 
 # Update default paths to check Hub first
 DEFAULT_ENCODER_WEIGHTS_PATH = os.environ.get(

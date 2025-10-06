@@ -9,7 +9,6 @@ from starling import configs
 from starling.configs import DEFAULT_DDPM_WEIGHTS_PATH, DEFAULT_ENCODER_WEIGHTS_PATH
 from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
-from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
 from starling.models.vit import ViT
 
