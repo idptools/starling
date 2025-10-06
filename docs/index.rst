@@ -19,7 +19,13 @@ Starling Documentation
    :caption: Analysis
    
    usage/ensemble
-   
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Possible Issues
+
+   usage/possible_issues
+
 .. toctree::
    :maxdepth: 1
    :caption: API Reference
