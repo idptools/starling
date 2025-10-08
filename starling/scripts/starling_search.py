@@ -65,7 +65,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     q.add_argument("--device", default="cuda:0")
     q.add_argument("--batch-size", type=int, default=256)
-    q.add_argument("--salt", type=int, default=150)
+    q.add_argument("--ionic-strength", type=int, default=150)
     q.add_argument("--max-cosine-similarity", type=float, default=None)
     q.add_argument("--min-l2-distance", type=float, default=None)
     q.add_argument("--length-min", type=int, default=None)
@@ -73,7 +73,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     q.add_argument("--rerank", action="store_true")
     q.add_argument("--rerank-batch-size", type=int, default=64)
     q.add_argument("--rerank-device", type=str, default=None)
-    q.add_argument("--rerank-salt", type=int, default=None)
+    q.add_argument("--rerank-ionic-strength", type=int, default=None)
     q.add_argument("--out", default=None)
     q.add_argument("--out-format", choices=["csv", "jsonl"], default="csv")
     q.add_argument("--verbose", action="store_true")
@@ -208,7 +208,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             sequence_dict=seq_dict,
             device=a.device,
             batch_size=a.batch_size,
-            salt=a.salt,
+            ionic_strength=a.ionic_strength,
             aggregate=True,
             output_directory=None,
         )
@@ -232,7 +232,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             rerank=a.rerank,
             rerank_batch_size=a.rerank_batch_size,
             rerank_device=a.rerank_device or a.device,
-            rerank_salt=a.rerank_salt,
+            rerank_ionic_strength=a.rerank_ionic_strength,
         )
         if a.out:
             _write(a.out, a.out_format, seqs, res, engine, a.return_sim, a.metric)
