@@ -618,7 +618,7 @@ class SearchEngine:
         gids: Iterable[int],
         device: Optional[str],
         batch_size: int,
-        salt: Optional[int],
+        ionic_strength: Optional[int],
     ) -> dict:
         """Encode candidate sequences for exact reranking.
 
@@ -630,8 +630,8 @@ class SearchEngine:
             Device string passed to encoder (e.g., 'cuda:0', 'cpu'). Auto if None.
         batch_size : int
             Encoder batch size.
-        salt : int, optional
-            Salt forwarded to the encoder (controls deterministic dropout etc.).
+        ionic_strength : int, optional
+            Ionic strength forwarded to the encoder (controls deterministic dropout etc.).
 
         Returns
         -------
@@ -660,12 +660,12 @@ class SearchEngine:
         from starling.inference.generation import sequence_encoder_backend
 
         chosen_device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
-        salt_val = 150 if salt is None else salt
+        ionic_strength = 150 if ionic_strength is None else ionic_strength
         emb_dict = sequence_encoder_backend(
             sequence_dict=seq_map,
             device=chosen_device,
             batch_size=batch_size,
-            salt=salt_val,
+            ionic_strength=ionic_strength,
             aggregate=True,
             output_directory=None,
         )
@@ -790,7 +790,7 @@ class SearchEngine:
         rerank: bool = False,
         rerank_device: Optional[str] = None,
         rerank_batch_size: int = 64,
-        rerank_salt: Optional[int] = None,
+        rerank_ionic_strength: Optional[int] = None,
         length_min: Optional[int] = None,
         length_max: Optional[int] = None,
     ) -> List[List[Tuple[float, int, Optional[str], Optional[int]]]]:
@@ -827,8 +827,8 @@ class SearchEngine:
             Device for reranking encoder; auto-select if None.
         rerank_batch_size : int, default 64
             Batch size for rerank embedding pass.
-        rerank_salt : int, optional
-            Salt forwarded to encoder (if None uses model default).
+        rerank_ionic_strength : int, optional
+            Ionic strength forwarded to encoder (if None uses model default).
         length_min : int, optional
             Minimum acceptable candidate length.
         length_max : int, optional
@@ -918,7 +918,7 @@ class SearchEngine:
             gids=rerank_gid_set,
             device=rerank_device,
             batch_size=rerank_batch_size,
-            salt=rerank_salt,
+            ionic_strength=rerank_ionic_strength,
         )
 
         return self._rerank(
