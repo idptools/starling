@@ -37,13 +37,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     b.add_argument("--nbits", type=int, default=8)
     b.add_argument("--add-batch-size", type=int, default=100000)
     b.add_argument("--nprobe", type=int, default=16)
-    b.add_argument("--use-gpu", action="store_true")
+    b.add_argument("--use-gpu", action="store_false")
     b.add_argument("--gpu-device", type=int, default=0)
-    b.add_argument("--gpu-fp16-lut", action="store_true")
+    b.add_argument("--gpu-fp16-lut", action="store_false")
     b.add_argument("--opq", action="store_true")
     b.add_argument("--compress", action="store_true")
     b.add_argument("--shard-regex", default=None)
-    b.add_argument("--verbose", action="store_true")
+    b.add_argument("--verbose", action="store_false")
 
     q = sub.add_parser("query", help="Query index (omit --index to use cached default)")
     q.add_argument(
@@ -55,8 +55,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     q.add_argument("--seq", nargs="*", default=None, help="Sequences")
     q.add_argument("--k", type=int, default=10)
     q.add_argument("--nprobe", type=int, default=64)
-    q.add_argument("--return-sim", action="store_true")
-    q.add_argument("--exclude-exact", action="store_true")
+    q.add_argument("--return-sim", action="store_false")
+    q.add_argument("--exclude-exact", action="store_false")
     q.add_argument("--sequence-identity-max", type=float, default=None)
     q.add_argument(
         "--identity-denominator",
@@ -70,13 +70,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     q.add_argument("--min-l2-distance", type=float, default=None)
     q.add_argument("--length-min", type=int, default=None)
     q.add_argument("--length-max", type=int, default=None)
-    q.add_argument("--rerank", action="store_true")
+    q.add_argument("--rerank", action="store_false")
     q.add_argument("--rerank-batch-size", type=int, default=64)
     q.add_argument("--rerank-device", type=str, default=None)
     q.add_argument("--rerank-ionic-strength", type=int, default=None)
     q.add_argument("--out", default=None)
     q.add_argument("--out-format", choices=["csv", "jsonl"], default="csv")
-    q.add_argument("--verbose", action="store_true")
+    q.add_argument("--verbose", action="store_false")
     return p.parse_args(argv)
 
 
