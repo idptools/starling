@@ -23,10 +23,30 @@ from starling.search import IndexBuilder, SearchEngine
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="starling_search",
-        description="Build and query FAISS indexes (flattened API)",
+        description=(
+            "starling_search: build and query FAISS indexes for protein sequence similarity.\n\n"
+            "Commands:\n"
+            "  build   Build a FAISS index from pretokenized sequence data.\n"
+            "  query   Query a FAISS index with one or more sequences and return nearest neighbors.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  Build an index:\n"
+            "    starling_search build --root /data/starling --tokens /data/tokens --index myindex.faiss\n\n"
+            "  Query the index:\n"
+            "    starling_search query --index myindex.faiss --seq MKT... --seq HLL... --k 20\n\n"
+            "Notes:\n"
+            "  - Use 'starling-pretokenize' to create the tokens directory required by 'build'.\n"
+            "  - Passing --index default or a missing path will attempt to fetch/cache the default index.\n"
+            "  - See individual command flags for advanced options (metric, GPU usage, reranking, output format).\n"
+        ),
     )
     sub = p.add_subparsers(dest="cmd", required=True)
-    b = sub.add_parser("build", help="Build index")
+    b = sub.add_parser(
+        "build",
+        help="Build a FAISS index from custom tokenized data - see 'starling-pretokenize' for tokenization",
+    )
     b.add_argument("--root", required=True)
     b.add_argument("--index", required=True)
     b.add_argument("--tokens", required=True)
@@ -45,11 +65,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     b.add_argument("--shard-regex", default=None)
     b.add_argument("--verbose", action="store_false")
 
-    q = sub.add_parser("query", help="Query index (omit --index to use cached default)")
+    q = sub.add_parser("query", help="Command to query a built FAISS index")
     q.add_argument(
         "--index",
         default="default",
-        help="Path to FAISS index (or 'default' to auto-fetch/cache)",
+        help="Path to a FAISS index (default: 'default' to auto-fetch/cache)",
     )
     q.add_argument("--metric", choices=["cosine", "l2"], default="cosine")
     q.add_argument("--seq", nargs="*", default=None, help="Sequences")
@@ -74,7 +94,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     q.add_argument("--rerank-batch-size", type=int, default=64)
     q.add_argument("--rerank-device", type=str, default=None)
     q.add_argument("--rerank-ionic-strength", type=int, default=None)
-    q.add_argument("--out", default=None)
+    q.add_argument("--out", default="nearest_neighbors")
     q.add_argument("--out-format", choices=["csv", "jsonl"], default="csv")
     q.add_argument("--verbose", action="store_false")
     return p.parse_args(argv)
