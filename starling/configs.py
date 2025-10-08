@@ -123,3 +123,149 @@ AA_THREE_TO_ONE = {
 AA_ONE_TO_THREE = {}
 for x in AA_THREE_TO_ONE:
     AA_ONE_TO_THREE[AA_THREE_TO_ONE[x]] = x
+
+# ---------------------------------------------------------------------------
+# Search (FAISS + SQLite) default configuration & lazy fetch
+# ---------------------------------------------------------------------------
+# Directory for cached search artifacts (separate from model weights to allow lighter syncs)
+DEFAULT_SEARCH_DIR = os.path.expanduser(os.path.join("~", ".starling_search"))
+
+# Default artifact filenames (can be overridden via user config or env)
+DEFAULT_FAISS_INDEX_NAME = (
+    "ensemble_search_gpu_nlist_32768_m_64_nbits_8_use_opq_True_compressed_False.faiss"
+)
+DEFAULT_SEQSTORE_NAME = DEFAULT_FAISS_INDEX_NAME + ".seqs.sqlite"
+DEFAULT_MANIFEST_NAME = DEFAULT_FAISS_INDEX_NAME + ".manifest.json"
+
+# Environment variable overrides (paths OR HTTP(S) URLs)
+ENV_FAISS_INDEX_PATH = os.environ.get("STARLING_FAISS_INDEX_PATH")
+ENV_SEQSTORE_PATH = os.environ.get("STARLING_SEQSTORE_PATH")
+ENV_MANIFEST_PATH = os.environ.get("STARLING_FAISS_MANIFEST_PATH")
+
+# TODO: update these to work once we have real Zenodo DOIs / file URLs
+# may have to migrate to another hosting solution if Zenodo doesn't support
+# direct file linking without going through their UI? or maybe theres a rest api?
+ZENODO_FAISS_INDEX_URL = os.environ.get(
+    "STARLING_ZENODO_FAISS_URL",
+    "PLACEHOLDER",
+)
+ZENODO_SEQSTORE_URL = os.environ.get(
+    "STARLING_ZENODO_SEQSTORE_URL",
+    "PLACEHOLDER",
+)
+ZENODO_MANIFEST_URL = os.environ.get(
+    "STARLING_ZENODO_MANIFEST_URL",
+    "PLACEHOLDER",
+)
+
+# Resolved local cache paths (before existence check)
+DEFAULT_FAISS_INDEX_PATH = ENV_FAISS_INDEX_PATH or os.path.join(
+    DEFAULT_SEARCH_DIR, DEFAULT_FAISS_INDEX_NAME
+)
+DEFAULT_SEQSTORE_DB_PATH = ENV_SEQSTORE_PATH or os.path.join(
+    DEFAULT_SEARCH_DIR, DEFAULT_SEQSTORE_NAME
+)
+DEFAULT_FAISS_MANIFEST_PATH = ENV_MANIFEST_PATH or os.path.join(
+    DEFAULT_SEARCH_DIR, DEFAULT_MANIFEST_NAME
+)
+
+# Optional SHA256 hashes (empty by default). Set via env for integrity checking.
+FAISS_INDEX_SHA256 = os.environ.get("STARLING_FAISS_INDEX_SHA256", "")
+SEQSTORE_SHA256 = os.environ.get("STARLING_SEQSTORE_SHA256", "")
+MANIFEST_SHA256 = os.environ.get("STARLING_FAISS_MANIFEST_SHA256", "")
+
+
+def _sha256_file(path: str) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _download_if_missing(url: str, dest: str, expected_sha256: str = "") -> None:
+    """Download a file to a temporary path then atomically publish.
+    Writes to dest+'.part' first; on success (and optional hash verify) renames to dest.
+    Cleans up partial file on failure or hash mismatch.
+    """
+    if not url or "PLACEHOLDER" in url:
+        return
+    need = True
+    if os.path.exists(dest):
+        if expected_sha256:
+            try:
+                if _sha256_file(dest) == expected_sha256.lower():
+                    need = False
+            except Exception:
+                pass
+        else:
+            need = False
+    if not need:
+        return
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    tmp = dest + ".part"
+    try:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+        import urllib.request
+
+        print(f"[Starling Search] Downloading {url} -> {dest}")
+        with urllib.request.urlopen(url) as r, open(tmp, "wb") as f:
+            for chunk in iter(lambda: r.read(1 << 20), b""):
+                if not chunk:
+                    break
+                f.write(chunk)
+        # Hash verify before publish
+        if expected_sha256:
+            try:
+                got = _sha256_file(tmp)
+                if got.lower() != expected_sha256.lower():
+                    print(
+                        f"[Starling Search] SHA256 mismatch (expected {expected_sha256} got {got}); discarding"
+                    )
+                    try:
+                        os.remove(tmp)
+                    except Exception:
+                        pass
+                    return
+            except Exception as e:
+                print(f"[Starling Search] Hash check failed: {e}")
+                # proceed without deleting; still publish
+        os.replace(tmp, dest)
+    except Exception as e:
+        print(f"[Starling Search] Download failed ({url}): {e}")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return
+
+
+def ensure_search_artifacts(download: bool = True) -> tuple[str, str, str]:
+    """Ensure FAISS index + sequence store + manifest exist locally.
+
+    Attempts download from Zenodo-like URLs if missing and download=True.
+    Returns (index_path, seqstore_path, manifest_path) regardless of existence.
+    The caller should still validate accessibility (e.g. faiss.read_index).
+    """
+    if download:
+        _download_if_missing(
+            ZENODO_FAISS_INDEX_URL, DEFAULT_FAISS_INDEX_PATH, FAISS_INDEX_SHA256
+        )
+        _download_if_missing(
+            ZENODO_SEQSTORE_URL, DEFAULT_SEQSTORE_DB_PATH, SEQSTORE_SHA256
+        )
+        _download_if_missing(
+            ZENODO_MANIFEST_URL, DEFAULT_FAISS_MANIFEST_PATH, MANIFEST_SHA256
+        )
+    return (
+        DEFAULT_FAISS_INDEX_PATH,
+        DEFAULT_SEQSTORE_DB_PATH,
+        DEFAULT_FAISS_MANIFEST_PATH,
+    )

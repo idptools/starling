@@ -4,7 +4,7 @@ Inference module for STARLING.
 Contains Bayesian Maximum Entropy (BME) reweighting functionality.
 """
 
-from starling.inference.bme import (
+from starling.structure.bme import (
     BME,
     BMEResult,
     ExperimentalObservable,

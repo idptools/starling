@@ -8,7 +8,7 @@ from tqdm.auto import tqdm
 
 from starling import configs, utilities
 from starling._version import __version__
-from starling.inference.bme import BME
+from starling.structure.bme import BME
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
     generate_3d_coordinates_from_distances,

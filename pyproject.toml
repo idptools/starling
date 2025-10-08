@@ -69,9 +69,23 @@ starling2sequence = "starling.scripts.starling_converter:starling2sequence"
 starling2starling = "starling.scripts.starling_converter:starling2starling"
 numpy2starling = "starling.scripts.starling_converter:numpy2starling"
 xtc2starling = "starling.scripts.starling_converter:xtc2starling"
+starling-search = "starling.scripts.starling_search:main"
+starling-pretokenize = "starling.scripts.starling_pretokenize:main"
 
 
 [project.optional-dependencies]
+search = [
+  "faiss-cpu>=1.7.4",
+  "zstandard>=0.22"
+]
+search-cpu = [
+  "faiss-cpu>=1.7.4",
+  "zstandard>=0.22"
+]
+search-gpu = [
+  "faiss-gpu>=1.7.4",
+  "zstandard>=0.22"
+]
 test = [
   "pytest>=6.1.2",
   "pytest-runner"

@@ -52,7 +52,7 @@ The BME class can also be used standalone without the Ensemble class. This is
 useful for advanced workflows or when you want to apply BME
 to observables not directly supported by STARLING.
 
->>> from starling.inference.bme import BME, ExperimentalObservable
+>>> from starling.structure.bme import BME, ExperimentalObservable
 >>> import numpy as np
 >>>
 >>> # Define experimental observables with different constraint types
