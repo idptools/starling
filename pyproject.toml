@@ -43,6 +43,8 @@ dependencies = [
 	'hdf5plugin',
 	'mdtraj>=1.9.7',
 	'metapredict>=3.0',
+	'faiss-cpu>=1.7.4',
+	'zstandard>=0.22',
     ]
 	#'finches @ git+https://git@github.com/idptools/finches@main#egg=finches',
 	#'sparrow @ git+https://git@github.com/idptools/sparrow.git@main#egg=sparrow.git']
@@ -74,17 +76,8 @@ starling-pretokenize = "starling.scripts.starling_pretokenize:main"
 
 
 [project.optional-dependencies]
-search = [
-  "faiss-cpu>=1.7.4",
-  "zstandard>=0.22"
-]
-search-cpu = [
-  "faiss-cpu>=1.7.4",
-  "zstandard>=0.22"
-]
 search-gpu = [
-  "faiss-gpu>=1.7.4",
-  "zstandard>=0.22"
+  "faiss-gpu>=1.7.4"
 ]
 test = [
   "pytest>=6.1.2",
@@ -140,4 +133,3 @@ default-tag = "1.0.0"
 
 [tool.versioningit.write]
 file = "starling/_version.py"
-
