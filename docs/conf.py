@@ -84,8 +84,17 @@ autodoc_class_signature = "separated"  # Show __init__ signature separately
 add_module_names = False  # Don't prepend module name to class/function names
 
 # Mock heavy optional dependencies so docs can build on Read the Docs without
-# GPU-centric packages such as FAISS or GPy.
-autodoc_mock_imports = ["faiss", "GPy"]
+# GPU-centric packages such as FAISS or GPy, and optional visualization packages.
+autodoc_mock_imports = [
+    "faiss",
+    "GPy",
+    "seaborn",
+    "tabulate",
+    "mdtraj",
+    "einops",
+    "lightning",
+    "hdf5plugin",
+]
 
 # Intersphinx mapping for cross-referencing other libraries
 intersphinx_mapping = {

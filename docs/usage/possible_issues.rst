@@ -73,15 +73,35 @@ Python search API.
 
 **Solution:**
 
-* CPU-only environments only require the default ``faiss-cpu`` wheel shipped
-    with STARLING. If you compiled FAISS manually, ensure ``FAISS_PATH`` does not
-    shadow the packaged version.
-* For GPU acceleration install the ``search-gpu`` extra:
+* **CPU-only environments**: The default installation includes ``faiss-cpu`` which 
+  works on all platforms. If you compiled FAISS manually, ensure ``FAISS_PATH`` 
+  does not shadow the packaged version.
 
-    .. code-block:: bash
+* **GPU acceleration**: FAISS-GPU requires conda installation as there is no pip 
+  package available. Follow the detailed GPU installation instructions in 
+  :doc:`installation` which includes:
 
-         pip install idptools-starling[search-gpu]
+  1. Installing PyTorch with CUDA support via conda
+  2. Installing FAISS-GPU matching your CUDA version via conda
+  3. Installing STARLING with ``--no-deps`` to avoid conflicts
 
-    Verify that ``faiss-gpu`` reports the expected CUDA version by running
-    ``python -c "import faiss; print(faiss.get_num_gpus())"``.
+* **Verification**: After installation, verify GPU support:
 
+  .. code-block:: bash
+
+       python -c "import faiss; print(f'FAISS GPUs: {faiss.get_num_gpus()}')"
+
+  If this returns ``0``, check that:
+  
+  - Your CUDA version matches between PyTorch and FAISS-GPU
+  - NVIDIA drivers are properly installed (``nvidia-smi`` works)
+  - PyTorch can access the GPU (``torch.cuda.is_available()`` returns ``True``)
+
+**Common Issues:**
+
+* **CUDA version mismatch**: Ensure ``cuda-version`` in the FAISS-GPU install 
+  command matches your PyTorch CUDA version
+* **pip vs conda conflicts**: Always use ``--no-deps`` when pip installing STARLING 
+  after conda-installing GPU packages
+* **Multiple FAISS versions**: Run ``pip list | grep faiss`` and ``conda list faiss`` 
+  to check for conflicting installations

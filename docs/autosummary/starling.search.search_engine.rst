@@ -1,4 +1,4 @@
-﻿starling.search.search\_engine
+starling.search.search\_engine
 ==============================
 
 .. automodule:: starling.search.search_engine

@@ -2,3 +2,8 @@ sphinx>=4.0.0
 sphinx_rtd_theme
 numpy
 matplotlib
+protfasta
+soursop
+scipy
+torch
+versioningit
