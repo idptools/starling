@@ -2,13 +2,15 @@ import os
 
 import torch
 
+import starling
 from starling import configs
 
 # local imports
 from starling.configs import DEFAULT_DDPM_WEIGHTS_PATH, DEFAULT_ENCODER_WEIGHTS_PATH
 from starling.models.diffusion import DiffusionModel
-from starling.models.unet import UNetConditional
+from starling.models.transformer import SequenceEncoder
 from starling.models.vae import VAE
+from starling.models.vit import ViT
 
 
 class ModelManager:
@@ -31,6 +33,9 @@ class ModelManager:
             return path
 
         # Resolve paths
+        encoder_path = encoder_path or DEFAULT_ENCODER_WEIGHTS_PATH
+        ddpm_path = ddpm_path or DEFAULT_DDPM_WEIGHTS_PATH
+
         encoder_path = load_from_path_or_url(encoder_path)
         ddpm_path = load_from_path_or_url(ddpm_path)
 
@@ -40,25 +45,19 @@ class ModelManager:
         if not os.path.exists(ddpm_path):
             raise FileNotFoundError(f"DDPM model {ddpm_path} not found.")
 
-        # Load the encoder model
-        encoder_model = VAE.load_from_checkpoint(encoder_path, map_location=device)
-
         # Load the diffusion model
+        sequence_encoder = SequenceEncoder(12, 512, 8)
         diffusion_model = DiffusionModel.load_from_checkpoint(
             ddpm_path,
-            model=UNetConditional(
-                in_channels=1,
-                out_channels=1,
-                base=64,
-                norm="group",
-                blocks=[2, 2, 2],
-                middle_blocks=2,
-                labels_dim=configs.UNET_LABELS_DIM,
-            ),
-            encoder_model=encoder_model,
+            model=ViT(12, 512, 8, 512),
+            sequence_encoder=sequence_encoder,
+            distance_map_encoder=encoder_path,
             map_location=device,
         )
-
+        encoder_model = VAE.load_from_checkpoint(
+            encoder_path,
+            map_location=device,
+        )
         return encoder_model, diffusion_model
 
     def get_models(
@@ -93,6 +92,39 @@ class ModelManager:
             self.encoder_model, self.diffusion_model = self.load_models(
                 encoder_path, ddpm_path, device
             )
+            if configs.TORCH_COMPILATION["enabled"]:
+                # Compile the models if requested
+                self.encoder_model, self.diffusion_model = self.compile()
 
         # Return the already-loaded models
+        return self.encoder_model, self.diffusion_model
+
+    def compile(self):
+        """
+        Compile the models using PyTorch's compile function.
+        This is a placeholder for the actual compilation logic.
+        """
+        compile_kwargs = configs.TORCH_COMPILATION["options"].copy()
+
+        self.diffusion_model.model = torch.compile(
+            self.diffusion_model.model, **compile_kwargs
+        )
+        self.encoder_model.decoder = torch.compile(
+            self.encoder_model.decoder, **compile_kwargs
+        )
+
+        # self.diffusion_model.sequence_encoder = torch.compile(
+        #     self.diffusion_model.sequence_encoder, **compile_kwargs
+        # )
+
+        print(
+            "\nCompiling the diffusion model for faster inference, this may take a while..."
+        )
+        print(
+            "This is a one-time operation, subsequent inferences will be MUCH faster.\n"
+        )
+        print("Compiling with the following options:")
+        for key, value in compile_kwargs.items():
+            print(f"  {key}: {value}")
+
         return self.encoder_model, self.diffusion_model

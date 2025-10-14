@@ -1,4 +1,5 @@
 import os
+
 import numpy as np
 import protfasta
 
@@ -155,9 +156,10 @@ def check_positive_int(val):
 def generate(
     user_input,
     conformations=configs.DEFAULT_NUMBER_CONFS,
+    ionic_strength=configs.DEFAULT_IONIC_STRENGTH,
     device=None,
     steps=configs.DEFAULT_STEPS,
-    ddim=True,
+    sampler=configs.DEFAULT_SAMPLER,
     return_structures=False,
     batch_size=configs.DEFAULT_BATCH_SIZE,
     num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
@@ -170,6 +172,9 @@ def generate(
     show_per_step_progress_bar=True,
     pdb_trajectory=False,
     return_single_ensemble=False,
+    constraint=None,
+    encoder_path=None,
+    ddpm_path=None,
 ):
     """
     Main function for generating the distance maps using STARLING. Allows
@@ -284,6 +289,16 @@ def generate(
         there is one sequence passed. If this option is passed and multiple
         sequences are passed this will throw an ValueError. Default False.
 
+    encoder_path : str, optional
+        Path to a custom encoder model checkpoint file to use instead of the default.
+        This allows using your own pretrained models.
+        Default is None, which uses the default model path from configs.py.
+
+    ddpm_path : str, optional
+        Path to a custom diffusion model checkpoint file to use instead of the default.
+        This allows using your own pretrained models.
+        Default is None, which uses the default model path from configs.py.
+
     Returns
     ---------------
     dict, None, or Ensemble
@@ -380,9 +395,9 @@ def generate(
                 f"Error: Directory {output_directory} does not exist."
             )
 
-    # check ddim is a bool
-    if not isinstance(ddim, bool):
-        raise ValueError("Error: DDIM must True or False.")
+    # check sampler is a string
+    if not isinstance(sampler, str):
+        raise ValueError("Error: sampler must be a string.")
 
     # check return_structures is a bool
     if not isinstance(return_structures, bool):
@@ -420,7 +435,7 @@ def generate(
         conformations,
         device,
         steps,
-        ddim,
+        sampler,
         return_structures,
         batch_size,
         num_cpus_mds,
@@ -431,6 +446,11 @@ def generate(
         show_progress_bar,
         show_per_step_progress_bar,
         pdb_trajectory,
+        ionic_strength=ionic_strength,
+        constraint=constraint,
+        model_manager=generation.model_manager,
+        encoder_path=encoder_path,
+        ddpm_path=ddpm_path,
     )
 
     # if this is true we KNOW there is only one Ensemble in the return dict because
@@ -439,3 +459,67 @@ def generate(
         return list(ensemble_return.values())[0]
     else:
         return ensemble_return
+
+
+def ensemble_encoder(
+    ensemble,
+    batch_size=32,
+    device=None,
+    output_directory=None,
+    encoder_path=None,
+    ddpm_path=None,
+):
+    # check device, get back a torch.device (not a str!)
+    device = utilities.check_device(device)
+
+    embeddings = generation.ensemble_encoder_backend(
+        ensemble=ensemble,
+        device=device,
+        batch_size=batch_size,
+        output_directory=output_directory,
+        model_manager=generation.model_manager,
+        encoder_path=encoder_path,
+        ddpm_path=ddpm_path,
+    )
+
+    return embeddings
+
+
+def sequence_encoder(
+    sequence_dict,
+    ionic_strength=configs.DEFAULT_IONIC_STRENGTH,
+    batch_size=32,
+    aggregate=False,
+    device=None,
+    output_directory=None,
+    encoder_path=None,
+    ddpm_path=None,
+    pretokenized: bool = False,
+    bucket: bool = False,
+    bucket_size: int = 32,
+    free_cuda_cache: bool = False,
+    return_on_cpu: bool = True,
+):
+    # check device, get back a torch.device (not a str!)
+    device = utilities.check_device(device)
+
+    sequence_dict = handle_input(sequence_dict)
+
+    embeddings = generation.sequence_encoder_backend(
+        sequence_dict=sequence_dict,
+        ionic_strength=ionic_strength,
+        aggregate=aggregate,
+        device=device,
+        batch_size=batch_size,
+        output_directory=output_directory,
+        model_manager=generation.model_manager,
+        encoder_path=encoder_path,
+        ddpm_path=ddpm_path,
+        pretokenized=pretokenized,
+        bucket=bucket,
+        bucket_size=bucket_size,
+        free_cuda_cache=free_cuda_cache,
+        return_on_cpu=return_on_cpu,
+    )
+
+    return embeddings

@@ -12,14 +12,13 @@ from torch.optim.lr_scheduler import (
     LambdaLR,
     OneCycleLR,
 )
-from tqdm import tqdm
 
-from starling.data.data_wrangler import one_hot_encode
 from starling.data.schedulers import (
     cosine_beta_schedule,
     linear_beta_schedule,
     sigmoid_beta_schedule,
 )
+from starling.models.vae import VAE
 
 # Adapted from https://github.com/Camaltra/this-is-not-real-aerial-imagery/blob/main/src/ai/diffusion_process.py
 # and https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/classifier_free_guidance.py#L720
@@ -54,6 +53,15 @@ def extract(
 
 
 class DiffusionModel(pl.LightningModule):
+    """
+    Denoising diffusion probabilistic model for latent space generation.
+
+    Implements the diffusion process described in:
+    - Sohl-Dickstein et al. (2015): Nonequilibrium Thermodynamics
+    - Ho et al. (2020): Denoising Diffusion Probabilistic Models
+    - Rombach et al. (2021): High-resolution image synthesis with latent diffusion
+    """
+
     SCHEDULER_MAPPING = {
         "linear": linear_beta_schedule,
         "cosine": cosine_beta_schedule,
@@ -63,14 +71,13 @@ class DiffusionModel(pl.LightningModule):
     def __init__(
         self,
         model: nn.Module,
-        encoder_model: nn.Module,
-        image_size: int,
-        *,
+        sequence_encoder: nn.Module,
+        distance_map_encoder: nn.Module,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
-        schedule_fn_kwargs: Union[dict, None] = None,
-        labels: str = "learned-embeddings",
         set_lr: float = 1e-4,
+        min_snr_loss: bool = False,
+        min_snr_gamma: float = 5.0,
         config_scheduler: str = "LinearWarmupCosineAnnealingLR",
     ) -> None:
         """
@@ -121,19 +128,19 @@ class DiffusionModel(pl.LightningModule):
         super().__init__()
 
         # Save the hyperparameters of the model but ignore the encoder_model and the U-Net model
-        self.save_hyperparameters(ignore=["encoder_model", "model"])
+        self.save_hyperparameters(
+            ignore=["model", "sequence_encoder", "distance_map_encoder"]
+        )
 
         self.model = model
-        self.labels = labels
+        self.sequence_encoder = sequence_encoder
 
-        # Freeze the encoder model parameters we don't want to keep training it (should already be trained)
-        self.encoder_model = encoder_model
-        for param in self.encoder_model.parameters():
-            param.requires_grad = False
-        self.encoder_model.eval()
+        if distance_map_encoder is not None:
+            self.distance_map_encoder = VAE.load_from_checkpoint(distance_map_encoder)
 
-        self.in_channels = self.model.in_channels
-        self.image_size = image_size
+            self.__freeze_distance_map_encoder()
+        else:
+            self.distance_map_encoder = None
 
         # Learning rate params
         self.set_lr = set_lr
@@ -143,19 +150,17 @@ class DiffusionModel(pl.LightningModule):
         if self.beta_scheduler_fn is None:
             raise ValueError(f"unknown beta schedule {beta_scheduler}")
 
-        if schedule_fn_kwargs is None:
-            schedule_fn_kwargs = {}
+        self.min_snr_loss = min_snr_loss
+        self.min_snr_gamma = min_snr_gamma
 
-        # This will be calculated later on during the first global step
-        # Need to register here so pytorch_lightning doesn't freak out
-        # Assuming the expected shape for the buffer is [1]
-        # This is used to scale the latent space to have unit variance (see reference #3)
-        latent_space_scaling_factor = torch.tensor(1.0, dtype=torch.float32)
+        # Register scaling factor buffer (calculated during first training step)
+        # Used to normalize latent space to unit variance per Reference #3
+        self.register_buffer(
+            "latent_space_scaling_factor", torch.tensor(1.0, dtype=torch.float32)
+        )
 
-        # Register the buffer
-        self.register_buffer("latent_space_scaling_factor", latent_space_scaling_factor)
-
-        betas = self.beta_scheduler_fn(timesteps, **schedule_fn_kwargs)
+        # Calculate diffusion process parameters
+        betas = self.beta_scheduler_fn(timesteps)
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
@@ -163,207 +168,28 @@ class DiffusionModel(pl.LightningModule):
             betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
         )
 
-        # Register the buffers for the model
-        self.register_buffer("betas", betas)
-        self.register_buffer("alphas_cumprod", alphas_cumprod)
-        self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
-        self.register_buffer("sqrt_recip_alphas", torch.sqrt(1.0 / alphas))
-        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
-        self.register_buffer(
-            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
-        )
-        self.register_buffer("posterior_variance", posterior_variance)
+        # Register diffusion process buffers
+        buffers = {
+            "betas": betas,
+            "alphas_cumprod": alphas_cumprod,
+            "alphas_cumprod_prev": alphas_cumprod_prev,
+            "sqrt_recip_alphas": torch.sqrt(1.0 / alphas),
+            "sqrt_alphas_cumprod": torch.sqrt(alphas_cumprod),
+            "sqrt_one_minus_alphas_cumprod": torch.sqrt(1.0 - alphas_cumprod),
+            "posterior_variance": posterior_variance,
+        }
 
-        timesteps, *_ = betas.shape
-        self.num_timesteps = int(timesteps)
+        for name, buffer in buffers.items():
+            self.register_buffer(name, buffer)
 
-        self.sampling_timesteps = timesteps
-
+        # Store timesteps information
+        self.num_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
 
-        if self.labels == "learned-embeddings":
-            self.sequence_embedding = nn.Embedding(21, self.model.labels_dim)
-
-    @torch.inference_mode()
-    def p_sample(
-        self, x: torch.Tensor, timestamp: int, labels: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        One denoising step of the diffusion model. This function is
-        used in p_sample_loop to denoise the initial tensor sampled from N(0, I)
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            A tensor to denoise
-        timestamp : int
-            The timestep of the denoising-diffusion process to denoise
-        labels : torch.Tensor
-            Labels (sequences) to condition the model on
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the denoised tensor (t-1)
-        """
-        b, *_, device = *x.shape, x.device
-
-        # Batch the timestep to the same size as the input tensor x
-        batched_timestamps = torch.full(
-            (b,), timestamp, device=device, dtype=torch.long
-        )
-
-        # Run the model to predict the noise at the current timestamp
-        preds = self.model(x, batched_timestamps, labels)
-
-        # Extract the necessary values from the buffers to calculate the predicted mean
-        betas_t = extract(self.betas, batched_timestamps, x.shape)
-        sqrt_recip_alphas_t = extract(
-            self.sqrt_recip_alphas, batched_timestamps, x.shape
-        )
-        sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, batched_timestamps, x.shape
-        )
-
-        # Calculate the predicted mean based on the model prediction of the noise
-        predicted_mean = sqrt_recip_alphas_t * (
-            x - betas_t * preds / sqrt_one_minus_alphas_cumprod_t
-        )
-
-        # If the timestamp is 0, return the predicted mean
-        if timestamp == 0:
-            return predicted_mean
-        else:
-            posterior_variance = extract(
-                self.posterior_variance, batched_timestamps, x.shape
-            )
-            noise = torch.randn_like(x)
-            return predicted_mean + torch.sqrt(posterior_variance) * noise
-
-    @torch.inference_mode()
-    def p_sample_loop(
-        self,
-        shape: tuple,
-        labels: torch.Tensor,
-        steps: int = None,
-        return_all_timesteps: bool = False,
-    ) -> torch.Tensor:
-        """
-        Sampling loop for the diffusion model. It loops over the timesteps
-        to denoise the initial tensor sampled from N(0, I)
-
-        Parameters
-        ----------
-        shape : tuple
-            The shape of the tensor to sample from N(0, I)
-        labels : torch.Tensor
-            Labels to condition the sampling on
-        steps : int, optional
-            Number of steps to sample, by default None (all timesteps)
-        return_all_timesteps : bool, optional
-            Whether to return the full trajectory of denoising,
-            by default False
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the fully denoised tensor, in this case a latent space
-            that can be decoded using a pre-trained VAE
-        """
-
-        batch, device = shape[0], self.device
-
-        all_latents = []
-
-        # Sample noise to generate the latent representation of the data
-        latents = torch.randn(shape, device=device)
-
-        # Get the number of steps to run denoising
-        if steps is not None:
-            timesteps = (
-                torch.linspace(1, self.num_timesteps - 1, steps).round().to(torch.int64)
-            )
-        else:
-            timesteps = range(0, self.num_timesteps)
-
-        # Loop over the timesteps to denoise the initial tensor
-        for t in tqdm(
-            reversed(timesteps),
-            desc="Generating Latents",
-            total=len(timesteps),
-        ):
-            if return_all_timesteps:
-                all_latents.append(latents)
-
-            latents = self.p_sample(latents, t, labels)
-
-        # Scale the latents back to the original scale
-        latents = (1 / self.latent_space_scaling_factor) * latents
-
-        # if not return_all_timesteps else torch.stack(imgs, dim=1)
-        if return_all_timesteps:
-            return torch.stack(all_latents, dim=1) * (
-                1 / self.latent_space_scaling_factor
-            )
-        else:
-            return latents
-
-    @torch.inference_mode()
-    def sample(
-        self,
-        batch_size: int,
-        labels: str,
-        steps: int = None,
-        return_all_timesteps: bool = False,
-    ) -> torch.Tensor:
-        """
-        Sample from the trained diffusion model
-
-        Parameters
-        ----------
-        batch_size : int
-            The batch size to sample, higher the better if enough VRAM
-        labels : str
-            Sequence to condition the sampling on
-        steps : int, optional
-            Number of steps to sample, by default None (all timesteps)
-        return_all_timesteps : bool, optional
-            Whether to return all the tensors along the
-            denoising trajectory, by default False
-
-        Returns
-        -------
-        torch.Tensor
-            Returns the sampled fully denoised tensor
-        """
-
-        shape = (batch_size, self.in_channels, self.image_size, self.image_size)
-
-        # Prepare the labels to condition the sampling from the model on
-        with torch.no_grad():
-            if self.labels == "learned-embeddings":
-                # Get the learned embeddings for the given sequence
-                labels = (
-                    torch.argmax(
-                        torch.from_numpy(one_hot_encode(labels.ljust(384, "0"))), dim=-1
-                    )
-                    .to(torch.int64)
-                    .squeeze()
-                    .to(self.device)
-                )
-                labels = self.sequence2labels(labels)
-
-        labels = labels.unsqueeze(0)
-
-        # Sample the denoising-diffusion model to generate data (in our case, latent space)
-        latents = self.p_sample_loop(
-            shape, labels, steps=steps, return_all_timesteps=return_all_timesteps
-        )
-
-        # Decode the latent space with the VAE to generate the distance map
-        distance_map = self.encoder_model.decode(latents)
-
-        return distance_map, latents, labels
+    def __freeze_distance_map_encoder(self):
+        self.distance_map_encoder.eval()
+        for param in self.distance_map_encoder.parameters():
+            param.requires_grad = False
 
     # Remove mixed precision from this function, I've experienced numerical instability here
     @autocast(device_type="cuda", enabled=False)
@@ -399,7 +225,9 @@ class DiffusionModel(pl.LightningModule):
         # Return the noised tensor based on the timestamp
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
-    def sequence2labels(self, sequences: List) -> torch.Tensor:
+    def sequence2labels(
+        self, sequences: List, sequence_mask, ionic_strength
+    ) -> torch.Tensor:
         """
         Converts sequences to labels based on user defined models,
 
@@ -418,8 +246,7 @@ class DiffusionModel(pl.LightningModule):
         ValueError
             If the labels are not one of the three options
         """
-        if self.labels == "learned-embeddings":
-            encoded = self.sequence_embedding(sequences)
+        encoded = self.sequence_encoder(sequences, sequence_mask, ionic_strength)
 
         return encoded
 
@@ -427,9 +254,10 @@ class DiffusionModel(pl.LightningModule):
         self,
         x_start: torch.Tensor,
         t: int,
-        labels: torch.Tensor = None,
+        labels: torch.Tensor,
+        mask: torch.Tensor,
+        ionic_strengths: torch.Tensor,
         noise: torch.Tensor = None,
-        loss_type: str = "l2",
     ) -> torch.Tensor:
         """
         A function that runs the model and calculates the loss based on the
@@ -445,9 +273,6 @@ class DiffusionModel(pl.LightningModule):
             Labels to condition the model on, by default None
         noise : torch.Tensor, optional
             Sampled noise from N(0,I), by default None
-        loss_type : str, optional
-            The type of loss to calculate between the
-            amount of added noise and predicted noise, by default "l2"
 
         Returns
         -------
@@ -471,22 +296,38 @@ class DiffusionModel(pl.LightningModule):
         x_noised = self.q_sample(x_start, t, noise=noise)
 
         # Get the labels to condition the model on
-        labels = self.sequence2labels(labels)
+        labels = self.sequence2labels(labels, mask, ionic_strengths)
 
         # Run the model to predict the noise
-        predicted_noise = self.model(x_noised, t, labels)
+        predicted_noise = self.model(x_noised, t, labels, mask)
 
-        # Calculate the loss based on the predicted noise and the actual noise
-        if loss_type == "l2":
-            loss = F.mse_loss(noise, predicted_noise)
-        elif loss_type == "l1":
-            loss = F.l1_loss(noise, predicted_noise)
+        # The following adapted from:
+        # https://github.com/huggingface/diffusers/blob/78a78515d64736469742e5081337dbcf60482750/examples/text_to_image/train_text_to_image.py#L927
+        if self.min_snr_loss:
+            # Apply min-SNR weighting as per Section 3.4 of https://arxiv.org/abs/2303.09556
+            # This improves training stability by reweighting timestep losses
+            snr = self.compute_snr(t)
+
+            # Calculate weight using min(snr, γ) / snr formula
+            # Handle zero SNR case by replacing potential infinities with 1.0
+            snr_weight = torch.clamp(self.min_snr_gamma / snr, min=1.0)
+
+            # Apply the SNR-weighted MSE loss
+            # First compute per-element losses, then average across spatial dimensions
+            # Finally, apply SNR weights and average across batch
+            mse_loss_raw = F.mse_loss(noise, predicted_noise, reduction="none")
+            mse_loss_per_sample = mse_loss_raw.mean(
+                dim=list(range(1, len(mse_loss_raw.shape)))
+            )
+            loss = (mse_loss_per_sample * snr_weight).mean()
         else:
-            raise ValueError(f"unknown loss type {loss_type}")
+            loss = F.mse_loss(noise, predicted_noise)
 
         return loss
 
-    def forward(self, x: torch.Tensor, labels: torch.Tensor = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, labels: torch.Tensor, mask, ionic_strengths
+    ) -> torch.Tensor:
         """
         Forward pass of the model, calculates the loss based on the
         predicted noise and the actual noise.
@@ -503,60 +344,120 @@ class DiffusionModel(pl.LightningModule):
         torch.Tensor
             Returns the loss
         """
-        b, c, h, w, device, img_size = *x.shape, x.device, self.image_size
-        assert h == w == img_size, f"image size must be {img_size}"
+        b, c, h, w, device = *x.shape, x.device
 
         # Generate random timestamps to noise the tensor and learn the denoising process
         timestamps = torch.randint(0, self.num_timesteps, (b,), device=device).long()
 
-        return self.p_loss(x, timestamps, labels)
+        return self.p_loss(x, timestamps, labels, mask, ionic_strengths)
+
+    def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
+        """
+        Initialize the latent space mean and standard deviation using the first batch
+        for z-scoring (standardization).
+
+        Parameters
+        ----------
+        latent_encoding : torch.Tensor
+            Batch of encoded latent vectors
+        """
+        # Calculate local mean and standard deviation
+        # local_mean = latent_encoding.mean()
+        local_std = latent_encoding.std()
+
+        # Gather from all processes and compute global mean and standard deviation
+        # gathered_mean = self.all_gather(local_mean)
+        gathered_std = self.all_gather(local_std)
+
+        # mean_mean = gathered_mean.mean()
+        mean_std = 1 / gathered_std.mean()
+
+        # Update the registered buffers with computed values
+        # self.latent_space_mean = mean_mean.float().to(self.device)
+        self.latent_space_scaling_factor = mean_std.float().to(self.device)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences = batch
+        latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
+            batch["data"],
+            batch["sequence"],
+            batch["attention_mask"],
+            batch["ionic_strengths"],
+        )
 
-        with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(data)
-            latent_encoding = latent_encoding.sample()
+        if self.distance_map_encoder is not None:
+            with torch.no_grad():
+                latent_encoding = self.distance_map_encoder.encode(
+                    latent_encoding
+                ).mode()
 
-        # Figure out the standard deviation of the latent space using
-        # the first batch of the data. This is to scale it to have unit variance
-        # stabilizes denoising-diffusion training
+        # Calculate scaling factor on first batch (only once during training)
         if self.global_step == 0 and batch_idx == 0:
-            latent_space_scaling_factor = 1 / latent_encoding.std()
-            self.latent_space_scaling_factor = latent_space_scaling_factor.float().to(
-                self.device
-            )
+            self._initialize_latent_scaling(latent_encoding)
 
-        # Scale the latent encoding to have unit std
-        latent_encoding = self.latent_space_scaling_factor * latent_encoding
+        # Z-score the latent encoding
+        latent_encoding = latent_encoding * self.latent_space_scaling_factor
 
-        loss = self.forward(latent_encoding, labels=sequences)
+        # Compute loss
+        loss = self.forward(
+            latent_encoding,
+            labels=sequences,
+            mask=sequence_attention_mask,
+            ionic_strengths=ionic_strengths,
+        )
 
-        self.log("train_loss", loss, prog_bar=True, batch_size=data.size(0))
+        # Log training metrics
+        self.log("train_loss", loss, prog_bar=True, batch_size=latent_encoding.size(0))
 
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        data, sequences = batch
+        latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
+            batch["data"],
+            batch["sequence"],
+            batch["attention_mask"],
+            batch["ionic_strengths"],
+        )
 
-        with torch.no_grad():
-            latent_encoding = self.encoder_model.encode(data)
-            latent_encoding = latent_encoding.sample()
+        if self.distance_map_encoder is not None:
+            with torch.no_grad():
+                latent_encoding = self.distance_map_encoder.encode(
+                    latent_encoding
+                ).mode()
 
-        # Scale the latent encoding to have unit std
-        latent_encoding = self.latent_space_scaling_factor * latent_encoding
+        # Z-score the latent encoding
+        latent_encoding = latent_encoding * self.latent_space_scaling_factor
 
-        loss = self.forward(latent_encoding, labels=sequences)
+        # Compute loss
+        loss = self.forward(
+            latent_encoding,
+            labels=sequences,
+            mask=sequence_attention_mask,
+            ionic_strengths=ionic_strengths,
+        )
 
         self.log(
             "epoch_val_loss",
             loss,
             prog_bar=True,
             sync_dist=True,
-            batch_size=data.size(0),
+            batch_size=latent_encoding.size(0),
         )
 
         return loss
+
+    def compute_snr(self, timesteps):
+        """
+        Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
+        """
+        alphas_cumprod = self.alphas_cumprod
+        sqrt_alphas_cumprod = alphas_cumprod**0.5
+        sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
+
+        alpha = sqrt_alphas_cumprod[timesteps]
+        sigma = sqrt_one_minus_alphas_cumprod[timesteps]
+        # Compute SNR.
+        snr = (alpha / sigma) ** 2
+        return snr
 
     def configure_optimizers(self):
         """
@@ -579,7 +480,7 @@ class DiffusionModel(pl.LightningModule):
             If the scheduler is not implemented
         """
         optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            list(self.model.parameters()) + list(self.sequence_encoder.parameters()),
             lr=self.set_lr,
             betas=(0.9, 0.999),
             eps=1e-08,
@@ -623,7 +524,7 @@ class DiffusionModel(pl.LightningModule):
             total_steps = self.trainer.estimated_stepping_batches
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
-            warmup_steps = steps_per_epoch * int(num_epochs * 0.05)
+            warmup_steps = steps_per_epoch * int(num_epochs * 0.01)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:

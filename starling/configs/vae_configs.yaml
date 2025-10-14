@@ -1,0 +1,5 @@
+defaults:
+  - dataloader: vae_dataloader.yaml
+  - trainer: vae_trainer.yaml
+  - vae_model: model.yaml
+  - _self_

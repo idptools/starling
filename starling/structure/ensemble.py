@@ -7,11 +7,10 @@ from soursop.sstrajectory import SSTrajectory
 from tqdm.auto import tqdm
 
 from starling import configs, utilities
-from starling._version import (
-    __version__,
-)
+from starling._version import __version__
+from starling.structure.bme import BME
 from starling.structure.coordinates import (
-    create_ca_topology_from_coords,        
+    create_ca_topology_from_coords,
     generate_3d_coordinates_from_distances,
 )
 
@@ -56,6 +55,9 @@ class Ensemble:
         self.__rg_vals = []
         self.__rh_vals = []
         self.__rh_mode_used = None
+
+        # BME reweighting cache
+        self.__bme_result = None
 
         if ssprot_ensemble is None:
             self.__trajectory = None
@@ -188,7 +190,7 @@ class Ensemble:
 
         return bad_frames
 
-    def rij(self, i, j, return_mean=False):
+    def rij(self, i, j, return_mean=False, use_bme_weights=False):
         """
         Compute the distance between residues i and j for each conformation
         in the ensemble.
@@ -201,29 +203,35 @@ class Ensemble:
         j : int
             Index of the second residue.
 
+        return_mean : bool
+            If True, returns the mean distance. Default is False.
+
+        use_bme_weights : bool
+            If True, use BME-optimized weights for computing mean.
+            Only applicable if return_mean=True. Default is False.
+
         Returns
         -------
-        list of float
-            List of distances between residues i and j for each conformation
-            in the ensemble. If return_mean is set returns the mean value.
-
+        float or np.ndarray
+            If return_mean=True, returns weighted mean distance.
+            Otherwise, returns array of distances for each conformation.
 
         """
         if i < 0 or i >= self.sequence_length:
             raise ValueError(f"Invalid residue index i: {i}")
 
-        tmp = []
-        for d in self.__distance_maps:
-            tmp.append(d[i][j])
-
-        tmp = np.array(tmp)
+        tmp = self.__distance_maps[:, i, j]
 
         if return_mean:
-            return np.mean(tmp)
+            if use_bme_weights:
+                weights = self._get_weights(use_bme_weights=True)
+                return np.sum(tmp * weights)
+            else:
+                return np.mean(tmp)
         else:
             return tmp
 
-    def end_to_end_distance(self, return_mean=False):
+    def end_to_end_distance(self, return_mean=False, use_bme_weights=False):
         """
         Compute the end-to-end distance of the protein chain
         for each conformation in the ensemble.
@@ -233,21 +241,30 @@ class Ensemble:
         return_mean : bool
             If True, returns the mean end-to-end distance of the ensemble.
 
+        use_bme_weights : bool
+            If True, use BME-optimized weights for computing mean.
+            Only applicable if return_mean=True. Default is False.
+
         Returns
         -------
-        list of float
-            List of end-to-end distances for each conformation in the ensemble.
+        float or np.ndarray
+            If return_mean=True, returns weighted mean distance.
+            Otherwise, returns array of end-to-end distances for each conformation.
 
         """
 
         tmp = self.rij(0, self.sequence_length - 1)
 
         if return_mean:
-            return np.mean(tmp)
+            if use_bme_weights:
+                weights = self._get_weights(use_bme_weights=True)
+                return np.sum(tmp * weights)
+            else:
+                return np.mean(tmp)
         else:
             return tmp
 
-    def distance_maps(self, return_mean=False):
+    def distance_maps(self, return_mean=False, use_bme_weights=False):
         """
         Return the collection of distance maps for the ensemble.
 
@@ -256,7 +273,9 @@ class Ensemble:
         return_mean : bool
             If True, returns the mean distance map will be returned.
             Default is False.
-
+        use_bme_weights : bool
+            If True, use BME-optimized weights for computing mean.
+            Only applicable if return_mean=True. Default is False.
         Returns
         -------
         np.array or list of np.array
@@ -266,10 +285,18 @@ class Ensemble:
 
         """
         if return_mean:
-            return np.mean(self.__distance_maps, 0)
+            if use_bme_weights:
+                weights = self._get_weights(use_bme_weights=True)
+                # Reshape weights for broadcasting: (n_frames, 1, 1)
+                weights_reshaped = weights[:, np.newaxis, np.newaxis]
+                # Weighted average: sum(weight_i * distance_map_i)
+                return np.sum(self.__distance_maps * weights_reshaped, axis=0)
+            else:
+                return np.mean(self.__distance_maps, axis=0)
         else:
             return self.__distance_maps
 
+    # TODO: BME weights?
     def contact_map(self, contact_thresh=11, return_mean=False, return_summed=False):
         """
         Return the collection of contact maps for the ensemble.
@@ -316,7 +343,8 @@ class Ensemble:
             return np.array(dm < contact_thresh, dtype=int)
 
     def radius_of_gyration(
-        self, return_mean=False, force_recompute=False):
+        self, return_mean=False, force_recompute=False, use_bme_weights=False
+    ):
         """
         Compute the radius of gyration of the protein chain
         for each conformation in the ensemble.
@@ -332,6 +360,10 @@ class Ensemble:
             uses the cached value if previously computed.
             Default is False.
 
+        use_bme_weights : bool
+            If True, use BME-optimized weights for computing mean.
+            Only applicable if return_mean=True. Default is False.
+
         Returns
         -------
         np.array or float
@@ -339,7 +371,7 @@ class Ensemble:
             If return_mean is set to true returns the mean value as a float
 
         """
-        if len(self.__rg_vals) == 0 or force_recompute == True:
+        if len(self.__rg_vals) == 0 or force_recompute:
             for d in self.__distance_maps:
                 distances = np.sum(np.square(d))
                 rg_val = np.sqrt(distances / (2 * np.power(self.sequence_length, 2)))
@@ -348,11 +380,17 @@ class Ensemble:
             self.__rg_vals = np.array(self.__rg_vals)
 
         if return_mean:
-            return np.mean(self.__rg_vals)
+            if use_bme_weights:
+                weights = self._get_weights(use_bme_weights=True)
+                return np.sum(self.__rg_vals * weights)
+            else:
+                return np.mean(self.__rg_vals)
         else:
             return self.__rg_vals
 
-    def local_radius_of_gyration(self, start, end, return_mean=False):
+    def local_radius_of_gyration(
+        self, start, end, return_mean=False, use_bme_weights=False
+    ):
         """
         Return the local radius of gyration of the protein chain based on a subregion
         of the chain.
@@ -368,6 +406,10 @@ class Ensemble:
         return_mean : bool
             If True, returns the mean radius of gyration of the ensemble.
             Default is False.
+
+        use_bme_weights : bool
+            If True, use BME-optimized weights for computing mean.
+            Only applicable if return_mean=True. Default is False.
 
         Returns
         -------
@@ -385,31 +427,37 @@ class Ensemble:
         local_rg = np.array(local_rg)
 
         if return_mean:
-            return np.mean(local_rg)
+            if use_bme_weights:
+                weights = self._get_weights(use_bme_weights=True)
+                return np.sum(local_rg * weights)
+            else:
+                return np.mean(local_rg)
         return local_rg
 
+    # TODO BME weights?
     def hydrodynamic_radius(
         self,
-        return_mean=False,         
+        return_mean=False,
         force_recompute=False,
-        mode='nygaard', 
-        alpha1=0.216, 
-        alpha2=4.06, 
-        alpha3=0.821):
+        mode="nygaard",
+        alpha1=0.216,
+        alpha2=4.06,
+        alpha3=0.821,
+    ):
         """
         Compute the hydrodynamic radius of each conformation using either the
         Kirkwood-Riseman (mode='kr') or Nygaard (mode='nygaard') equation (default)
-        is Nygaard. 
+        is Nygaard.
 
         The Kirkwood-Riseman [1] equation may be more accurate when computing
         the Rh for comparison with NMR-derived Rh values, as reported by Pesce
-        et al. [2]. The Nygaard equation is a more general form of the 
+        et al. [2]. The Nygaard equation is a more general form of the
         Kirkwood-Riseman equation, and may offer better agreement with
-        values obtained from dynamic light scattering (DLS) experiments [3]. 
-          
+        values obtained from dynamic light scattering (DLS) experiments [3].
+
         For 'kr' (Kirkwood-Riseman mode), the alpha1/2/3 arguments are
         ignored, as these are only used with the Nygaard mode.
-        
+
         For 'nygaard' mode, the arguments (alpha1/2/3) are used, and should
         not be altered to recapitulate behaviour defined by Nygaard et al.
         Default values here are alpha1=0.216, alpha2=4.06 and alpha3=0.821.
@@ -418,7 +466,7 @@ class Ensemble:
         mode, the cached value is returned. This is to avoid recomputing
         the Rh value if it has already been computed. If you want to
         recompute the Rh value, set force_recompute=True. Also, if Rh with
-        a different mode is requested, the cached value is recomputed 
+        a different mode is requested, the cached value is recomputed
         automatically. This is to avoid a situation where you request Rh
         for one mode but actually get a (cached) value for another mode.
 
@@ -426,21 +474,21 @@ class Ensemble:
         and Diffusion Constants of Flexible Macromolecules in Solution.
         The Journal of Chemical Physics, 16(6), 565-573.
 
-        [2] Pesce et al. Assessment of models for calculating the hydrodynamic 
-        radius of intrinsically disordered proteins. Biophys. J. 122, 
+        [2] Pesce et al. Assessment of models for calculating the hydrodynamic
+        radius of intrinsically disordered proteins. Biophys. J. 122,
         310-321 (2023).
 
-        [3] Nygaard et al.  An Efficient Method for Estimating the Hydrodynamic 
+        [3] Nygaard et al.  An Efficient Method for Estimating the Hydrodynamic
         Radius of Disordered Protein Conformations. Biophys J. 2017;113: 550-557.
-        
+
         Parameters
         ----------
         return_mean : bool
-            If True, returns the mean hydrodynamic radius of the 
+            If True, returns the mean hydrodynamic radius of the
             ensemble. Default is False.
 
         force_recompute : bool
-            If True, forces recomputation of the hydrodynamic radius, 
+            If True, forces recomputation of the hydrodynamic radius,
             otherwise uses the cached value if previously computed.
             Default is False.
 
@@ -448,7 +496,7 @@ class Ensemble:
             The mode to use for computing the hydrodynamic radius.
             Options are 'kr' (Kirkwood-Riseman) or 'nygaard' (Nygaard).
             Default is 'nygaard'.
-            
+
         alpha1 : float
            First parameter in equation (7) from Nygaard et al. Default = 0.216
 
@@ -467,48 +515,46 @@ class Ensemble:
 
         # check the mode
         mode = mode.lower()
-        if mode not in ['kr', 'nygaard']:
+        if mode not in ["kr", "nygaard"]:
             raise ValueError("mode must be either 'kr' or 'nygaard'")
 
         # if we want to recompute...
         if len(self.__rh_vals) == 0 or force_recompute or mode != self.__rh_mode_used:
-
             # Nygaard mode
-            if mode == 'nygaard':
-
+            if mode == "nygaard":
                 # first compute the rg
                 rg = self.radius_of_gyration()
 
-                # precompute                
-                N_033 = np.power(len(self.sequence), 0.33) 
+                # precompute
+                N_033 = np.power(len(self.sequence), 0.33)
                 N_060 = np.power(len(self.sequence), 0.60)
 
-                Rg_over_Rh = ((alpha1*(rg - alpha2*N_033)) / (N_060 - N_033)) + alpha3
+                Rg_over_Rh = (
+                    (alpha1 * (rg - alpha2 * N_033)) / (N_060 - N_033)
+                ) + alpha3
 
-                Rh = (1/Rg_over_Rh)*rg
+                Rh = (1 / Rg_over_Rh) * rg
 
                 # assign the values to the class
                 self.__rh_vals = Rh
                 self.__rh_mode_used = mode
 
-
             # Kirkwood-Riseman mode
-            elif mode == 'kr':
+            elif mode == "kr":
                 all_rij = []
                 # build empty lists associated with each frame
                 for _ in range(len(self)):
                     all_rij.append([])
 
-
                 for i in range(len(self.sequence)):
                     tmp = []
-                    for j in range(i+1, len(self.sequence)):
-                        tmp.append(self.rij(i,j))
+                    for j in range(i + 1, len(self.sequence)):
+                        tmp.append(self.rij(i, j))
 
                     tmp = np.array(tmp).T
 
                     for idx, f in enumerate(tmp):
-                        all_rij[idx].extend((1/f).tolist())
+                        all_rij[idx].extend((1 / f).tolist())
 
                 Rh = np.reciprocal(np.mean(all_rij, axis=1).astype(float))
 
@@ -519,16 +565,15 @@ class Ensemble:
             # read from precomputed values
             else:
                 raise Exception("Invalid mode specified. Must be 'kr' or 'nygaard'")
-            
+
         # else use the precomputed values
         else:
             Rh = self.__rh_vals
 
         if return_mean:
             return np.mean(Rh)
-        else:   
+        else:
             return Rh
-    
 
     def build_ensemble_trajectory(
         self,
@@ -587,15 +632,21 @@ class Ensemble:
 
         """
 
-        # define and sanitize the device (we cast to string to ensure its a string cos 
+        # define and sanitize the device (we cast to string to ensure its a string cos
         # generate_3d_coordinates_from_distances expects a string
         device = str(utilities.check_device(device))
-        
+
         # if no traj yet or we're focing to recompute...
         if self.__trajectory is None or force_recompute:
-
             # build the 3D coordinates
-            coordinates = generate_3d_coordinates_from_distances(device, batch_size, num_cpus_mds, num_mds_init, self.__distance_maps, progress_bar=progress_bar)
+            coordinates = generate_3d_coordinates_from_distances(
+                device,
+                batch_size,
+                num_cpus_mds,
+                num_mds_init,
+                self.__distance_maps,
+                progress_bar=progress_bar,
+            )
 
             # make an mdtraj.Trajectory object and then use that to initailize a SOURSOP SSTrajectory object
             self.__trajectory = SSTrajectory(
@@ -618,7 +669,7 @@ class Ensemble:
         if self.__trajectory is None:
             return False
         return True
-    
+
     @property
     def trajectory(self):
         """
@@ -722,7 +773,7 @@ class Ensemble:
         """
         Return a string representation of the ensemble.
         """
-        if self.has_structures:        
+        if self.has_structures:
             marker = "[X]"
         else:
             marker = "[ ]"
@@ -733,6 +784,166 @@ class Ensemble:
         Return a string representation of the ensemble.
         """
         return self.__str__()
+
+    def reweight_bme(
+        self,
+        observables,
+        calculated_values,
+        theta=0.5,
+        max_iterations=50000,
+        optimizer="L-BFGS-B",
+        initial_weights=None,
+        force_recompute=False,
+        verbose=True,
+    ):
+        """
+        Perform Bayesian Maximum Entropy (BME) reweighting of the ensemble
+        to better match experimental observables while minimizing bias.
+
+        This method creates optimized weights for each frame that balance
+        fitting experimental data with maintaining ensemble diversity. The
+        result is cached and can be used with other ensemble methods by
+        setting use_bme_weights=True.
+
+        Parameters
+        ----------
+        observables : list[ExperimentalObservable]
+            List of experimental observables to fit. Each observable should
+            be an ExperimentalObservable object with value, uncertainty, and
+            constraint type.
+
+        calculated_values : np.ndarray
+            Array of calculated observable values for each frame.
+            Shape: (n_frames, n_observables)
+
+        theta : float, optional
+            Regularization parameter controlling the trade-off between fitting
+            experimental data and maintaining ensemble diversity. Higher values
+            prefer more diverse ensembles. Default is 0.5.
+
+        max_iterations : int, optional
+            Maximum number of optimization iterations. Default is 50000.
+
+        optimizer : str, optional
+            Optimization method to use. Default is 'L-BFGS-B'.
+
+        initial_weights : np.ndarray, optional
+            Initial weights for ensemble frames. If None, uniform weights are used.
+
+        force_recompute : bool, optional
+            If True, forces recomputation even if BME has been previously performed.
+            Default is False.
+
+        verbose : bool, optional
+            If True, print optimization progress. Default is True.
+
+        Returns
+        -------
+        BMEResult
+            Object containing optimization results including weights, chi-squared,
+            and convergence information.
+
+        Examples
+        --------
+        >>> from starling.inference.bme import ExperimentalObservable
+        >>> # Create experimental observables
+        >>> obs1 = ExperimentalObservable(value=25.0, uncertainty=2.0,
+        ...                               constraint="lower",
+        ...                               name="Rg")
+        >>> obs2 = ExperimentalObservable(value=30.0, uncertainty=3.0,
+        ...                               constraint="upper",
+        ...                               name="End-to-end distance")
+        >>>
+        >>> # Calculate observables from ensemble
+        >>> rg_values = ensemble.radius_of_gyration()
+        >>> ete_values = ensemble.end_to_end_distance()
+        >>> calculated = np.column_stack([rg_values, ete_values])
+        >>>
+        >>> # Perform BME reweighting
+        >>> result = ensemble.reweight_bme([obs1, obs2], calculated, theta=0.5)
+        >>>
+        >>> # Now use BME weights in other calculations
+        >>> reweighted_rg = ensemble.radius_of_gyration(use_bme_weights=True)
+        """
+        # Check if we need to recompute
+        if self.__bme_result is not None and not force_recompute:
+            if verbose:
+                print("Using cached BME result. Set force_recompute=True to recompute.")
+            return self.__bme_result
+
+        # Validate calculated_values shape
+        if calculated_values.shape[0] != self.number_of_conformations:
+            raise ValueError(
+                f"Number of frames in calculated_values ({calculated_values.shape[0]}) "
+                f"must match ensemble size ({self.number_of_conformations})"
+            )
+
+        bme = BME(
+            observables=observables,
+            calculated_values=calculated_values,
+            theta=theta,
+            initial_weights=initial_weights,
+        )
+
+        result = bme.fit(
+            max_iterations=max_iterations,
+            optimizer=optimizer,
+            verbose=verbose,
+        )
+
+        # TODO: following caching api - do we want this, may conflict with iBME implementation later
+        # or at least need to recall to forcibly recompute
+        self.__bme_result = result
+
+        return result
+
+    @property
+    def has_bme_weights(self):
+        """
+        Check if BME reweighting has been performed.
+
+        Returns
+        -------
+        bool
+            True if BME reweighting has been performed, False otherwise.
+        """
+        return self.__bme_result is not None and self.__bme_result.success
+
+    @property
+    def bme_result(self):
+        """
+        Get the cached BME result.
+
+        Returns
+        -------
+        BMEResult or None
+            The BME optimization result, or None if reweight_bme() has not been called.
+        """
+        return self.__bme_result
+
+    def _get_weights(self, use_bme_weights=False):
+        """
+        Internal method to get weights for calculations.
+
+        Parameters
+        ----------
+        use_bme_weights : bool
+            If True, return BME-optimized weights. If False, return uniform weights.
+
+        Returns
+        -------
+        np.ndarray
+            Array of weights for each frame.
+        """
+        if use_bme_weights:
+            if not self.has_bme_weights:
+                raise ValueError(
+                    "BME weights requested but BME reweighting has not been performed. "
+                    "Call reweight_bme() first."
+                )
+            return self.__bme_result.weights
+        else:
+            return np.ones(self.number_of_conformations) / self.number_of_conformations
 
 
 ## ------------------------------------------ END OF CLASS DEFINITION
@@ -750,7 +961,7 @@ def load_ensemble(filename, ignore_structures=False):
         file generated by STARLING)
 
     ignore_structures : bool
-        If set to True, the function will discard structures that 
+        If set to True, the function will discard structures that
         are part of the .starling file. This can be useful if you
         don't need the structures as it slows loading to parse.
     """

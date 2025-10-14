@@ -1,0 +1,17 @@
+_target_: starling.models.vae.VAE
+
+model_type: Resnet18
+in_channels: 1
+latent_dim: 1
+dimension: 384
+loss_type: nll
+weights_type: equal
+KLD_weight: 1e-6
+lr_scheduler: CosineAnnealingLR
+set_lr: 0.00001
+norm: instance
+base: 64
+optimizer: Adam
+compile_mode: max-autotune-no-cudagraphs
+KLD_warmup_fraction: 0
+KLD_scheduler_type: cyclical

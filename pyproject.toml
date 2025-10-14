@@ -43,6 +43,8 @@ dependencies = [
 	'hdf5plugin',
 	'mdtraj>=1.9.7',
 	'metapredict>=3.0',
+	'faiss-cpu>=1.7.4',
+	'zstandard>=0.22',
     ]
 	#'finches @ git+https://git@github.com/idptools/finches@main#egg=finches',
 	#'sparrow @ git+https://git@github.com/idptools/sparrow.git@main#egg=sparrow.git']
@@ -53,7 +55,8 @@ dependencies = [
 #"Documentation" = "https://starling.readthedocs.io/"
 
 [project.scripts]
-starling-train = "starling.training.vae_train:train_vae"
+starling-vae-train = "starling.training.vae_train:train_vae"
+starling-ddpm-train = "starling.training.diffusion_train:train_model"
 starling-sample = "starling.training.vae_generate:vae_generate"
 ae-train = "starling.training.ae_train:train_ae"
 
@@ -68,9 +71,14 @@ starling2sequence = "starling.scripts.starling_converter:starling2sequence"
 starling2starling = "starling.scripts.starling_converter:starling2starling"
 numpy2starling = "starling.scripts.starling_converter:numpy2starling"
 xtc2starling = "starling.scripts.starling_converter:xtc2starling"
+starling-search = "starling.scripts.starling_search:main"
+starling-pretokenize = "starling.scripts.starling_pretokenize:main"
 
 
 [project.optional-dependencies]
+search-gpu = [
+  "faiss-gpu>=1.7.4"
+]
 test = [
   "pytest>=6.1.2",
   "pytest-runner"
@@ -104,7 +112,8 @@ where = ["."]
 # Ref https://setuptools.pypa.io/en/latest/userguide/datafiles.html#package-data
 [tool.setuptools.package-data]
 starling = [
-    "py.typed"
+    "py.typed",
+	"configs/**"
 ]
 
 [tool.versioningit]
@@ -124,4 +133,3 @@ default-tag = "1.0.0"
 
 [tool.versioningit.write]
 file = "starling/_version.py"
-

@@ -1,6 +1,9 @@
+import io
+import lzma
 import multiprocessing as mp
 from argparse import ArgumentParser
 from collections import OrderedDict
+from pathlib import Path
 
 import h5py
 import hdf5plugin
@@ -8,7 +11,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from finches.forcefields.mpipi import Mpipi_model, harmonic
+
+# from finches.forcefields.mpipi import Mpipi_model, harmonic
 from tabulate import tabulate
 from tqdm import tqdm
 
@@ -78,24 +82,52 @@ def finches_potential_energy(data):
     return interaction_energy, harmonic_energy, interaction_energy + harmonic_energy
 
 
+# def load_hdf5_compressed(file_path, keys_to_load=None):
+#     """
+#     Loads data from an HDF5 file.
+
+#     Parameters:
+#         - file_path (str): Path to the HDF5 file.
+#         - keys_to_load (list): List of keys to load. If None, loads all keys.
+#     Returns:
+#         - dict: Dictionary containing loaded data.
+#     """
+#     data_dict = {}
+#     with h5py.File(file_path, "r") as f:
+#         keys = keys_to_load if keys_to_load else f.keys()
+#         for key in keys:
+#             if key == "dm":
+#                 data_dict[key] = f[key][...]
+#             else:
+#                 data_dict[key] = f[key][...]
+#     return data_dict
+
+
 def load_hdf5_compressed(file_path, keys_to_load=None):
     """
-    Loads data from an HDF5 file.
+    Loads data from an HDF5 file, supporting both normal .h5 and .h5.xz compressed files.
 
     Parameters:
-        - file_path (str): Path to the HDF5 file.
+        - file_path (str or Path): Path to the HDF5 file (.h5 or .h5.xz).
         - keys_to_load (list): List of keys to load. If None, loads all keys.
     Returns:
         - dict: Dictionary containing loaded data.
     """
     data_dict = {}
-    with h5py.File(file_path, "r") as f:
+    file_path = Path(file_path)
+
+    # Open depending on compression
+    if file_path.suffix == ".xz":
+        with lzma.open(file_path, "rb") as f:
+            decompressed = f.read()
+        f = h5py.File(io.BytesIO(decompressed), "r")
+    else:
+        f = h5py.File(file_path, "r")
+
+    with f:
         keys = keys_to_load if keys_to_load else f.keys()
         for key in keys:
-            if key == "dm":
-                data_dict[key] = f[key][...]
-            else:
-                data_dict[key] = f[key][...]
+            data_dict[key] = f[key][...]
     return data_dict
 
 
@@ -175,6 +207,9 @@ def main():
 
         # Get the data
         data["seq"] = int_to_seq(data["seq"])
+        if len(data["seq"]) > 380:
+            print(f"Skipping {path} as sequence length is greater than 380")
+            continue
         ground_truth_dm = prepare_data(data["dm"])
 
         num_batches = ground_truth_dm.shape[0] // args.batch
@@ -202,10 +237,7 @@ def main():
                     ].to(args.device),
                 )
             )
-        recon_dm = [
-            arr[np.newaxis, :, :] if arr.ndim == 2 else arr
-            for arr in recon_dm
-        ]
+        recon_dm = [arr[np.newaxis, :, :] if arr.ndim == 2 else arr for arr in recon_dm]
 
         recon_dm = np.concatenate(recon_dm, axis=0)
 
@@ -251,6 +283,8 @@ def main():
         # sequence_stats["Max_potential_energy_abe"] = round(difference.max(), 4)
 
         sequence_stats["Sequence Length"] = mask[0].diagonal(offset=1).sum() + 1
+
+        sequence_stats["Num_samples"] = recon_dm.shape[0]
 
         results[path] = sequence_stats
 

@@ -1,23 +1,40 @@
-.. starling documentation master file, created by
-   sphinx-quickstart on Thu Mar 15 13:55:56 2018.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
-Welcome to starling's documentation!
-=========================================================
+Starling Documentation
+=====================
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+   :maxdepth: 1
+   :caption: Getting Started
+   
+   usage/installation
+   
+.. toctree::
+   :maxdepth: 1
+   :caption: Inference
+   
+   usage/ensemble_generation
+   usage/sequence_encoder
 
-   getting_started
+.. toctree::
+   :maxdepth: 1
+   :caption: Analysis
+   
+   usage/ensemble
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Possible Issues
+
+   usage/possible_issues
+
+.. toctree::
+   :maxdepth: 1
+   :caption: API Reference
+   
    api
-
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   
+.. toctree::
+   :maxdepth: 1
+   :caption: Development
+   
+   contributing
+   changelog

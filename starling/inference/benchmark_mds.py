@@ -333,7 +333,7 @@ def run_benchmark_comparison(dms, n_iter=100, tol=1e-4, n_repeats=5):
 
 if __name__ == "__main__":
     # shape (200, 384, 384)
-    ens = generate("PKGS" + "PLKE" * 95)
+    ens = generate("PLKE" * 95)
     dms = ens["sequence_1"].distance_maps()
 
     heatmap_fig, dist_fig, timing_fig, timing_results = run_benchmark_comparison(
