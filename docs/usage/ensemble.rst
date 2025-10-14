@@ -3,6 +3,13 @@ Working with Ensembles
 
 The ``Ensemble`` class is a core component of STARLING that represents multiple conformations of a protein chain. This guide covers how to load, analyze, and manipulate conformational ensembles.
 
+.. seealso::
+
+     * :doc:`usage/constraints` for generating ensembles that satisfy
+         experimental restraints.
+     * :doc:`usage/ensemble_generation` for details on controlling the diffusion
+         sampler.
+
 Loading Ensembles
 ----------------
 
@@ -103,7 +110,7 @@ Optimize ensemble weights to match experimental data:
 
 .. code-block:: python
 
-    from starling.inference.bme import ExperimentalObservable
+    from starling.structure.bme import ExperimentalObservable
     import numpy as np
     
     # Define experimental observables

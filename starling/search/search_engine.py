@@ -91,20 +91,46 @@ except Exception as e:
 
 
 class SearchEngine:
-    """
-    High-performance similarity search with filtering and reranking.
+    """FAISS-backed similarity search with rich post-filtering.
+
+    The :class:`SearchEngine` wraps a trained ``faiss.Index`` and optional
+    :class:`~starling.search.store.SequenceStore` to provide high-level search
+    primitives used across STARLING. In addition to ANN lookups, it supports
+    length gating, identity thresholds, exact-match suppression, and optional
+    reranking with the encoder.
 
     Parameters
     ----------
     index : faiss.Index
-        A trained FAISS index (e.g., IVFPQ optionally wrapped by OPQ / IndexPreTransform).
+        Trained FAISS index (e.g., IVFPQ, HNSW) matching the embedding metric.
     metric : {'cosine', 'l2'}, default 'cosine'
-        Distance / similarity metric used when the index was built.
+        Similarity/distance metric used during index construction.
     seq_store : SequenceStore, optional
-        Attached sequence/metadata store for enabling length filters, exact sequence
-        exclusion, identity filtering, and reranking.
+        Sequence/metadata store generated alongside the index. Required for
+        filters that need sequence lengths or raw sequences, and for reranking.
     verbose : bool, default True
-        If True, progress / diagnostic logs are emitted via ``self._log``.
+        When ``True`` the engine logs key operations (loading, filters, rerank).
+
+    Attributes
+    ----------
+    index : faiss.Index
+        Underlying FAISS index used for coarse ANN search.
+    metric : str
+        Metric string supplied during construction (``"cosine"`` or ``"l2"``).
+    seq_store : SequenceStore or None
+        Attached sequence store used for metadata-aware filtering.
+    total : int
+        Number of vectors stored in the index.
+    dim : int
+        Embedding dimensionality of the index.
+
+    Examples
+    --------
+    >>> from starling.search import SearchEngine
+    >>> engine = SearchEngine.load("/data/index.faiss")
+    >>> hits = engine.search(queries, k=50, nprobe=128, rerank=True)
+    >>> len(hits[0])
+    50
     """
 
     def __init__(

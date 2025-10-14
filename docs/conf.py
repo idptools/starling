@@ -53,10 +53,47 @@ extensions = [
     "sphinx.ext.extlinks",
 ]
 
+# Autosummary settings
 autosummary_generate = True
+autosummary_generate_overwrite = True  # Allow regeneration when code changes
+autosummary_imported_members = False
+
+# Napoleon settings (for NumPy/Google style docstrings)
 napoleon_google_docstring = False
-napoleon_use_param = False
+napoleon_numpy_docstring = True
+napoleon_use_param = True
+napoleon_use_rtype = True
 napoleon_use_ivar = True
+napoleon_include_init_with_doc = True
+napoleon_include_private_with_doc = False
+napoleon_include_special_with_doc = False
+
+# Autodoc settings
+autodoc_default_options = {
+    "members": True,
+    "member-order": "bysource",
+    "special-members": "__init__",
+    "undoc-members": False,
+    "exclude-members": "__weakref__",
+    "show-inheritance": True,
+    "inherited-members": False,
+}
+autodoc_typehints = "description"  # Show type hints in the description
+autodoc_typehints_description_target = "documented"
+autodoc_class_signature = "separated"  # Show __init__ signature separately
+add_module_names = False  # Don't prepend module name to class/function names
+
+# Mock heavy optional dependencies so docs can build on Read the Docs without
+# GPU-centric packages such as FAISS or GPy.
+autodoc_mock_imports = ["faiss", "GPy"]
+
+# Intersphinx mapping for cross-referencing other libraries
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "torch": ("https://pytorch.org/docs/stable/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
+}
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

@@ -1,10 +1,10 @@
 Installation
-===========
+=============
 
 STARLING is available on GitHub (bleeding edge) and on PyPi (stable).
 
 Creating an Environment
-----------------------
+------------------------
 
 We recommend creating a fresh conda environment for STARLING:
 
@@ -14,10 +14,10 @@ We recommend creating a fresh conda environment for STARLING:
     conda activate starling
 
 Installation Options
-------------------
+----------------------
 
 Install from PyPi (Recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~--
 
 You can install STARLING from PyPi using pip:
 
@@ -26,7 +26,7 @@ You can install STARLING from PyPi using pip:
     pip install idptools-starling
 
 Install from GitHub (Development)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~----------
 
 Or you can clone and install the bleeding-edge version from GitHub:
 
@@ -37,7 +37,7 @@ Or you can clone and install the bleeding-edge version from GitHub:
     pip install .
 
 Verification
------------
+-------------
 
 To verify that STARLING has installed correctly, run:
 

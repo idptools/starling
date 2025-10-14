@@ -3,25 +3,37 @@ API reference
 
 .. currentmodule:: starling
 
-Core
-----
+High-level functions
+--------------------
 
 .. autosummary::
    :toctree: autosummary
    :recursive:
 
-   configs    
+   generate
+   sequence_encoder
+   load_ensemble
+   set_compilation_options
+
+Structure & Ensembles
+---------------------
+
+.. autosummary::
+   :toctree: autosummary
+   :recursive:
+
    structure.ensemble
+   structure.bme
 
-Data Processing
---------------
+Frontend
+--------
 
 .. autosummary::
    :toctree: autosummary
    :recursive:
 
-   data.tokenizer
-   
+   frontend.ensemble_generation
+
 Inference
 ---------
 
@@ -31,13 +43,38 @@ Inference
 
    inference
    inference.generation
-   inference.bme
+   inference.constraints
+   inference.model_loading
 
-Frontend
--------
+Data Processing
+---------------
 
 .. autosummary::
    :toctree: autosummary
    :recursive:
 
-   frontend.ensemble_generation
+   data.tokenizer
+
+Search & Indexing
+-----------------
+
+.. autosummary::
+   :toctree: autosummary
+   :recursive:
+
+   search
+   search.search_engine
+   search.store
+   search.builder
+   search.similarity_search
+   search.search_utils
+
+Configuration & Utilities
+-------------------------
+
+.. autosummary::
+   :toctree: autosummary
+   :recursive:
+
+   configs
+   utilities

@@ -94,12 +94,43 @@ class Constraint(ABC):
         return self
 
     def should_apply_guidance(self, timestep, total_steps):
+        """
+        Check if guidance should be applied at the current timestep.
+
+        Parameters
+        ----------
+        timestep : int
+            Current diffusion timestep.
+        total_steps : int
+            Total number of diffusion steps.
+
+        Returns
+        -------
+        bool
+            True if current timestep is within the guidance window.
+        """
         t_frac = timestep / total_steps
         reverse = 1 - t_frac
         return self.guidance_start <= reverse <= self.guidance_end
 
     def cosine_weight(self, t, total_steps, s=0.008):
-        """Cosine schedule for time-dependent guidance strength."""
+        """
+        Cosine schedule for time-dependent guidance strength.
+
+        Parameters
+        ----------
+        t : int
+            Current timestep.
+        total_steps : int
+            Total number of steps.
+        s : float, optional
+            Smoothing parameter (default: 0.008).
+
+        Returns
+        -------
+        float
+            Guidance weight following cosine schedule.
+        """
         t_scaled = t / total_steps
         return math.cos(t_scaled * math.pi / 2) ** 2
 
@@ -126,7 +157,23 @@ class Constraint(ABC):
         )
 
     def get_adaptive_clip_threshold(self, timestep):
-        """Get an adaptive clipping threshold that follows a cosine schedule."""
+        """
+        Get an adaptive clipping threshold that follows a cosine schedule.
+
+        The threshold starts high at the beginning of sampling and gradually
+        decreases, allowing larger gradients early on and more refined
+        adjustments later.
+
+        Parameters
+        ----------
+        timestep : int
+            Current diffusion timestep.
+
+        Returns
+        -------
+        float
+            Clipping threshold for gradient magnitudes.
+        """
         max_threshold = 2.0  # Maximum threshold at beginning
         min_threshold = 1.0  # Minimum threshold at end
 
@@ -610,7 +657,13 @@ class ConstraintLogger:
         self.steps_applied = 0  # Add a counter for steps where constraint was applied
 
     def setup(self):
-        """Set up the progress bar."""
+        """
+        Set up the progress bar for constraint logging.
+
+        Initializes the tqdm progress bar if verbose mode is enabled and
+        resets the step counter.
+        """
+        self.steps_applied = 0  # Reset counter
         if self.verbose:
             self.progress_bar = tqdm(
                 desc="Applying constraints",
@@ -619,7 +672,18 @@ class ConstraintLogger:
             )
 
     def update(self, timestep, constraint_name, metrics):
-        """Update logger with new constraint metrics."""
+        """
+        Update logger with new constraint metrics.
+
+        Parameters
+        ----------
+        timestep : int
+            Current diffusion timestep.
+        constraint_name : str
+            Name of the constraint being logged.
+        metrics : dict
+            Dictionary containing constraint metrics (loss, scale, etc.).
+        """
         if not self.verbose or self.progress_bar is None:
             return
 
@@ -646,6 +710,10 @@ class ConstraintLogger:
         self.progress_bar.refresh()
 
     def close(self):
-        """Close the logger."""
+        """
+        Close the progress bar and clean up.
+
+        Closes the tqdm progress bar if it exists in verbose mode.
+        """
         if self.verbose and self.progress_bar is not None:
             self.progress_bar.close()

@@ -381,6 +381,7 @@ class SequenceStore:
         os.replace(self._tmp_path, self._live_path)
 
     def close(self) -> None:
+        """Close the database connection without publishing (cleanup only)."""
         try:
             self.conn.close()
         except Exception:
@@ -404,12 +405,38 @@ class SequenceStore:
     # lru caching beneficial if there are multiple queries hitting the same gid from query file?
     @functools.lru_cache(maxsize=32768)
     def get_seq(self, gid: int) -> Optional[str]:
+        """
+        Fetch sequence string by global ID.
+
+        Parameters
+        ----------
+        gid : int
+            Global sequence identifier.
+
+        Returns
+        -------
+        str or None
+            Decoded sequence string, or None if GID not found.
+        """
         cur = self.conn.cursor()
         cur.execute("SELECT seq FROM sequences WHERE gid=?", (int(gid),))
         row = cur.fetchone()
         return self.decode_seq(row[0]) if row else None
 
     def get_header_len(self, gid: int) -> Tuple[Optional[str], Optional[int]]:
+        """
+        Fetch header and length by global ID.
+
+        Parameters
+        ----------
+        gid : int
+            Global sequence identifier.
+
+        Returns
+        -------
+        tuple of (str or None, int or None)
+            (header, length) tuple, or (None, None) if GID not found.
+        """
         cur = self.conn.cursor()
         cur.execute("SELECT header, len FROM sequences WHERE gid=?", (int(gid),))
         row = cur.fetchone()
@@ -497,11 +524,13 @@ class SequenceStore:
 
     @staticmethod
     def hash8(seq: str) -> int:
+        """Compute 8-byte SHA1 hash of sequence for deduplication."""
         h = hashlib.sha1(seq.encode("utf-8")).digest()
         return int.from_bytes(h[:8], "little", signed=True)
 
     @staticmethod
     def encode_seq(seq: str, use_zstd: bool) -> bytes:
+        """Encode sequence to BLOB with optional zstd compression."""
         if not use_zstd:
             return b"\x00" + seq.encode("utf-8")
         try:
@@ -513,6 +542,7 @@ class SequenceStore:
 
     @staticmethod
     def decode_seq(blob: bytes) -> str:
+        """Decode BLOB to sequence string, handling compression."""
         if not blob:
             return ""
         flag = blob[0]
@@ -527,6 +557,7 @@ class SequenceStore:
 
     @staticmethod
     def encode_header(header: Optional[str], use_zstd: bool) -> Optional[bytes]:
+        """Encode header to BLOB with optional zstd compression."""
         if header is None:
             return None
         if not use_zstd:
@@ -540,6 +571,7 @@ class SequenceStore:
 
     @staticmethod
     def decode_header(blob: Optional[bytes]) -> Optional[str]:
+        """Decode BLOB to header string, handling compression."""
         if not blob:
             return None
         flag = blob[0]

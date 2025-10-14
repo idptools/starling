@@ -1,13 +1,19 @@
 Ensemble Generation
-==================
+====================
 
 STARLING provides powerful tools for generating conformational ensembles of intrinsically disordered proteins (IDPs). This guide covers everything from basic usage to advanced options.
 
+.. seealso::
+
+     * :doc:`usage/cli` for command-line generation and conversion helpers.
+     * :doc:`usage/constraints` to steer sampling with experimental restraints and
+         enable Torch compilation.
+
 Getting Started
---------------
+----------------
 
 When to Use STARLING
-~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
 
 STARLING is designed for:
 
@@ -16,10 +22,10 @@ STARLING is designed for:
 * Exploring the conformational space of proteins with significant disorder
 
 Basic Ensemble Generation
-------------------------
+--------------------------
 
 Command Line Interface
-~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
 
 The simplest way to generate an ensemble is using the command-line interface:
 
@@ -42,7 +48,7 @@ For a complete list of options, run:
     starling --help
 
 Python API
-~~~~~~~~~
+~~~~~~~~~~
 
 You can also generate ensembles programmatically:
 
@@ -88,10 +94,10 @@ STARLING accepts various input formats:
     ensembles = generate("path/to/sequences.tsv", conformations=50)
 
 Environment Control
------------------
+--------------------
 
 Ionic Strength Control
-~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
 
 STARLING is trained on ensembles generated at three different ionic strengths (20mM, 150mM, 300mM).
 You can adjust the ionic strength to model different environments:
@@ -107,20 +113,20 @@ Python API:
 .. code-block:: python
 
     # Generate at physiological ionic strength (150mM)
-    ensemble = generate(sequence, conformations=100, salt=150)
-    
+    ensemble = generate(sequence, conformations=100, ionic_strength=150)
+
     # Generate at low ionic strength (20mM)
-    ensemble = generate(sequence, conformations=100, salt=20)
-    
+    ensemble = generate(sequence, conformations=100, ionic_strength=20)
+
     # Generate at high ionic strength (300mM)
-    ensemble = generate(sequence, conformations=100, salt=300)
+    ensemble = generate(sequence, conformations=100, ionic_strength=300)
     
     # Calculate and compare properties at different ionic strengths
     rg_150 = ensemble.radius_of_gyration(return_mean=True)
     print(f"Mean Rg at 150mM: {rg_150:.2f} Å")
 
 Controlling Ensemble Size
-~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Balance quality and performance by adjusting ensemble size:
 
@@ -135,61 +141,93 @@ Balance quality and performance by adjusting ensemble size:
     # Large ensemble for detailed statistical analysis
     large_ensemble = generate(sequence, conformations=500)
 
-Advanced Options
----------------
+Performance Tuning
+------------------
 
-Performance Optimization
-~~~~~~~~~~~~~~~~~~~~~~
+Batch and Device Strategies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For optimal performance with large batches or multiple sequences:
+Balance throughput and memory use by adjusting hardware-related options:
 
 .. code-block:: python
 
     ensemble = generate(
         sequences,
         conformations=100,
-        device="cuda:0",         # Specify GPU device
-        batch_size=64,           # Process more conformations at once
-        num_cpus_mds=8,          # Use more CPUs for 3D structure generation
-        show_progress_bar=True,  # Display progress
-        verbose=False            # Reduce console output
+        device="cuda:0",         # Pin generation to a specific accelerator
+        batch_size=64,           # Increase to improve GPU utilisation
+        num_cpus_mds=8,          # Allocate more CPUs for 3D reconstruction
+        show_progress_bar=True,
+        verbose=False,
     )
 
-Controlling Sampling Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remember that ``batch_size`` cannot exceed ``conformations`` and larger values
+increase peak memory usage. For CPU-only runs, reduce ``batch_size`` or switch
+``device`` to ``"cpu"`` for predictable performance.
 
-STARLING supports different sampling algorithms for diffusion models:
+Sampler Selection
+~~~~~~~~~~~~~~~~~
+
+STARLING supports multiple diffusion samplers so you can trade accuracy for
+latency:
 
 .. code-block:: python
 
-    # Generate with DDIM sampling (faster)
+    # Deterministic DDIM sampling – faster, deterministic trajectories
     ddim_ensemble = generate(sequence, conformations=100, sampler="ddim", steps=20)
-    
-    # Generate with DDPM sampling (more accurate but slower)
+
+    # Stochastic DDPM sampling – higher fidelity at the cost of runtime
     ddpm_ensemble = generate(sequence, conformations=100, sampler="ddpm", steps=50)
 
-Speed Up with Model Compilation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Model Compilation
+~~~~~~~~~~~~~~~~~
 
-If you intend to use STARLING repeatedly in your workflow, consider compiling the models:
+For repeated predictions, compile the underlying PyTorch models once per
+process:
 
 .. code-block:: python
 
     import starling
 
-    # Enable compilation for faster execution (first run will be slower)
-    starling.set_compilation_options(enabled=True)
-
-    # Now run your generation - subsequent runs will be faster
+    starling.set_compilation_options(enabled=True, mode="reduce-overhead")
     ensemble = generate(sequence, conformations=100)
 
-This improves performance by approximately 40% on GPU systems after the initial compilation overhead.
+The first invocation warms up kernels; subsequent calls reuse compiled graphs
+and can reduce runtime by ~40% on supported GPUs. See :doc:`usage/constraints`
+for advanced compilation options.
+
+Guided Sampling
+---------------
+
+Constraint-driven Sampling
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+STARLING can enforce experimental restraints during diffusion. Pass any
+constraint (or list of constraints) from
+:mod:`starling.inference.constraints` to the ``constraint`` argument:
+
+.. code-block:: python
+
+    from starling.inference.constraints import DistanceConstraint
+
+    constraint = DistanceConstraint(
+        resid1=10,
+        resid2=200,
+        target=50.0,
+        tolerance=2.0,
+        force_constant=2.5,
+    )
+    ensemble = generate(sequence, conformations=200, constraint=constraint)
+
+Combine multiple constraints or tune ``force_constant``/``guidance`` settings to
+steer sampling toward experimental observables. Visit :doc:`usage/constraints`
+for a catalogue of available restraints and tuning advice.
 
 Saving and Loading Ensembles
---------------------------
+------------------------------
 
 Saving Ensembles
-~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
 
 Save ensembles in STARLING format for later use:
 
@@ -209,7 +247,7 @@ Save ensembles in STARLING format for later use:
     )
 
 Loading Ensembles
-~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
 
 Load previously generated ensembles:
 
@@ -226,7 +264,7 @@ Load previously generated ensembles:
     print(f"Loaded ensemble with {len(ensemble)} conformations")
 
 Output Files and Conversion
--------------------------
+---------------------------
 
 STARLING generates output in its native format, which can be converted to common molecular formats:
 
@@ -249,10 +287,10 @@ From Python:
     ensemble.save_trajectory("my_structures")
 
 Tips and Troubleshooting
-----------------------
+-------------------------
 
 Common Issues
-~~~~~~~~~~~
+~~~~~~~~~~~~~~
 
 * **Memory errors**: Reduce batch_size or conformations if you encounter CUDA out of memory errors
 * **Long sequences**: STARLING has a maximum sequence length limit; consider dividing long proteins into domains

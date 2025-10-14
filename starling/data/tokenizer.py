@@ -1,6 +1,24 @@
 class StarlingTokenizer:
-    """
-    Tokenizer for Starling model - uses a byte-level translation table for speed.
+    """Lightweight amino-acid tokenizer used across STARLING.
+
+    The tokenizer exposes fast byte-level ``encode``/``decode`` helpers that map
+    between protein sequences and integer vocab IDs. It is optimized for bulk
+    processing inside the sequence encoder and FAISS tokenization pipeline.
+
+    Examples
+    --------
+    >>> from starling.data.tokenizer import StarlingTokenizer
+    >>> tok = StarlingTokenizer()
+    >>> ids = tok.encode("ACDE")
+    >>> ids
+    [1, 2, 3, 4]
+    >>> tok.decode(ids)
+    'ACDE'
+
+    Notes
+    -----
+    * Unknown characters raise :class:`KeyError` during encoding.
+    * Padding/reserved ``0`` tokens are stripped during decode.
     """
 
     # Public vocab maps (kept for compatibility with existing code)

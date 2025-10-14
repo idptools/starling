@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""FASTA pre-tokenization CLI (moved from starling.inference.starling_pretokenize)
+"""FASTA pre-tokenization CLI for STARLING
 
 Usage:
   starling-pretokenize -o out file1.fasta file2.fasta

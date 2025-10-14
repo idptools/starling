@@ -177,146 +177,81 @@ def generate(
     ddpm_path=None,
 ):
     """
-    Main function for generating the distance maps using STARLING. Allows
-    you to pass a single sequence, a list of sequences, a dictionary, or
-    a path to a .fasta file, a .tsv file, or a seq.in file, and from that
-    generate distance maps and 3D conformational ensembles using the
-    STARLING model. This function is the main user-facing STARLING function.
+    Generate STARLING ensembles and distance maps for one or more sequences.
 
-    Note: if you want to change the location of the networks,
-    you need to change them in the configs.py file. Those paths get
-    read in by the ModelManager class and are not passed in as arguments
-    to this function. This lets us avoid iteratively loading the network
-    when running the generate function multiple times in a single session.
+    This is the primary high-level interface for STARLING ensemble generation. It
+    normalizes the provided sequences, runs the diffusion sampler, optionally
+    performs MDS refinement, and returns ensemble objects or writes them to disk.
 
     Parameters
-    ---------------
-    user_input : str, list, dict
-        This can be one of a few different options:
-            str: A path to a .fasta file as a str.
-            str: A path to a seq.in file formatted as a .tsv with name\tseq
-            str: A path to a .tsv file formatted as name\tseq. Same as
-                seq.in except a different file extension. Borna used a seq.in
-                in his tutorial, so I'm rolling with it.
-            str: A sequence as a string
-            list: A list of sequences
-            dict: A dict of sequences (name: seq)
+    ----------
+    user_input : str or Sequence[str] or Mapping[str, str]
+        Input sequences to process. Supported forms include:
 
-    conformations : int
-        The number of conformations to generate. Default is 200.
+        * Path to a FASTA, TSV, or ``seq.in`` file containing name/sequence rows.
+        * Raw amino-acid sequence string.
+        * Iterable of sequence strings.
+        * Mapping of sequence names to amino-acid sequences.
 
-    device : str
-        The device to use for predictions. Default is None. If None, the
-        default device will be used. Default device is 'gpu'.
-        This is MPS for apple silicon and CUDA for all other devices.
-        If MPS and CUDA are not available, automatically falls back to CPU.
-
-    steps : int
-        The number of steps to run the DDPM model. Default is 10.
-
-    ddim : bool
-        Whether to use DDIM for sampling. Default is True.
-
-    return_structures : bool
-        Whether to return the 3D structure. Default is False.
-
-    batch_size : int
-        The batch size to use for sampling. 100 uses ~20 GB
-        of memory. Default is 100.
-
-    num_cpus_mds : int
-        The number of CPUs to use for MDS. Default is 4
-
-    num_mds_init : int
-        Number of independent MDS jobs to execute. Default is
-        4. Note if goes up in principle more shots of finding
-        a good solution but there is a performance hit unless
-        num_cpus_mds == num_mds_init.
-
-    output_directory : str
-        The path to save the output.
-
-        If set to None, no output will be saved to disk.
-
-        If not None, will save the output to the specified path.
-        This includes the distance maps and, if
-        return_structures=True, the 3D structures.
-
-        The distance maps are saved as .npy files with the names
-        <sequence_name>_STARLING_DM.npy and the structures are
-        saved with the file names <sequence_name>_STARLING.xtc
-        and <sequence_name>_STARLING.pdb.
-
-        <sequence_name> here will depend on the input provided
-        to generate. If the input is a dictionary, then the keys
-        will be used as the sequence names. If the input is a
-        list or a single sequence, the sequence will be saved
-        as 'sequence_<index>'. If a path to a FASTA file is passed
-        in, the headers from the FASTA file will be used. Note also
-        if a single sequence is passed the sequence_<index> format
-        can be overridden by setting the output_name parameter.
-
-        Default is None.
-
-    output_name : str
-        If provided and if a single amino acid sequence is passed in,
-        this will be the key in the output dictionary. If None, the
-        key will be 'sequence_<index>'. If a dictionary or list or path
-        to a FASTA file is passed, this is ignored. Default is None.
-
-    return_data : bool
-        If True, will return a dictionary of Ensemble objects which will
-        include structural ensembles if return_structures=True. If False,
-        will return None (so you need to set the output_dictionary, or the
-        analysis will be lost!). Default is True.
-
-    verbose : bool
-        Whether to print verbose output. Default is False.
-
-    show_progress_bar : bool
-        Whether to show a progress bar. Default is True.
-
-    show_per_step_progress_bar : bool, optional
-        Whether to show progress bar per step.
-        Default is True
-    pdb_trajectory : bool
-        Whether to save the trajectory as a pdb file.
-        Default is False.
-
-    return_single_ensemble : bool
-        If True, will return a single starling.structure.ensemble.Ensemble
-        object instead of a dictionary of ensemble objects IF and only if
-        there is one sequence passed. If this option is passed and multiple
-        sequences are passed this will throw an ValueError. Default False.
-
-    encoder_path : str, optional
-        Path to a custom encoder model checkpoint file to use instead of the default.
-        This allows using your own pretrained models.
-        Default is None, which uses the default model path from configs.py.
-
-    ddpm_path : str, optional
-        Path to a custom diffusion model checkpoint file to use instead of the default.
-        This allows using your own pretrained models.
-        Default is None, which uses the default model path from configs.py.
+        Non-canonical residues trigger a :class:`ValueError`.
+    conformations : int, default=configs.DEFAULT_NUMBER_CONFS
+        Number of conformations to sample per sequence.
+    ionic_strength : float, default=configs.DEFAULT_IONIC_STRENGTH
+        Ionic strength (mM) supplied to the generative model.
+    device : str or None, default=None
+        Device identifier (``'cuda'``, ``'mps'``, or ``'cpu'``). ``None`` selects the
+        best available accelerator.
+    steps : int, default=configs.DEFAULT_STEPS
+        Number of denoising diffusion steps.
+    sampler : str, default=configs.DEFAULT_SAMPLER
+        Sampler backend registered in :mod:`starling.configs`.
+    return_structures : bool, default=False
+        When ``True`` include 3D coordinate ensembles in the results.
+    batch_size : int, default=configs.DEFAULT_BATCH_SIZE
+        Batch size used for sampling iterations.
+    num_cpus_mds : int, default=configs.DEFAULT_CPU_COUNT_MDS
+        Number of CPU workers allocated to the MDS refinement stage.
+    num_mds_init : int, default=configs.DEFAULT_MDS_NUM_INIT
+        Number of independent MDS initializations to run per sequence.
+    output_directory : str or os.PathLike or None, default=None
+        Directory where generated outputs are written. When ``None`` nothing is saved.
+    output_name : str or None, default=None
+        Override the generated sequence key when a single sequence string is provided.
+    return_data : bool, default=True
+        When ``True`` return ensembles; otherwise the function returns ``None``.
+    verbose : bool, default=False
+        Emit status messages during generation.
+    show_progress_bar : bool, default=True
+        Display a global diffusion progress bar.
+    show_per_step_progress_bar : bool, default=True
+        Display an inner progress bar for per-step diffusion updates.
+    pdb_trajectory : bool, default=False
+        When ``True`` write PDB trajectories alongside XTC files. Only applies when
+        ``return_structures`` is ``True`` or an ``output_directory`` is provided.
+    return_single_ensemble : bool, default=False
+        When ``True`` and exactly one sequence is processed, return a single
+        :class:`starling.structure.ensemble.Ensemble`. Raises :class:`ValueError`
+        if multiple sequences are supplied.
+    constraint : Optional[starling.inference.constraints.Constraint], default=None
+        Constraint object applied during sampling.
+    encoder_path : str or os.PathLike or None, default=None
+        Custom encoder checkpoint path overriding the configured default.
+    ddpm_path : str or os.PathLike or None, default=None
+        Custom diffusion model checkpoint path overriding the configured default.
 
     Returns
-    ---------------
-    dict, None, or Ensemble
-        The function returns a dictionary of Ensemble objects,
-        a single Ensemble object, or a None depending on the
-        requested return information.
+    -------
+    dict[str, starling.structure.ensemble.Ensemble] or starling.structure.ensemble.Ensemble or None
+        Dictionary of ensembles keyed by sequence name when ``return_data`` is ``True``.
+        A single ensemble object is returned when ``return_single_ensemble`` is ``True``.
+        Returns ``None`` when ``return_data`` is ``False``.
 
-        The default behavior is to return a dict of Ensemble
-        objects, which happens if return_data=True and
-        and return_single_ensemble=False.
-
-        If return_data=False then None is returned.
-
-        If return_single_ensemble=True then a single Ensemble
-        object is returned.
-
-        if return_data=False and return_single_ensemble=True
-        then a ValueError exception is raised.
+    Raises
+    ------
+    FileNotFoundError
+        If the input path or output directory cannot be located.
+    ValueError
+        If sequences contain non-canonical residues or argument combinations are invalid.
 
     """
     # check user input, return a sequence dict.
@@ -500,6 +435,66 @@ def sequence_encoder(
     free_cuda_cache: bool = False,
     return_on_cpu: bool = True,
 ):
+    """Embed sequences with the STARLING encoder.
+
+    Parameters
+    ----------
+    sequence_dict : str | Sequence[str] | dict[str, str]
+        Input sequences to encode. Accepts a FASTA/TSV path, a single sequence,
+        a list of sequences, or a mapping of identifiers to sequences. The
+        helper :func:`handle_input` normalizes the value into a
+        ``{name: sequence}`` dictionary and validates residue alphabets.
+    ionic_strength : int, optional
+        Ionic strength (in mM) to condition the encoder. Valid values are
+        typically 20, 150, or 300, matching the training regimes. Defaults to
+        :data:`configs.DEFAULT_IONIC_STRENGTH`.
+    batch_size : int, optional
+        Number of sequences to process per batch.
+    aggregate : bool, optional
+        When ``True`` the function returns a single embedding vector per
+        sequence using mean pooling. When ``False`` (default) residue-level
+        embeddings are returned.
+    device : str | torch.device | None, optional
+        Device hint forwarded to :func:`utilities.check_device`. ``None`` lets
+        STARLING pick the best available accelerator.
+    output_directory : str | pathlib.Path | None, optional
+        Directory for optional on-disk exports. Leave ``None`` to keep
+        embeddings in memory only.
+    encoder_path : str | None, optional
+        Override the default encoder checkpoint.
+    ddpm_path : str | None, optional
+        Override the default diffusion checkpoint used by the shared model
+        manager.
+    pretokenized : bool, optional
+        Set to ``True`` when ``sequence_dict`` already contains cached tokens to
+        skip preprocessing.
+    bucket : bool, optional
+        Enable adaptive bucketing by sequence length to reduce padding waste in
+        large batches.
+    bucket_size : int, optional
+        Maximum number of unique lengths per bucket when ``bucket`` is
+        ``True``. Ignored otherwise.
+    free_cuda_cache : bool, optional
+        Release CUDA memory after each batch for long inference jobs.
+    return_on_cpu : bool, optional
+        Convert embeddings to CPU tensors before returning. Set to ``False`` to
+        keep them on the selected device for downstream GPU workflows.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        Mapping from sequence identifiers to embedding tensors. The trailing
+        tensor shape is ``(L, D)`` for residue-level embeddings or ``(D,)`` for
+        aggregated embeddings, where ``L`` is sequence length and ``D`` is the
+        latent dimension.
+
+    Notes
+    -----
+    The encoder shares weights with the ensemble generator, so successive calls
+    reuse cached models through ``generation.model_manager``. Use
+    ``encoder_path`` and ``ddpm_path`` to experiment with fine-tuned weights
+    without mutating global configuration.
+    """
     # check device, get back a torch.device (not a str!)
     device = utilities.check_device(device)
 

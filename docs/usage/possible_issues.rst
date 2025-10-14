@@ -63,3 +63,25 @@ This will display information about your GPU, NVIDIA driver version, and CUDA ve
 
 For more information, refer to the `PyTorch installation instructions <https://pytorch.org/get-started/locally/>`_.
 
+FAISS Installation Problems
+---------------------------
+
+**Issue:**
+
+Import errors or missing GPU support when running ``starling-search`` or the
+Python search API.
+
+**Solution:**
+
+* CPU-only environments only require the default ``faiss-cpu`` wheel shipped
+    with STARLING. If you compiled FAISS manually, ensure ``FAISS_PATH`` does not
+    shadow the packaged version.
+* For GPU acceleration install the ``search-gpu`` extra:
+
+    .. code-block:: bash
+
+         pip install idptools-starling[search-gpu]
+
+    Verify that ``faiss-gpu`` reports the expected CUDA version by running
+    ``python -c "import faiss; print(faiss.get_num_gpus())"``.
+

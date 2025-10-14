@@ -1,10 +1,33 @@
+"""Ensemble representation and analysis helpers.
+
+This module houses the :class:`Ensemble` container used throughout STARLING to
+store distance-map ensembles, reconstruct 3D trajectories, and compute derived
+biophysical observables. It also exposes convenience functions for error
+diagnostics, Bayesian Maximum Entropy (BME) reweighting, and serialization to
+the ``.starling`` format.
+
+Key Features
+------------
+* Lightweight wrapper around distance maps with lazy computation of radius of
+    gyration, hydrodynamic radius, contact maps, and more.
+* Optional integration with :mod:`soursop` to build coordinate trajectories.
+* Smooth interoperability with :class:`starling.structure.bme.BME` via cached
+    reweighting results and helper diagnostics.
+
+Example
+-------
+>>> from starling import generate
+>>> ensemble = generate("GS" * 30, conformations=200, return_single_ensemble=True)
+>>> mean_rg = ensemble.radius_of_gyration(return_mean=True)
+>>> ensemble.save("example_ensemble")
+
+"""
+
 from datetime import datetime
 
 import numpy as np
-import torch
 from soursop.ssprotein import SSProtein
 from soursop.sstrajectory import SSTrajectory
-from tqdm.auto import tqdm
 
 from starling import configs, utilities
 from starling._version import __version__
@@ -16,11 +39,38 @@ from starling.structure.coordinates import (
 
 
 class Ensemble:
-    """
-    Class to represent an ensemble of conformations of a protein chain.
-    The ensemble is represented by a 3D np.ndarray of N distance maps, where each
-    distance map is a 2D numpy array.
+    """Distance-map backed representation of conformational ensembles.
 
+    An :class:`Ensemble` stores pairwise residue distance maps for one or more
+    sampled conformations and exposes convenience methods to analyse, reweight,
+    and serialize the data.
+
+    Parameters
+    ----------
+    distance_maps : np.ndarray
+        Array of shape ``(n_conformations, n_residues, n_residues)`` containing
+        symmetrised distance maps.
+    sequence : str
+        Amino-acid sequence corresponding to the ensemble.
+    ssprot_ensemble : soursop.ssprotein.SSProtein, optional
+        Existing SOURSOP trajectory to attach (used when coordinates already
+        exist on disk).
+
+    Attributes
+    ----------
+    sequence : str
+        Underlying amino-acid sequence.
+    number_of_conformations : int
+        Total number of conformations stored in the ensemble.
+    sequence_length : int
+        Number of residues in the sequence.
+
+    Notes
+    -----
+    Most heavy operations (trajectory reconstruction, radius calculations,
+    BME reweighting) are computed lazily and cached for reuse. Use
+    :meth:`build_ensemble_trajectory` or :meth:`save_trajectory` to materialise
+    3D coordinates on demand.
     """
 
     def __init__(self, distance_maps, sequence, ssprot_ensemble=None):

@@ -227,6 +227,7 @@ class Candidate:
     stored_hash: Optional[int] = None
 
     def as_tuple(self) -> Tuple[float, int, Optional[str], Optional[int]]:
+        """Convert candidate to tuple format (score, gid, header, length)."""
         return (self.score, self.gid, self.header, self.length)
 
 
@@ -249,9 +250,11 @@ class ValidGidFilter(CandidateFilter):
     """Filter out invalid GIDs."""
 
     def apply(self, candidate: Candidate, query_seq: Optional[str] = None) -> bool:
+        """Return True if candidate has a valid (non-negative) GID."""
         return candidate.gid >= 0
 
     def get_name(self) -> str:
+        """Return filter name for logging."""
         return "gid"
 
 
@@ -262,9 +265,11 @@ class L2DistanceFilter(CandidateFilter):
         self.min_distance = min_distance
 
     def apply(self, candidate: Candidate, query_seq: Optional[str] = None) -> bool:
+        """Return True if candidate L2 distance meets minimum threshold."""
         return candidate.score >= self.min_distance
 
     def get_name(self) -> str:
+        """Return filter name for logging."""
         return "l2"
 
 
@@ -276,11 +281,13 @@ class CosineSimFilter(CandidateFilter):
         self.return_similarity = return_similarity
 
     def apply(self, candidate: Candidate, query_seq: Optional[str] = None) -> bool:
+        """Return True if candidate cosine similarity is below maximum threshold."""
         cos_sim = candidate.score if self.return_similarity else (1.0 - candidate.score)
         return cos_sim <= self.max_similarity
 
     def get_name(self) -> str:
-        return "cos"
+        """Return filter name for logging."""
+        return "cosine"
 
 
 class LengthFilter(CandidateFilter):

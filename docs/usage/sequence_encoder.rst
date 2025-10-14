@@ -4,6 +4,11 @@ Sequence Embeddings
 STARLING can generate **ensemble-aware sequence embeddings** that capture ensemble properties of intrinsically disordered proteins.
 STARLING's sequence encoder was trained jointly with the diffusion model to produce embeddings that are informative for ensemble generation.
 
+.. seealso::
+
+    Use :doc:`usage/search` to index large databases or retrieve similar
+    sequences with the same embeddings.
+
 Basic Usage
 -----------
 
@@ -34,17 +39,17 @@ The sequence encoder accepts various input formats including single sequences, l
         "GSGSGSGSGSGS",
         "ACDEFGHIKLMNPQRSTVWY"
     ]
-    embeddings = sequence_encoder(sequences, salt=150)
+    embeddings = sequence_encoder(sequences, ionic_strength=150)
     
     # Process sequences from a dictionary
     seq_dict = {
         "protein_A": "GSGSGSGSGSGS",
         "protein_B": "ACDEFGHIKLMNPQRSTVWY"
     }
-    embeddings = sequence_encoder(seq_dict, salt=150)
+    embeddings = sequence_encoder(seq_dict, ionic_strength=150)
     
     # Process sequences from a FASTA file
-    embeddings = sequence_encoder("path/to/sequences.fasta", salt=150)
+    embeddings = sequence_encoder("path/to/sequences.fasta", ionic_strength=150)
 
 Controlling Ionic Strength
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -54,13 +59,13 @@ STARLING's encoder was trained at different ionic strengths. You can specify the
 .. code-block:: python
 
     # Generate embeddings at physiological ionic strength (150mM)
-    physiological = sequence_encoder(sequence, salt=150)
-    
+    physiological = sequence_encoder(sequence, ionic_strength=150)
+
     # Generate embeddings at low ionic strength (20mM)
-    low_salt = sequence_encoder(sequence, salt=20)
-    
+    low_ionic_strength = sequence_encoder(sequence, ionic_strength=20)
+
     # Generate embeddings at high ionic strength (300mM)
-    high_salt = sequence_encoder(sequence, salt=300)
+    high_ionic_strength = sequence_encoder(sequence, ionic_strength=300)
 
 Output Options
 ~~~~~~~~~~~~
@@ -70,15 +75,15 @@ Control how embeddings are returned and saved:
 .. code-block:: python
 
     # Return per-residue embeddings (default)
-    per_residue = sequence_encoder(sequence, salt=150, aggregate=False)
+    per_residue = sequence_encoder(sequence, ionic_strength=150, aggregate=False)
     
     # Return a single embedding vector per sequence
-    aggregated = sequence_encoder(sequence, salt=150, aggregate=True)
+    aggregated = sequence_encoder(sequence, ionic_strength=150, aggregate=True)
     
     # Save embeddings to disk
     sequence_encoder(
         sequence,
-        salt=150,
+    ionic_strength=150,
         output_directory="results/embeddings"
     )
 
