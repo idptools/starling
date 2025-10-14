@@ -14,6 +14,7 @@ import json
 import os
 from typing import List, Optional
 
+import protfasta
 import torch
 
 from starling.configs import ensure_search_artifacts
@@ -94,7 +95,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     q.add_argument("--rerank-batch-size", type=int, default=64)
     q.add_argument("--rerank-device", type=str, default=None)
     q.add_argument("--rerank-ionic-strength", type=int, default=None)
-    q.add_argument("--out", default="nearest_neighbors")
+    q.add_argument(
+        "--out",
+        default="nearest_neighbors",
+        help="Output file basename (extension auto-set to .csv or .jsonl; any provided extension will be replaced)",
+    )
     q.add_argument("--out-format", choices=["csv", "jsonl"], default="csv")
     q.add_argument("--verbose", action="store_false")
     return p.parse_args(argv)
@@ -134,8 +139,9 @@ def _write(
                     "sequence",
                 ]
             )
-            for qi, (qseq, row) in enumerate(zip(queries, results)):
-                for rank, (score, gid, _, _) in enumerate(row):
+            for qi in range(len(results)):
+                qseq = queries[qi] if qi < len(queries) else ""
+                for rank, (score, gid, _, _) in enumerate(results[qi]):
                     if metric == "cosine" and return_similarity:
                         sim = score
                         out_score = 1.0 - sim
@@ -150,8 +156,9 @@ def _write(
                     w.writerow([qi, qseq, rank, int(gid), out_score, sim, h, L, seq])
     else:
         with open(path, "w") as f:
-            for qi, (qseq, row) in enumerate(zip(queries, results)):
-                for rank, (score, gid, _, _) in enumerate(row):
+            for qi in range(len(results)):
+                qseq = queries[qi] if qi < len(queries) else ""
+                for rank, (score, gid, _, _) in enumerate(results[qi]):
                     if metric == "cosine" and return_similarity:
                         sim = score
                         out_score = 1.0 - sim
@@ -174,6 +181,60 @@ def _write(
                         "sequence": get_seq(int(gid)),
                     }
                     f.write(json.dumps(obj) + "\n")
+
+
+def _write_fasta(
+    path_base: str,
+    queries: List[str],
+    results,
+    engine: SearchEngine,
+    return_similarity: bool,
+    metric: str,
+):
+    """Write FASTA of hits using protfasta.write_fasta."""
+    fasta_path = path_base + ".fasta"
+    all_gids = [gid for row in results for _, gid, _, _ in row]
+    gid_to_header_len = {}
+    if engine.seq_store:
+        for g, h, length_val in engine.seq_store.get_many_header_len(all_gids):
+            gid_to_header_len[int(g)] = (h, length_val)
+
+    def get_seq(gid: int):
+        return engine.seq_store.get_seq(int(gid)) if engine.seq_store else None
+
+    entries = []  # list of [header, sequence]
+    for qi in range(len(results)):
+        for rank, (score, gid, _, _) in enumerate(results[qi]):
+            if metric == "cosine" and return_similarity:
+                sim = score
+                out_score = 1.0 - sim
+            elif metric == "cosine":
+                out_score = score
+                sim = 1.0 - out_score
+            else:
+                out_score = score
+                sim = None
+            db_header, length_val = gid_to_header_len.get(int(gid), (None, None))
+            seq = get_seq(int(gid))
+            if not seq:
+                continue
+            safe_db_header = (db_header or "").replace(" ", "_")[:200]
+            parts = [
+                f"q{qi}",
+                f"rank={rank}",
+                f"gid={int(gid)}",
+                f"score={out_score:.6f}",
+            ]
+            if metric == "cosine":
+                parts.append(f"similarity={(sim if sim is not None else 0):.6f}")
+            if length_val is not None:
+                parts.append(f"length={length_val}")
+            if safe_db_header:
+                parts.append(f"db_header={safe_db_header}")
+            header = "|".join(parts)
+            entries.append([header, seq])
+    protfasta.write_fasta(entries, fasta_path, linelength=80)
+    print(f"wrote {fasta_path}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -255,8 +316,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             rerank_ionic_strength=a.rerank_ionic_strength,
         )
         if a.out:
-            _write(a.out, a.out_format, seqs, res, engine, a.return_sim, a.metric)
-            print(f"wrote {a.out}")
+            base, _old_ext = os.path.splitext(a.out)
+            if not base:  # edge case like '.results'
+                base = a.out.lstrip(".") or "output"
+            out_path = base + (".csv" if a.out_format == "csv" else ".jsonl")
+            _write(out_path, a.out_format, seqs, res, engine, a.return_sim, a.metric)
+            _write_fasta(base, seqs, res, engine, a.return_sim, a.metric)
+            print(f"wrote {out_path}")
         else:
             for qi, row in enumerate(res):
                 print(f"q{qi} {seqs[qi]} -> {len(row)} hits")
