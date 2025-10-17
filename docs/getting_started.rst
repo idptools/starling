@@ -37,15 +37,16 @@ ensembles.
 	 starling MQDRVKRPMNAFIVWSRDQRRKMALENPRMRNSEISKQLGYQWKMLTEAEKWPFFQEAQKLQAMHREKYPNYKYRPRRKAKMLPK \
 			 -c 100 \
 			 --outname example_ensemble \
-			 --output_directory results
+			 --output_directory results \
+			 -r
 
 Key flags:
 
-* ``-c``/``--conformations`` – number of structures to sample
-* ``--ionic_strength`` – pick from 20, 150, or 300 mM conditions
-* ``--return_structures`` – emit 3D coordinates alongside distance maps
+* ``-c``/``--conformations`` – number of structures to sample (default 400)
+* ``--ionic_strength`` – pick from 20, 150, or 300 mM conditions (default 150)
+* ``-r``/``--return_structures`` – Flag which, if provided, means STARLING returns 3D coordinates alongside distance maps as a .pdb file (single topology file) and a .xtc file (compressed trajectory format).
 
-The CLI writes ``.starling`` archives and optional PDB/XTC files into the
+The CLI writes ``.starling`` archives and (if ``r-`` is provided PDB/XTC files into the
 selected output directory. A more detailed walkthrough lives in
 :doc:`usage/cli`.
 
@@ -74,11 +75,24 @@ available on the ``Ensemble`` class.
 Where to go next
 ----------------
 
-* :doc:`usage/constraints` – steer sampling with experimental restraints and
-	enable PyTorch compilation for repeat jobs.
-* :doc:`usage/sequence_encoder` – extract ensemble-aware sequence embeddings
-	for downstream analysis.
-* :doc:`usage/search` – index large databases and retrieve related sequences
-	with FAISS-powered search.
-* :doc:`usage/possible_issues` – troubleshoot installation or runtime
-	hiccups.
+* :doc:`usage/constraints` – steer sampling with experimental restraints and enable PyTorch compilation for repeat jobs.	
+* :doc:`usage/sequence_encoder` – extract ensemble-aware sequence embeddings for downstream analysis.	
+* :doc:`usage/search` – index large databases and retrieve related sequences with FAISS-powered search.
+* :doc:`usage/possible_issues` – troubleshoot installation or runtime hiccups.
+	
+	
+How to cite
+----------------
+
+If you find STARLING useful, please consider citing the following:
+
+**Accurate predictions of conformational ensembles of disordered proteins with STARLING** Novak, B., Lotthammer, J. M., Emenecker, R. J. & Holehouse, A. S. bioRxiv (2025). doi:10.1101/2025.02.14.638373 (*Main STARLING preprint (under review)*)
+
+**Physics-driven coarse-grained model for biomolecular phase separation with near-quantitative accuracy** Joseph, J. A., Reinhardt, A., Aguirre, A., Chew, P. Y., Russell, K. O., Espinosa, J. R., Garaizar, A. & Collepardo-Guevara, R. Nat. Comput. Sci. 1, 732–743 (2021) (*Coarse-grained model from which STARLING was trained - PLEASE cite this alongside STARLING*)
+
+
+  
+
+  
+
+	

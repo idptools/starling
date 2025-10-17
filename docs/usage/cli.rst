@@ -19,18 +19,22 @@ lists of sequences.
        -c 200 \
        --ionic_strength 150 \
        --return_structures \
-       --output_directory outputs
+       --output_directory outputs \
+	   -r
+	   
 
 Key options:
 
-* ``-c`` / ``--conformations`` - number of conformers to sample (default 200)
+* ``-c`` / ``--conformations`` - number of conformers to sample (default 400)
+* ``-r``/``--return_structures`` – Flag which, if provided, means STARLING returns 3D coordinates alongside distance maps as a .pdb file (single topology file) and a .xtc file (compressed trajectory format).
 * ``--ionic_strength`` - choose 20, 150, or 300 mM solvent environments
 * ``--steps`` - diffusion steps for the sampler (default 25)
 * ``--device`` - force CPU, CUDA (``cuda:0``), or Apple MPS
 * ``--num-cpus`` / ``--num-mds-init`` - control MDS reconstruction throughput
 * ``--outname`` - override the output prefix when providing a single sequence
 
-Outputs live under the requested directory and include ``.starling`` archives
+
+Outputs live under the requested directory and includes ``.starling`` archives
 plus optional PDB/XTC trajectories when ``--return_structures`` is set.
 
 ``starling-benchmark``
@@ -69,7 +73,7 @@ All converters operate on ``.starling`` archives created by the generator.
    * - ``starling2info``
      - Display metadata such as version, conformer count, and default weights.
    * - ``starling2starling`` / ``numpy2starling`` / ``xtc2starling``
-     - Regenerate archives from alternative representations.
+     - Regenerate archives from alternative representations. 
 
 By default outputs are written next to the source file; pass ``-o`` to choose a
 new directory or filename prefix.
