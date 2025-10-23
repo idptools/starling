@@ -80,9 +80,9 @@ DEFAULT_DDPM_WEIGHTS_PATH = fix_ref_to_home(
 
 # Github Releases URLs for model weights
 GITHUB_ENCODER_URL = (
-    "https://github.com/idptools/starling/releases/download/v2.0.0-alpha/vae.ckpt"
+    f"https://github.com/idptools/starling/releases/download/v2.0.0/{DEFAULT_ENCODE_WEIGHTS}"
 )
-GITHUB_DDPM_URL = "https://github.com/idptools/starling/releases/download/v2.0.0-alpha/diffusion_model.ckpt"
+GITHUB_DDPM_URL = f"https://github.com/idptools/starling/releases/download/v2.0.0/{DEFAULT_DDPM_WEIGHTS}"
 
 # Update default paths to check Hub first
 DEFAULT_ENCODER_WEIGHTS_PATH = os.environ.get(
