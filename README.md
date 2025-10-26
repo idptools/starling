@@ -29,8 +29,9 @@ However, STARLING itself has been completely updated as part of the revision pro
 # Documentation
 [https://idptools-starling.readthedocs.io/en/latest/](https://idptools-starling.readthedocs.io/en/latest/)
 
-# Performance
-STARLING is VERY fast on GPUs and – honestly – VERY fast on Apple Silicon as well. It is a bit slower than CPUs, but we're talking minutes instead of seconds for ensemble generation. 
+
+# Colab notebook
+A Google Colab notebook for predicting ensembles and performing rudimentary analysis [is available here](https://colab.research.google.com/github/idptools/idpcolab/blob/main/STARLING/STARLING_demo.ipynb).
 
 # Quick installation
 STARLING is available on GitHub (bleeding edge) and on PyPi (stable). 
@@ -92,6 +93,9 @@ You can benchmark STARLING's performance using
 
 	starling-benchmark
 		
+# Performance
+STARLING is VERY fast on GPUs and – honestly – VERY fast on Apple Silicon as well. It is a bit slower than CPUs, but we're talking minutes instead of seconds for ensemble generation. 
+
 
 # Python library 
 As well as a command-line tool, STARLING provides a simple but powerful Python API for generating ensembles.
