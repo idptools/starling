@@ -1,9 +1,14 @@
 <!-- ![STARLING_LOGO_FULL](Lamprotornis_hildebrandti_-Tanzania-8-2c.jpg) -->
-STARLING
-==============================
+STARLING - prediction of disordered protein ensembles from sequence
+=============================================
+
 [//]: # (Badges)
-[![GitHub Actions Build Status](https://github.com/idptools/starling/workflows/CI/badge.svg)](https://github.com/idptools/starling/actions?query=workflow%3ACI)
-[![codecov](https://codecov.io/gh/idptools/starling/branch/main/graph/badge.svg)](https://codecov.io/gh/idptools/starling/branch/main)
+[![PyPI Version](https://img.shields.io/pypi/v/idptools-starling.svg)](https://pypi.org/project/idptools-starling/)
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
+[![Docs Status](https://readthedocs.org/projects/idptools-starling/badge/?version=latest)](https://idptools-starling.readthedocs.io)
+[![Python Versions](https://img.shields.io/pypi/pyversions/idptools-starling.svg)](https://pypi.org/project/idptools-starling/)
+[![GitHub stars](https://img.shields.io/github/stars/idptools/starling.svg?style=social&label=Star)](https://github.com/idptools/starling/stargazers)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/idptools/idpcolab/blob/main/STARLING/STARLING_demo.ipynb)
 <br>
 <img src="starling_logo-1.png" alt="My Image" width="150"/>
 <br>
@@ -13,91 +18,83 @@ STARLING (con**ST**ruction of intrinsic**A**lly diso**R**dered proteins ensemble
 
 STARLING was developed by **Borna Novak** and **Jeff Lotthammer** in the [Holehouse lab](https://www.holehouselab.com/) (with some occasional help from Ryan and Alex, as is their wont). 
 
-For more information, plase take a look at our preprint!<br>
+For more information, please take a look at our preprint!<br>
 **Accurate predictions of conformational ensembles of disordered proteins with STARLING.** Novak, B., Lotthammer, J. M., Emenecker, R. J. & Holehouse, A. S. ***bioRxiv*** [2025.02.14.638373 Preprint at https://doi.org/10.1101/2025.02.14.638373 (2025)](https://www.biorxiv.org/content/10.1101/2025.02.14.638373v1)
 
-# Installation
+### A note on STARLING version/manuscript
+The STARLING manuscript [was preprinted and submitted in February 2025](https://doi.org/10.1101/2025.02.14.638373). Reviews were received in May 2025, and a revised version was resubmitted (but not updated as a preprint, in compliance with the publisher's requirements) in October 2025. 
+
+However, STARLING itself has been completely updated as part of the revision process, moving from a UNet-based diffusion model to a Vision Transformer. The notebooks in this repository reflect the revised version. We are happy to share our revised version of the manuscript with people—please just email alex (alex dot holehouse at wustl dot edu), and he can share it!
+
+# Documentation
+[https://idptools-starling.readthedocs.io/en/latest/](https://idptools-starling.readthedocs.io/en/latest/)
+
+# Performance
+STARLING is VERY fast on GPUs and – honestly – VERY fast on Apple Silicon as well. It is a bit slower than CPUs, but we're talking minutes instead of seconds for ensemble generation. 
+
+# Quick installation
 STARLING is available on GitHub (bleeding edge) and on PyPi (stable). 
 
-We recommend creating a fresh conda environment for STARLING (although in principle there's nothing special about the STARLING environment)
+We recommend creating a fresh conda environment for STARLING (although in principle, there's nothing special about the STARLING environment)
 
 ```bash
 conda create -n starling  python=3.11 -y
 conda activate starling
 ```
 
-You can then install STARLING from GitHub directly using pip:
+You can then install STARLING from PyPI using pip (or uv):
 
 ```bash
 pip install idptools-starling
 ```
 
-Or you can clone and install the bleeding-edge version from GitHub
+Or you can clone and install the bleeding-edge version from GitHub:
 	
 ```bash
-git clone git@github.com:idptools/starling.git
-cd starling
-pip install .
+pip install git+https://github.com/idptools/starling.git
 ```
 
-To check STARLING has installed correctly run
+To check that STARLING has been installed correctly, run
 
 	starling --help
 
-
 # Quickstart
-The easiest way to use STARLING is the `starling` command-line tool.
+The easiest way to use STARLING for ensemble generation is with the `starling` command-line tool.
 
-	starling <amino acid sequence> -c <number of confomers> --outname my_cool_idr
+	starling <amino acid sequence> -c --outname my_cool_idr -r
 	
-This will generate an output file call `my_cool_idr.starling`. To convert this to a PDB trajectory run
+Example:
 
-	starling2pdb my_cool_idr.starling
+	starling MDVFMKGLSKAKEGVVAAAEKTKQGVAEAAGKTKEGVLYVGSKTKEGVVHGVATVAEKTKEQVTNVGGAVVTGVTAVAQKTVEGAGSIAAATGFVKKDQLGKNEEGAPQEGILEDMPVDPDNEAYEMPSEEGYQDYEPEA --outname synuclein -r
 	
-Or to convert to an xtc/pdb combo run:
+Will generate three files:	
 
-	starling2xtc my_cool_idr.starling	
+* `synuclein.starling` - the full STARLING ensemble file. This holds all the information associated with the ensemble.
+* `synuclein_STARLING.pdb` - the topology file for the ensemble.
+* `synuclein_STARLING.xtc - the trajectory file for the ensemble. 
 
-### starling tool documentation
-
-	`usage: starling [-h] [-c CONFORMATIONS] [-d DEVICE] [-s STEPS] [-m METHOD] [-b BATCH_SIZE] [-o OUTPUT_DIRECTORY] [--outname OUTNAME] [-r] [-v] [--num-cpus NUM_CPUS]
-	                [--num-mds-init NUM_MDS_INIT] [--no-ddim] [--disable_progress_bar] [--info] [--version]
-	                [user_input]
-	
-	Generate distance maps using STARLING.
-	
-	positional arguments:
-	  user_input            Input sequences in various formats (file, string, list, or dict)
-	
-	options:
-	  -h, --help            show this help message and exit
-	  -c CONFORMATIONS, --conformations CONFORMATIONS
-	                        Number of conformations to generate (default: 200)
-	  -d DEVICE, --device DEVICE
-	                        Device to use for predictions (default: None, auto-detected)
-	  -s STEPS, --steps STEPS
-	                        Number of steps to run the DDPM model (default: 25)
-	  -b BATCH_SIZE, --batch_size BATCH_SIZE
-	                        Batch size to use for sampling (default: 100)
-	  -o OUTPUT_DIRECTORY, --output_directory OUTPUT_DIRECTORY
-	                        Directory to save output (default: '.')
-	  --outname OUTNAME     If provided and a single sequence is provided, defines the prefix ahead of .pdb/.xtc/.npy extensions (default: None)
-	  -r, --return_structures
-	                        Return the 3D structures (default: False)
-	  -v, --verbose         Enable verbose output (default: False)
-	  --num-cpus NUM_CPUS   Sets the max number of CPUs to use. Default: 4.
-	  --num-mds-init NUM_MDS_INIT
-	                        Sets the number of MDS jobs to be run in parallel. More may give better reconstruction but requires 1:1 with #CPUs to avoid performance penalty. Default: 4.
-	  --no-ddim             Disable DDIM for sampling.
-	  --disable_progress_bar
-	                        Disable progress bar during generation (default: False)
-	  --info                Print STARLING information only
-	  --version             Print STARLING version o`nly
+By default, STARLING generates 400 conformations - to change the number of conformations, you can use the `-c` flag (e.g., `-c 1000` would generate an ensemble with 1000 conformations. 
 
 
+### Querying a STARLING ensemble
+
+The command `starling2info` provides information about a .starling file, including when it was generated, the sequence, the number of conformations, and model weights.
+
+
+### Converting a STARLING ensemble
+STARLING comes with several tools for converting .starling files to other types of files, including:
+
+* `starling2pdb` - convert a .staring file to a PDB ensemble
+* `starling2xtc` - convert a .staring file to a PDB file and an XTC ensemble.
+		
+### Benchmarking STARLING
+You can benchmark STARLING's performance using
+
+	starling-benchmark
+		
 
 # Python library 
-STARLING can generate Ensemble objects which enable deep investigation into ensemble properties using the ``generate`` function.
+As well as a command-line tool, STARLING provides a simple but powerful Python API for generating ensembles.
 
 ## `generate` function documentation
 The `generate` function is the main entry point for generating distance maps using the STARLING model. This function accepts various input types, generates conformations using DDPM, and optionally returns the 3D structures. You can customize several parameters for batch size, device, number of steps, and more.
@@ -341,7 +338,7 @@ To figure out which version of CUDA you currently have (assuming you have a CUDA
 ```bash
 nvidia-smi
 ```
-Which should return information about your GPU, NVIDIA driver version, and your CUDA version at the top.
+This should return information about your GPU, NVIDIA driver version, and your CUDA version at the top.
 
 Please see the [PyTorch install instructions](https://pytorch.org/get-started/locally/) for more info. 
 
