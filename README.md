@@ -24,7 +24,7 @@ For more information, please take a look at our preprint!<br>
 ### A note on STARLING version/manuscript
 The STARLING manuscript [was preprinted and submitted in February 2025](https://doi.org/10.1101/2025.02.14.638373). Reviews were received in May 2025, and a revised version was resubmitted (but not updated as a preprint, in compliance with the publisher's requirements) in October 2025. 
 
-However, STARLING itself has been completely updated as part of the revision process, moving from a UNet-based diffusion model to a Vision Transformer. The notebooks in this repository reflect the revised version. We are happy to share our revised version of the manuscript with people—please just email alex (alex dot holehouse at wustl dot edu), and he can share it!
+However, STARLING itself has been completely updated as part of the revision process, moving from a UNet-based diffusion model to a Vision Transformer. The code on the main branch in this repository reflects the revised version. We are happy to share our revised version of the manuscript with people—please email alex (alex dot holehouse at wustl dot edu), and he can share it! Furthermore, if the previous version is required, we have a frozen branch that reflects the `STARLING-UNET` branch from February 2025. 
 
 # Documentation
 [https://idptools-starling.readthedocs.io/en/latest/](https://idptools-starling.readthedocs.io/en/latest/)
