@@ -85,8 +85,8 @@ The command `starling2info` provides information about a .starling file, includi
 ### Converting a STARLING ensemble
 STARLING comes with several tools for converting .starling files to other types of files, including:
 
-* `starling2pdb` - convert a .staring file to a PDB ensemble
-* `starling2xtc` - convert a .staring file to a PDB file and an XTC ensemble.
+* `starling2pdb` - convert a .starling file to a PDB ensemble
+* `starling2xtc` - convert a .starling file to a PDB file and an XTC ensemble.
 		
 ### Benchmarking STARLING
 You can benchmark STARLING's performance using
