@@ -1,10 +1,10 @@
 Possible Issues and Solutions
-============================
+=============================
 
 This page addresses common issues you might encounter when using Starling and provides solutions.
 
 NumPy Compilation Warning Error
-------------------------------
+-------------------------------
 
 **Issue:**
 

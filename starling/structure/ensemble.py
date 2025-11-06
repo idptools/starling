@@ -24,6 +24,7 @@ Example
 """
 
 from datetime import datetime
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 from soursop.ssprotein import SSProtein
@@ -107,6 +108,7 @@ class Ensemble:
         self.__rh_mode_used = None
 
         # BME reweighting cache
+        self.__bme = None
         self.__bme_result = None
 
         if ssprot_ensemble is None:
@@ -839,12 +841,17 @@ class Ensemble:
         self,
         observables,
         calculated_values,
-        theta=0.5,
+        theta=None,
+        theta_range=(0.01, 10.0),
+        theta_n_points=15,
         max_iterations=50000,
         optimizer="L-BFGS-B",
         initial_weights=None,
         force_recompute=False,
         verbose=True,
+        show=False,
+        save_theta_scan_plot=None,
+        theta_method: str = "perpendicular",  # new: choose knee method ("perpendicular" or "curvature")
     ):
         """
         Perform Bayesian Maximum Entropy (BME) reweighting of the ensemble
@@ -866,10 +873,23 @@ class Ensemble:
             Array of calculated observable values for each frame.
             Shape: (n_frames, n_observables)
 
-        theta : float, optional
+        theta : float or None, optional
             Regularization parameter controlling the trade-off between fitting
             experimental data and maintaining ensemble diversity. Higher values
-            prefer more diverse ensembles. Default is 0.5.
+            prefer more diverse ensembles.
+
+            - If None (default): Automatically determine optimal theta using L-curve analysis
+            - If float: Use the specified theta value directly
+
+            Default is None (automatic selection).
+
+        theta_range : tuple, optional
+            Range for automatic theta scan: (min_theta, max_theta).
+            Only used when theta=None. Default is (0.01, 10.0).
+
+        theta_n_points : int, optional
+            Number of theta values to test during automatic scan.
+            Only used when theta=None. Default is 30.
 
         max_iterations : int, optional
             Maximum number of optimization iterations. Default is 50000.
@@ -887,35 +907,92 @@ class Ensemble:
         verbose : bool, optional
             If True, print optimization progress. Default is True.
 
+        save_theta_scan_plot : str, optional
+            Path to save theta scan plot (only used when theta=None / auto mode).
+            If None, plot is not saved. Default is None.
+
+        show : bool, optional
+            If True and theta=None (auto mode), display the theta-scan plot.
+            Default is False.
+
+        theta_method : str, optional
+            Method to select optimal theta during the scan (only used when theta=None).
+            Options:
+              - 'perpendicular' (default): knee by max perpendicular distance to chord
+              - 'curvature': knee by Menger curvature
+
         Returns
         -------
         BMEResult
             Object containing optimization results including weights, chi-squared,
-            and convergence information.
+            and convergence information. When theta=None, the result also includes
+            theta_scan_result attribute with details of the automatic selection.
 
         Examples
         --------
-        >>> from starling.inference.bme import ExperimentalObservable
-        >>> # Create experimental observables
-        >>> obs1 = ExperimentalObservable(value=25.0, uncertainty=2.0,
-        ...                               constraint="lower",
-        ...                               name="Rg")
-        >>> obs2 = ExperimentalObservable(value=30.0, uncertainty=3.0,
-        ...                               constraint="upper",
-        ...                               name="End-to-end distance")
+        >>> from starling.structure.bme import ExperimentalObservable
         >>>
-        >>> # Calculate observables from ensemble
+        >>> # Example 1: Automatic theta selection (recommended)
+        >>> obs1 = ExperimentalObservable(25.0, 2.0, name="Rg")
+        >>> obs2 = ExperimentalObservable(70.0, 5.0, constraint="upper", name="ETE")
+        >>>
         >>> rg_values = ensemble.radius_of_gyration()
         >>> ete_values = ensemble.end_to_end_distance()
         >>> calculated = np.column_stack([rg_values, ete_values])
         >>>
-        >>> # Perform BME reweighting
+        >>> # Automatically finds and uses optimal theta
+        >>> result = ensemble.reweight_bme([obs1, obs2], calculated)
+        >>> print(f"Auto-selected theta: {result.metadata['theta_used']}")
+        >>>
+        >>> # Example 2: Manual theta specification
         >>> result = ensemble.reweight_bme([obs1, obs2], calculated, theta=0.5)
+        >>>
+        >>> # Example 3: Custom theta scan range
+        >>> result = ensemble.reweight_bme(
+        ...     [obs1, obs2], calculated,
+        ...     theta=None,  # auto mode
+        ...     theta_range=(0.1, 5.0),
+        ...     theta_n_points=20,
+        ...     save_theta_scan_plot="my_theta_scan.png"
+        ... )
         >>>
         >>> # Now use BME weights in other calculations
         >>> reweighted_rg = ensemble.radius_of_gyration(use_bme_weights=True)
+
+        Notes
+        -----
+        **Automatic Theta Selection (theta=None)**
+
+        When theta=None, the method performs an L-curve analysis to find the
+        optimal theta that balances fit quality (Chi squared) and ensemble diversity (phi).
+        This uses Menger curvature to find the "knee" point of the L-curve.
+
+        The automatic selection:
+        1. Tests multiple theta values across the specified range
+        2. Computes Chi squared and phi for each theta
+        3. Finds the optimal balance using L-curve analysis
+        4. Uses the optimal theta for final reweighting
+        5. Stores scan results in result.metadata['theta_scan_result']
+
+        **Manual Theta Selection (theta=<value>)**
+
+        When you specify theta explicitly, no scan is performed and the method
+        uses your value directly. This is faster but requires you to choose
+        theta appropriately for your system.
+
+        **Which Should You Use?**
+
+        - **Use theta=None (auto)** for most applications, especially when:
+          * You're unsure what theta value to use
+          * You want reproducible, principled parameter selection
+          * You're willing to wait ~30x longer (30 BME fits instead of 1)
+
+        - **Use theta=<value> (manual)** when:
+          * You've already determined an appropriate theta value
+          * You need fast reweighting (e.g., in a loop)
+          * You're doing sensitivity analysis with specific theta values
         """
-        # Check if we need to recompute
+        # Reuse cached result unless forced
         if self.__bme_result is not None and not force_recompute:
             if verbose:
                 print("Using cached BME result. Set force_recompute=True to recompute.")
@@ -928,24 +1005,161 @@ class Ensemble:
                 f"must match ensemble size ({self.number_of_conformations})"
             )
 
-        bme = BME(
+        # Construct BME object (theta is handled in fit, not here)
+        self.__bme = BME(
             observables=observables,
             calculated_values=calculated_values,
-            theta=theta,
             initial_weights=initial_weights,
         )
 
-        result = bme.fit(
-            max_iterations=max_iterations,
-            optimizer=optimizer,
-            verbose=verbose,
-        )
+        # ------------------------------------------------------------------
+        # AUTOMATIC THETA MODE (theta is None) -> auto_theta=True
+        # ------------------------------------------------------------------
+        # Validate theta_method early (applies only to auto-theta mode)
+        if theta is None:
+            method_lower = str(theta_method).strip().lower()
+            if method_lower not in ("perpendicular", "curvature"):
+                raise ValueError(
+                    f"theta_method must be 'perpendicular' or 'curvature', got: {theta_method}"
+                )
 
-        # TODO: following caching api - do we want this, may conflict with iBME implementation later
-        # or at least need to recall to forcibly recompute
+            if verbose:
+                print("\n🔍 AUTOMATIC THETA SELECTION MODE")
+                print("=" * 60)
+                print("Performing L-curve analysis to find optimal theta...")
+                print(f"  Range: {theta_range[0]:.4f} to {theta_range[1]:.4f}")
+                print(f"  Points: {theta_n_points}")
+                print(f"  Selection method: {method_lower}")
+                print("")
+
+            # Configure how the internal theta scan should run
+            theta_scan_kwargs = dict(
+                theta_range=theta_range,
+                n_points=theta_n_points,
+                log_scale=True,
+                max_iterations=max_iterations,
+                optimizer=optimizer,
+                verbose=False,
+                progress_callback=(
+                    lambda c, t, th: print(f"  Progress: {c}/{t} (θ={th:.4f})")
+                    if verbose and (c == 1 or c == t or c % 5 == 0)
+                    else None
+                ),
+                method=method_lower,  # forward the selection method
+            )
+
+            # Let BME handle the scan + optimal theta selection
+            result = self.__bme.fit(
+                max_iterations=max_iterations,
+                optimizer=optimizer,
+                verbose=verbose,
+                theta=None,
+                auto_theta=True,
+                theta_scan_kwargs=theta_scan_kwargs,
+            )
+
+            # Fetch the scan result from BME
+            scan_result = self.theta_scan_result
+
+            if scan_result is not None:
+                theta_to_use = float(scan_result.optimal_theta)
+
+                if verbose:
+                    print("")
+                    scan_result.print_summary()
+
+                # Decide whether to save and/or show
+                if save_theta_scan_plot is not None or bool(show):
+                    scan_result.plot(
+                        save_path=save_theta_scan_plot,
+                        show=bool(show),
+                    )
+                    if save_theta_scan_plot is not None and verbose:
+                        print(f"\nSaved theta scan plot: {save_theta_scan_plot}")
+
+                # Attach scan metadata
+                result.metadata["theta_scan_result"] = scan_result
+                result.metadata["theta_selection_method"] = method_lower
+                result.metadata["theta_used"] = theta_to_use
+
+                if verbose:
+                    print(f"\nUsing optimal theta = {theta_to_use:.4f}")
+                    print(f"  Chi squared: {result.chi_squared_final:.4f}")
+                    print(f"  phi:    {result.phi:.4f}")
+                    print("=" * 60)
+
+            else:
+                # Should be rare; be defensive
+                if verbose:
+                    print(
+                        "Warning: auto-theta fit completed but no theta_scan_result found."
+                    )
+                result.metadata.setdefault("theta_selection_method", "automatic")
+                result.metadata.setdefault("theta_used", float(result.theta))
+
+        # ------------------------------------------------------------------
+        # MANUAL THETA MODE (theta is not None) -> auto_theta=False
+        # ------------------------------------------------------------------
+        else:
+            if verbose:
+                print(f"\n🎯 MANUAL THETA MODE: θ = {theta}")
+                print("=" * 60)
+
+            result = self.__bme.fit(
+                max_iterations=max_iterations,
+                optimizer=optimizer,
+                verbose=verbose,
+                theta=float(theta),
+                auto_theta=False,
+            )
+
+            result.metadata["theta_selection_method"] = "manual"
+            result.metadata["theta_used"] = float(theta)
+
+        # Cache result
         self.__bme_result = result
-
         return result
+
+    def view_theta_scan(
+        self,
+        save_path: Optional[str] = None,
+        show: bool = True,
+        figsize: Tuple[int, int] = (18, 10),
+    ):
+        """
+        Visualize the most recent theta scan diagnostics for this Ensemble.
+
+        This wraps ThetaScanResult.plot() from the last BME fit that used
+        automatic theta selection.
+
+        Parameters
+        ----------
+        save_path : str, optional
+            Path to save the figure. If None, the figure is not written to disk.
+        show : bool
+            If True, display the figure. Default is True.
+        figsize : tuple
+            Figure size (width, height). Default is (18, 10).
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The created figure.
+
+        Raises
+        ------
+        ValueError
+            If no theta scan has been performed yet.
+        """
+        scan = self.theta_scan_result
+        if scan is None:
+            raise ValueError(
+                "No theta scan result available. "
+                "Run reweight_bme(..., theta=None) at least once to generate a scan."
+            )
+
+        fig = scan.plot(figsize=figsize, save_path=save_path, show=show)
+        return fig
 
     @property
     def has_bme_weights(self):
@@ -970,6 +1184,22 @@ class Ensemble:
             The BME optimization result, or None if reweight_bme() has not been called.
         """
         return self.__bme_result
+
+    @property
+    def theta_scan_result(self):
+        """
+        Theta scan result from the most recent BME fit (if auto-theta was used).
+
+        Returns
+        -------
+        ThetaScanResult or None
+        """
+        if self.__bme is None:
+            return None
+
+        scan = getattr(self.__bme, "theta_scan_result", None)
+
+        return scan
 
     def _get_weights(self, use_bme_weights=False):
         """

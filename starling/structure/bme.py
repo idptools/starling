@@ -84,166 +84,25 @@ to observables not directly supported by STARLING.
 >>> reweighted_means = bme.predict(calculated)
 """
 
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 from scipy.optimize import minimize
 from scipy.special import logsumexp, rel_entr
 
-# Constants
-DEFAULT_THETA = 0.5
-DEFAULT_MAX_ITERATIONS = 50000
-DEFAULT_OPTIMIZER = "L-BFGS-B"
-LAMBDA_INIT_SCALE = 1e-3
-MIN_WEIGHT_THRESHOLD = 1e-50
-
-
-# Valid constraint types
-VALID_CONSTRAINTS = {"equality", "upper", "lower"}
-
-
-@dataclass
-class ExperimentalObservable:
-    """
-    Container for experimental observable data.
-
-    Parameters
-    ----------
-    value : float
-        The experimental value of the observable.
-    uncertainty : float
-        The experimental uncertainty (standard deviation).
-    constraint : str, optional
-        Type of constraint. Must be one of:
-        - "equality" (default): Observable should match value ± uncertainty
-        - "upper": Observable should not exceed value
-        - "lower": Observable should not fall below value
-    name : str, optional
-        Optional name/description of the observable.
-
-    Examples
-    --------
-    >>> # Equality constraint (default): Rg = 25 ± 2 Å
-    >>> obs1 = ExperimentalObservable(25.0, 2.0, name="Rg")
-    >>>
-    >>> # Upper bound: distance should not exceed 70 Å
-    >>> obs2 = ExperimentalObservable(70.0, 5.0, constraint="upper", name="Max distance")
-    >>>
-    >>> # Lower bound: helicity should be at least 30%
-    >>> obs3 = ExperimentalObservable(0.3, 0.05, constraint="lower", name="Min helicity")
-    """
-
-    value: float
-    uncertainty: float
-    constraint: str = "equality"
-    name: Optional[str] = None
-
-    def __post_init__(self):
-        """Validate the observable data."""
-        if self.uncertainty <= 0:
-            raise ValueError(f"Uncertainty must be positive, got {self.uncertainty}")
-
-        # Validate constraint
-        if not isinstance(self.constraint, str):
-            raise TypeError(
-                f"constraint must be a string ('equality', 'upper', or 'lower'), got {type(self.constraint).__name__}"
-            )
-
-        constraint_lower = self.constraint.lower().strip()
-        if constraint_lower not in VALID_CONSTRAINTS:
-            raise ValueError(
-                f"Invalid constraint: '{self.constraint}'. Must be 'equality', 'upper', or 'lower'"
-            )
-
-        # Normalize to lowercase
-        self.constraint = constraint_lower
-
-    def get_bounds(self) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Get the optimization bounds for the Lagrange multiplier.
-
-        These bounds ensure the constraint type is enforced during optimization:
-        - "equality": No bounds (lambda can be any value)
-        - "upper": lambda >= 0 (positive lambda pushes observable down)
-        - "lower": lambda <= 0 (negative lambda pushes observable up)
-
-        Returns
-        -------
-        tuple
-            (lower_bound, upper_bound) for the Lagrange multiplier.
-        """
-        if self.constraint == "equality":
-            return (None, None)
-        elif self.constraint == "upper":
-            return (0.0, None)
-        else:  # "lower"
-            return (None, 0.0)
-
-
-@dataclass
-class BMEResult:
-    """
-    Container for BME optimization results.
-
-    Attributes
-    ----------
-    weights : np.ndarray
-        Optimized weights for each frame in the ensemble.
-    initial_weights : np.ndarray
-        Initial (uniform) weights before optimization.
-    lambdas : np.ndarray
-        Optimized Lagrange multipliers.
-    chi_squared_initial : float
-        Chi-squared before optimization.
-    chi_squared_final : float
-        Chi-squared after optimization.
-    phi : float
-        Fraction of effective frames (measure of ensemble diversity).
-    n_iterations : int
-        Number of optimization iterations.
-    success : bool
-        Whether the optimization succeeded.
-    message : str
-        Optimization status message.
-    theta : float
-        Theta parameter used in optimization.
-    observables : list[ExperimentalObservable]
-        List of experimental observables used.
-    calculated_values : np.ndarray
-        Calculated observable values for each frame.
-    metadata : dict
-        Additional metadata about the optimization.
-    """
-
-    weights: np.ndarray
-    initial_weights: np.ndarray
-    lambdas: np.ndarray
-    chi_squared_initial: float
-    chi_squared_final: float
-    phi: float
-    n_iterations: int
-    success: bool
-    message: str
-    theta: float
-    observables: list
-    calculated_values: np.ndarray
-    metadata: dict
-
-    def __str__(self):
-        status = "SUCCESS" if self.success else "FAILED"
-        return (
-            f"BME Result [{status}]\n"
-            f"  Chi-squared initial: {self.chi_squared_initial:.4f}\n"
-            f"  Chi-squared final:   {self.chi_squared_final:.4f}\n"
-            f"  phi (effective fraction): {self.phi:.4f}\n"
-            f"  Iterations: {self.n_iterations}\n"
-            f"  Theta: {self.theta}"
-        )
-
-    def __repr__(self):
-        return self.__str__()
+from starling.structure.bme_utils import (
+    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_OPTIMIZER,
+    DEFAULT_THETA,
+    LAMBDA_INIT_SCALE,
+    MIN_WEIGHT_THRESHOLD,
+    VALID_CONSTRAINTS,
+    BMEResult,
+    ExperimentalObservable,
+    ThetaScanResult,
+    theta_scan,
+)
 
 
 class BME:
@@ -258,9 +117,6 @@ class BME:
     calculated_values : np.ndarray
         Array of calculated observable values for each frame.
         Shape: (n_frames, n_observables)
-    theta : float, optional
-        Regularization parameter controlling the trade-off between fitting
-        experimental data and maintaining ensemble diversity. Default is 0.5.
     initial_weights : np.ndarray, optional
         Initial weights for ensemble frames. If None, uniform weights are used.
     """
@@ -273,12 +129,13 @@ class BME:
         initial_weights: Optional[np.ndarray] = None,
     ):
         # Validate inputs
-        self._validate_inputs(observables, calculated_values, theta, initial_weights)
+        self._validate_inputs(observables, calculated_values, initial_weights)
 
         # Store observables
         self.observables = observables
         self.calculated_values = calculated_values
-        self.theta = theta
+        # Avoid setting self.theta here to not shadow the @property
+        # self.theta = None
         self.n_frames = calculated_values.shape[0]
         self.n_observables = len(observables)
 
@@ -298,8 +155,10 @@ class BME:
 
         # Results storage
         self._result: Optional[BMEResult] = None
+        self._theta_scan_result: Optional["ThetaScanResult"] = None
+        self._theta: Optional[float] = None
 
-    def _validate_inputs(self, observables, calculated_values, theta, initial_weights):
+    def _validate_inputs(self, observables, calculated_values, initial_weights):
         """Validate input parameters."""
         if not isinstance(observables, list) or len(observables) == 0:
             raise ValueError("observables must be a non-empty list")
@@ -318,9 +177,6 @@ class BME:
                 f"Number of observables ({len(observables)}) must match "
                 f"calculated_values columns ({calculated_values.shape[1]})"
             )
-
-        if theta <= 0:
-            raise ValueError(f"theta must be positive, got {theta}")
 
         if initial_weights is not None:
             if not isinstance(initial_weights, np.ndarray):
@@ -391,6 +247,12 @@ class BME:
         tuple
             (objective_value, gradient) both scaled by 1/theta for numerical stability.
         """
+        # shouldnt ever happen with fit logic.
+        if self._theta is None:
+            raise RuntimeError(
+                "theta has not been set; call fit() with theta or auto_theta=True"
+            )
+
         # Compute log weights: log(w_i) = -lambda^T * O_calc_i + log(w0_i)
         log_unnormalized_weights = -np.sum(
             lambdas * self.calculated_values, axis=1
@@ -417,7 +279,7 @@ class BME:
 
         # Regularization term: (theta/2) * sum(lambda_i^2 * sigma_i^2)
         regularization_term = (
-            self.theta / 2 * np.sum(lambdas**2 * experimental_uncertainties_squared)
+            self._theta / 2 * np.sum(lambdas**2 * experimental_uncertainties_squared)
         )
 
         # Constraint term: lambda^T * O_exp
@@ -435,48 +297,160 @@ class BME:
         # Gradient: dgamma/dlambda = O_exp + theta * Sigma^2 * lambda - <O_calc>
         gradient = (
             experimental_values
-            + self.theta * lambdas * experimental_uncertainties_squared
+            + self._theta * lambdas * experimental_uncertainties_squared
             - ensemble_avg_calculated
         )
 
-        # TODO: I don't think this is needed? Legacy from before gradient fix and lgosumexp trick - but scaling shouldnt hurt optimum
         # Divide by theta to avoid numerical problems
-        return objective / self.theta, gradient / self.theta
+        return objective / self._theta, gradient / self._theta
 
-    def fit(
+    def scan_theta(
         self,
+        theta_range: Union[Tuple[float, float], np.ndarray] = (0.01, 10.0),
+        n_points: int = 15,
+        log_scale: bool = True,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         optimizer: str = DEFAULT_OPTIMIZER,
-        verbose: bool = True,
-    ) -> BMEResult:
+        verbose: bool = False,
+        progress_callback: Optional[callable] = None,
+        method: str = "perpendicular",
+    ) -> "ThetaScanResult":
         """
-        Perform BME optimization to find optimal ensemble weights.
+        Scan a range of theta values and select the optimal regularization (θ).
+
+        This helper runs a theta scan using this instance's observables,
+        calculated_values, and initial_weights, returning a ThetaScanResult that
+        contains one BME fit per theta, summary metrics, and the index/value of
+        the recommended theta based on an L-curve knee criterion.
 
         Parameters
         ----------
+        theta_range : tuple[float, float] | np.ndarray, optional
+            - If a tuple (min_theta, max_theta) is provided, generate a grid of
+              size n_points within this range (logarithmic if log_scale=True).
+            - If a 1D array is provided, use it as the exact grid of theta values.
+            Default is (0.01, 10.0).
+        n_points : int, optional
+            Number of theta samples used when theta_range is a tuple. Default 15.
+        log_scale : bool, optional
+            If True and theta_range is a tuple, sample theta values on a log scale.
+            Default True.
         max_iterations : int, optional
-            Maximum number of optimization iterations. Default is 50000.
+            Maximum iterations for the internal optimizer in each single-theta fit.
+            Default DEFAULT_MAX_ITERATIONS.
         optimizer : str, optional
-            Optimization method to use. Default is 'L-BFGS-B'.
+            Optimizer name forwarded to scipy.optimize.minimize (e.g., "L-BFGS-B").
+            Default DEFAULT_OPTIMIZER.
         verbose : bool, optional
-            If True, print optimization progress. Default is True.
+            If True, print scan progress messages. Default False.
+        progress_callback : Callable[[int, int, float], None] | None, optional
+            Optional callback invoked for each theta with signature
+            progress_callback(current_index, total, theta_value).
+        method : str, optional
+            Knee selection rule for the L-curve:
+              - "perpendicular" (default): maximum perpendicular distance to the
+                line connecting the endpoints (classic knee finding).
+              - "curvature": maximum Menger curvature (3-point curvature estimate).
+
+        Returns
+        -------
+        ThetaScanResult
+            Object with:
+            - theta_values: np.ndarray of scanned θ
+            - chi_squared_values: np.ndarray of final χ² per θ
+            - phi_values: np.ndarray of Φ (entropy-based effective fraction) per θ
+            - kl_divergence_values: np.ndarray of KL divergence per θ
+            - results: list[BMEResult] for each θ
+            - optimal_theta: selected θ value
+            - optimal_idx: index of the selected θ
+            - method: human-readable name of the knee selection method used
+
+        Notes
+        -----
+        - This method does not modify self._theta or self._result; it only stores
+          the scan outcome in self._theta_scan_result for later access.
+        - To run a full auto-θ fit and set the model state accordingly, call
+          BME.fit(auto_theta=True) or use Ensemble.reweight_bme(..., theta=None).
+
+        Examples
+        --------
+        >>> scan = bme.scan_theta(theta_range=(1e-2, 1e1), n_points=25, method="curvature")
+        >>> scan.print_summary()
+        >>> fig = scan.plot(show=True, figsize=(8, 4))
+        """
+        scan_result = theta_scan(
+            observables=self.observables,
+            calculated_values=self.calculated_values,
+            theta_range=theta_range,
+            n_points=n_points,
+            log_scale=log_scale,
+            max_iterations=max_iterations,
+            optimizer=optimizer,
+            verbose=verbose,
+            progress_callback=progress_callback,
+            initial_weights=self.initial_weights,
+            method=method,
+        )
+        self._theta_scan_result = scan_result
+        return scan_result
+
+    def _run_single_theta_optimization(
+        self,
+        max_iterations: int,
+        optimizer: str,
+        verbose: bool,
+    ) -> BMEResult:
+        """
+        Core BME optimization for a single theta value.
+
+        This is the primary optimization routine that performs the Bayesian Maximum
+        Entropy fit using scipy.optimize.minimize. It computes the objective function
+        and gradient, applies bounds from observable constraints, and returns a
+        BMEResult with optimized weights and diagnostics.
+
+        Parameters
+        ----------
+        max_iterations : int
+            Maximum number of iterations passed to scipy.optimize.minimize.
+        optimizer : str
+            Optimization method name accepted by scipy.optimize.minimize
+            (e.g., 'L-BFGS-B', 'SLSQP'). Must support `jac=True` and `bounds`.
+        verbose : bool
+            If True, prints progress information including initial/final chi-squared,
+            theta, problem dimensions, and optimizer messages.
 
         Returns
         -------
         BMEResult
-            Object containing optimization results including weights, chi-squared,
-            and convergence information.
+            Optimization result. See BMEResult for field documentation.
+
+            If optimization succeeds, contains optimized weights, lambdas, and metrics.
+            If optimization fails, weights revert to initial_weights and chi_squared_final
+            is set to np.nan.
+
+        Notes
+        -----
+        - Bounds on Lagrange multipliers enforce constraint types (equality, upper, lower).
+        - If optimization fails, self._result is not modified; only the returned
+          BMEResult reflects the failure.
+
+        Examples
+        --------
+        >>> bme = BME(observables, calculated_values, theta=0.5)
+        >>> result = bme._run_single_theta_optimization(
+        ...     max_iterations=1000, optimizer="L-BFGS-B", verbose=True
+        ... )
+        >>> print(f"Success: {result.success}, Chi²: {result.chi_squared_final:.4f}")
         """
         chi_squared_initial = self._compute_chi_squared(self.initial_weights)
 
         if verbose:
             print("BME Optimization")
-            print(f"  Theta: {self.theta}")
+            print(f"  Theta: {self._theta}")
             print(f"  Observables: {self.n_observables}")
             print(f"  Frames: {self.n_frames}")
             print(f"  Chi-squared initial: {chi_squared_initial:.4f}")
 
-        # Perform optimization
         optimization_result = minimize(
             self._objective_and_gradient,
             self._lambdas,
@@ -487,19 +461,16 @@ class BME:
         )
 
         if optimization_result.success:
-            # Compute optimized weights
             log_weights_opt = -np.sum(
                 optimization_result.x[np.newaxis, :] * self.calculated_values, axis=1
             ) + np.log(self.initial_weights)
             weights_opt = np.exp(log_weights_opt - logsumexp(log_weights_opt))
 
             chi_squared_final = self._compute_chi_squared(weights_opt)
-
             relative_entropy = float(
                 np.sum(rel_entr(weights_opt, self.initial_weights))
             )
-
-            phi = np.exp(-relative_entropy)
+            phi = float(np.exp(-relative_entropy))
 
             if verbose:
                 print(
@@ -508,7 +479,7 @@ class BME:
                 print(f"  Chi-squared final: {chi_squared_final:.4f}")
                 print(f"  Effective number of frames: {phi:.4f}")
 
-            self._result = BMEResult(
+            result = BMEResult(
                 weights=weights_opt,
                 initial_weights=self.initial_weights.copy(),
                 lambdas=optimization_result.x.copy(),
@@ -518,7 +489,7 @@ class BME:
                 n_iterations=optimization_result.nit,
                 success=True,
                 message=optimization_result.message,
-                theta=self.theta,
+                theta=self._theta,
                 observables=self.observables,
                 calculated_values=self.calculated_values,
                 metadata={
@@ -532,19 +503,17 @@ class BME:
                 print("  Optimization failed")
                 print(f"  Message: {optimization_result.message}")
 
-            self._result = BMEResult(
+            result = BMEResult(
                 weights=self.initial_weights.copy(),
                 initial_weights=self.initial_weights.copy(),
                 lambdas=optimization_result.x.copy(),
                 chi_squared_initial=chi_squared_initial,
                 chi_squared_final=np.nan,
                 phi=np.nan,
-                n_iterations=optimization_result.nit
-                if hasattr(optimization_result, "nit")
-                else -1,
+                n_iterations=getattr(optimization_result, "nit", -1),
                 success=False,
                 message=optimization_result.message,
-                theta=self.theta,
+                theta=self._theta,
                 observables=self.observables,
                 calculated_values=self.calculated_values,
                 metadata={
@@ -554,6 +523,78 @@ class BME:
                 },
             )
 
+        return result
+
+    def fit(
+        self,
+        max_iterations: int = DEFAULT_MAX_ITERATIONS,
+        optimizer: str = DEFAULT_OPTIMIZER,
+        verbose: bool = True,
+        *,
+        theta: Optional[float] = None,
+        auto_theta: bool = True,
+        theta_scan_kwargs: Optional[dict] = None,
+    ) -> BMEResult:
+        # 1) choose effective theta
+        if theta is not None:
+            if theta <= 0:
+                raise ValueError(f"theta must be positive, got {theta}")
+            self._theta = float(theta)
+            self._theta_scan_result = None
+            if verbose:
+                print(f"[BME] Using manual theta = {self._theta:.4g} (no theta scan).")
+
+        elif auto_theta:
+            if verbose:
+                print(
+                    "[BME] Auto theta mode: running theta scan to select optimal θ..."
+                )
+
+            default_scan_kwargs = dict(
+                theta_range=(0.01, 10.0),
+                n_points=15,
+                log_scale=True,
+                max_iterations=max_iterations,
+                optimizer=optimizer,
+                verbose=False,
+                progress_callback=None,
+            )
+            if theta_scan_kwargs is not None:
+                default_scan_kwargs.update(theta_scan_kwargs)
+
+            scan_result = self.scan_theta(**default_scan_kwargs)
+            opt_idx = scan_result.optimal_idx
+
+            self._theta = float(scan_result.optimal_theta)
+            self._result = scan_result.results[opt_idx]
+            self._theta_scan_result = scan_result
+            self._lambdas = self._result.lambdas.copy()
+
+            if verbose:
+                print(
+                    f"[BME] Selected θ={self._theta:.4g} via {scan_result.method} "
+                    f"(Chi_squared_init={self._result.chi_squared_initial:.3f}, "
+                    f"Chi_squared_final={self._result.chi_squared_final:.3f}, "
+                    f"N_eff={self._result.phi:.3f})."
+                )
+            return self._result
+
+        else:
+            # auto_theta=False and no manual theta: choose a sane default
+            if self._theta is None:
+                self._theta = DEFAULT_THETA
+            if verbose:
+                print(
+                    f"[BME] auto_theta=False and no manual theta; "
+                    f"using θ={self._theta:.4g}."
+                )
+
+        # 2) run single-theta optimization for self._theta
+        self._result = self._run_single_theta_optimization(
+            max_iterations=max_iterations,
+            optimizer=optimizer,
+            verbose=verbose,
+        )
         return self._result
 
     @property
@@ -567,6 +608,11 @@ class BME:
             The optimization result, or None if fit() has not been called.
         """
         return self._result
+
+    @property
+    def theta_scan_result(self) -> Optional["ThetaScanResult"]:
+        """Last theta scan run on this BME instance (if any)."""
+        return self._theta_scan_result
 
     def predict(self, calculated_values: np.ndarray) -> np.ndarray:
         """
@@ -629,125 +675,7 @@ class BME:
         # Compute weighted averages
         return np.sum(self._result.weights[:, np.newaxis] * calculated_values, axis=0)
 
-
-# Helper function for analyzing BME results
-def diagnose_bme_result(result: BMEResult, warn_threshold: float = 0.5) -> dict:
-    """
-    Diagnose BME reweighting results and identify potential issues.
-
-    Parameters
-    ----------
-    result : BMEResult
-        The BME optimization result to diagnose
-    warn_threshold : float
-        Phi threshold below which to warn about diversity loss. Default 0.5.
-
-    Returns
-    -------
-    dict
-        Dictionary containing diagnostic information and warnings
-    """
-    diagnostics = {}
-    warnings = []
-
-    # Calculate effective sample size (Neff)
-    n_effective = 1 / np.sum(result.weights**2)
-    diagnostics["n_effective"] = n_effective
-    diagnostics["n_effective_fraction"] = n_effective / len(result.weights)
-
-    # Weight distribution statistics
-    diagnostics["weight_min"] = result.weights.min()
-    diagnostics["weight_max"] = result.weights.max()
-    diagnostics["weight_std"] = result.weights.std()
-    diagnostics["weight_range_orders"] = np.log10(
-        diagnostics["weight_max"] / diagnostics["weight_min"]
-    )
-
-    # Chi-squared improvement
-    diagnostics["chi2_improvement"] = (
-        result.chi_squared_initial - result.chi_squared_final
-    )
-    diagnostics["chi2_improvement_pct"] = (
-        diagnostics["chi2_improvement"] / result.chi_squared_initial
-    ) * 100
-
-    # Check for issues
-    if result.phi < warn_threshold:
-        warnings.append(
-            f"Low Phi ({result.phi:.3f} < {warn_threshold}): Significant loss of ensemble diversity. "
-            f"Consider increasing theta or loosening observable uncertainties."
-        )
-
-    if diagnostics["weight_range_orders"] > 3:
-        warnings.append(
-            f"Large weight range ({diagnostics['weight_range_orders']:.1f} orders of magnitude): "
-            f"A few frames dominate the reweighted ensemble."
-        )
-
-    if n_effective < 0.1 * len(result.weights):
-        warnings.append(
-            f"Low effective sample size ({n_effective:.1f} / {len(result.weights)}): "
-            f"Only ~{diagnostics['n_effective_fraction'] * 100:.1f}% of frames are effectively used."
-        )
-
-    if result.chi_squared_final > 2 * len(result.observables):
-        warnings.append(
-            f"High final Chi-squared ({result.chi_squared_final:.2f}): Poor fit to experimental data. "
-            f"Observables may be incompatible with ensemble."
-        )
-
-    diagnostics["warnings"] = warnings
-    diagnostics["status"] = "OK" if len(warnings) == 0 else "WARNING"
-
-    return diagnostics
-
-
-def print_bme_diagnostics(result: BMEResult, warn_threshold: float = 0.5):
-    """
-    Print a formatted diagnostic report for BME results.
-
-    Parameters
-    ----------
-    result : BMEResult
-        The BME optimization result to diagnose
-    warn_threshold : float
-        Phi threshold below which to warn about diversity loss
-    """
-    diag = diagnose_bme_result(result, warn_threshold)
-
-    print("\n" + "=" * 60)
-    print("BME DIAGNOSTIC REPORT")
-    print("=" * 60)
-
-    print(f"\nOptimization Status: {result.message}")
-    print(f"Success: {result.success}")
-    print(f"Iterations: {result.n_iterations}")
-
-    print(f"\nChi-squared:")
-    print(f"  Initial:     {result.chi_squared_initial:.4f}")
-    print(f"  Final:       {result.chi_squared_final:.4f}")
-    print(
-        f"  Improvement: {diag['chi2_improvement']:.4f} ({diag['chi2_improvement_pct']:.1f}%)"
-    )
-
-    print(f"\nEnsemble Diversity:")
-    print(f"  Phi (Φ):                {result.phi:.4f}")
-    print(
-        f"  Effective sample size:  {diag['n_effective']:.1f} / {len(result.weights)} ({diag['n_effective_fraction'] * 100:.1f}%)"
-    )
-    print(f"  Theta (θ):              {result.theta}")
-
-    print(f"\nWeight Distribution:")
-    print(f"  Min:        {diag['weight_min']:.2e}")
-    print(f"  Max:        {diag['weight_max']:.2e}")
-    print(f"  Std Dev:    {diag['weight_std']:.2e}")
-    print(f"  Range:      {diag['weight_range_orders']:.1f} orders of magnitude")
-
-    if len(diag["warnings"]) > 0:
-        print(f"\n⚠️  WARNINGS ({len(diag['warnings'])}):")
-        for i, warning in enumerate(diag["warnings"], 1):
-            print(f"  {i}. {warning}")
-    else:
-        print(f"\n✓ Status: {diag['status']} - No issues detected")
-
-    print("=" * 60)
+    @property
+    def theta(self) -> Optional[float]:
+        """Theta value used in the most recent fit (if any)."""
+        return self._theta
