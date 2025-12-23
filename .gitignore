@@ -7,12 +7,16 @@ wandb/
 build/
 dist/
 
+# intermediate file stuff
+.DS_Store
+.ipynb_checkpoints/
+
 *~
 
 starling/tests/test_scratch.ipynb
 idptools_starling.egg-info/
 
-# added to avoid local version clashes on buil
+# added to avoid local version clashes on build
 starling/_version.py
 
 for_presentation/
