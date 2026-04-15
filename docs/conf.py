@@ -100,6 +100,8 @@ autodoc_mock_imports = [
     "hydra",
     "omegaconf",
     "wandb",
+    "sparrow",
+    "IPython",
 ]
 
 # Intersphinx mapping for cross-referencing other libraries
