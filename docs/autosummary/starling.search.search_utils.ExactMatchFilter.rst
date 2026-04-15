@@ -6,7 +6,6 @@ starling.search.search\_utils.ExactMatchFilter
 .. autoclass:: ExactMatchFilter
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

@@ -18,12 +18,13 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
     Configure model compilation settings programmatically with full support for
     PyTorch compile parameters.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     enabled : bool or None
         Whether to enable model compilation. If None, keeps current setting.
     **torch_compile_kwargs : keyword arguments
-        Any valid arguments for torch.compile, such as:
+        Any valid arguments for ``torch.compile``, such as:
+
         - mode (str): Compilation mode ("default", "reduce-overhead", "max-autotune")
         - backend (str): Compilation backend ("inductor", "eager", "aot_eager", etc.)
         - fullgraph (bool): Whether to compile the full graph
@@ -31,7 +32,7 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
         - disable (bool): Temporarily disable compilation
         - options (dict): Backend-specific options like {"triton.cudagraphs": True}
 
-    Example:
+    Examples
     --------
     >>> import starling
     >>> # Basic usage
@@ -47,8 +48,8 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
     ... )
     >>> results = starling.generate(...)  # Uses compiled models with custom settings
 
-    Returns:
-    --------
+    Returns
+    -------
     dict
         Current compilation settings
     """

@@ -2,6 +2,7 @@
 ==================
 
 .. automodule:: starling.inference
+   :no-members:
 
    
    

@@ -6,7 +6,6 @@ starling.inference.constraints.ReConstraint
 .. autoclass:: ReConstraint
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

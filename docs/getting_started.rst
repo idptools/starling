@@ -86,7 +86,8 @@ How to cite
 
 If you find STARLING useful, please consider citing the following:
 
-**Accurate predictions of conformational ensembles of disordered proteins with STARLING** Novak, B., Lotthammer, J. M., Emenecker, R. J. & Holehouse, A. S. bioRxiv (2025). doi:10.1101/2025.02.14.638373 (*Main STARLING preprint (under review)*)
+
+**Accurate predictions of disordered protein ensembles with STARLING**. Novak, B., Lotthammer, J. M., Emenecker, R. J. & Holehouse, A. S.  **Nature** 652, 240-250 (2026).
 
 **Physics-driven coarse-grained model for biomolecular phase separation with near-quantitative accuracy** Joseph, J. A., Reinhardt, A., Aguirre, A., Chew, P. Y., Russell, K. O., Espinosa, J. R., Garaizar, A. & Collepardo-Guevara, R. Nat. Comput. Sci. 1, 732–743 (2021) (*Coarse-grained model from which STARLING was trained - PLEASE cite this alongside STARLING*)
 

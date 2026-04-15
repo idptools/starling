@@ -329,6 +329,7 @@ class BME:
             - If a tuple (min_theta, max_theta) is provided, generate a grid of
               size n_points within this range (logarithmic if log_scale=True).
             - If a 1D array is provided, use it as the exact grid of theta values.
+
             Default is (0.01, 10.0).
         n_points : int, optional
             Number of theta samples used when theta_range is a tuple. Default 15.
@@ -348,14 +349,16 @@ class BME:
             progress_callback(current_index, total, theta_value).
         method : str, optional
             Knee selection rule for the L-curve:
-              - "perpendicular" (default): maximum perpendicular distance to the
-                line connecting the endpoints (classic knee finding).
-              - "curvature": maximum Menger curvature (3-point curvature estimate).
+
+            - "perpendicular" (default): maximum perpendicular distance to the
+              line connecting the endpoints (classic knee finding).
+            - "curvature": maximum Menger curvature (3-point curvature estimate).
 
         Returns
         -------
         ThetaScanResult
             Object with:
+
             - theta_values: np.ndarray of scanned θ
             - chi_squared_values: np.ndarray of final χ² per θ
             - phi_values: np.ndarray of Φ (entropy-based effective fraction) per θ

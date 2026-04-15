@@ -6,7 +6,6 @@ starling.inference.constraints.DistanceConstraint
 .. autoclass:: DistanceConstraint
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

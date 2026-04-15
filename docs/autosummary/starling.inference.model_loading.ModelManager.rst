@@ -6,7 +6,6 @@ starling.inference.model\_loading.ModelManager
 .. autoclass:: ModelManager
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

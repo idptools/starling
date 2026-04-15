@@ -49,6 +49,7 @@ def test_sequence_encoder_backend_basic(dummy_manager):
         ionic_strength=150,
         output_directory=None,
         model_manager=dummy_manager,
+        aggregate=False,
     )
     # Should return dict with same keys
     assert set(out.keys()) == set(sequences.keys())
@@ -72,6 +73,7 @@ def test_sequence_encoder_backend_remainder_batch(dummy_manager):
         ionic_strength=150,
         output_directory=None,
         model_manager=dummy_manager,
+        aggregate=False,
     )
     assert set(out.keys()) == set(sequences.keys())
     for k, v in out.items():
@@ -87,6 +89,7 @@ def test_sequence_encoder_backend_saves_files(tmp_path, dummy_manager):
         ionic_strength=150,
         output_directory=str(tmp_path),
         model_manager=dummy_manager,
+        aggregate=False,
     )
     # When output_directory provided, function returns None
     assert out is None
@@ -113,6 +116,7 @@ def test_sequence_encoder_backend_pretokenized(dummy_manager):
         output_directory=None,
         model_manager=dummy_manager,
         pretokenized=True,
+        aggregate=False,
     )
     assert set(out.keys()) == set(sequences.keys())
     for name, toks in sequences.items():

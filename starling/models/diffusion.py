@@ -377,6 +377,7 @@ class DiffusionModel(pl.LightningModule):
         self.latent_space_scaling_factor = mean_std.float().to(self.device)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        """Training step that computes diffusion loss on a batch."""
         latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
             batch["data"],
             batch["sequence"],
@@ -411,6 +412,7 @@ class DiffusionModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        """Validation step that evaluates diffusion loss on a batch."""
         latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
             batch["data"],
             batch["sequence"],

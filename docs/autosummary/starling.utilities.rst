@@ -2,6 +2,7 @@
 ==================
 
 .. automodule:: starling.utilities
+   :no-members:
 
    
    

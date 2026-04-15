@@ -5,8 +5,8 @@ STARLING provides powerful tools for generating conformational ensembles of intr
 
 .. seealso::
 
-     * :doc:`usage/cli` for command-line generation and conversion helpers.
-     * :doc:`usage/constraints` to steer sampling with experimental restraints and
+     * :doc:`cli` for command-line generation and conversion helpers.
+     * :doc:`constraints` to steer sampling with experimental restraints and
          enable Torch compilation.
 
 Getting Started
@@ -74,7 +74,7 @@ You can also generate ensembles programmatically:
         ens.save(f"{name}_ensemble.starling")
 
 Working with Multiple Input Formats
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 STARLING accepts various input formats:
 
@@ -193,7 +193,7 @@ process:
     ensemble = generate(sequence, conformations=100)
 
 The first invocation warms up kernels; subsequent calls reuse compiled graphs
-and can reduce runtime by ~40% on supported GPUs. See :doc:`usage/constraints`
+and can reduce runtime by ~40% on supported GPUs. See :doc:`constraints`
 for advanced compilation options.
 
 Guided Sampling
@@ -220,7 +220,7 @@ constraint (or list of constraints) from
     ensemble = generate(sequence, conformations=200, constraint=constraint)
 
 Combine multiple constraints or tune ``force_constant``/``guidance`` settings to
-steer sampling toward experimental observables. Visit :doc:`usage/constraints`
+steer sampling toward experimental observables. Visit :doc:`constraints`
 for a catalogue of available restraints and tuning advice.
 
 Saving and Loading Ensembles

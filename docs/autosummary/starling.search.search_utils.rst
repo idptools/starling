@@ -2,6 +2,7 @@ starling.search.search\_utils
 =============================
 
 .. automodule:: starling.search.search_utils
+   :no-members:
 
    
    

@@ -1,5 +1,5 @@
 Starling Documentation
-=====================
+======================
 
 STARLING combines diffusion-based ensemble generation, sequence-aware embeddings, and high-throughput search.
 Use the guides below to install the toolkit, run core workflows, and explore the
@@ -22,6 +22,8 @@ Python API.
    usage/performance
    usage/sequence_encoder
    usage/ensemble
+   usage/bme_reweighting
+   usage/utilities
 
 .. toctree::
    :maxdepth: 1

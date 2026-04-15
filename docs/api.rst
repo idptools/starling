@@ -24,6 +24,8 @@ Structure & Ensembles
 
    structure.ensemble
    structure.bme
+   structure.bme_utils
+   structure.coordinates
 
 Frontend
 --------
@@ -33,6 +35,7 @@ Frontend
    :recursive:
 
    frontend.ensemble_generation
+   frontend.starling_viz
 
 Inference
 ---------
@@ -45,6 +48,40 @@ Inference
    inference.generation
    inference.constraints
    inference.model_loading
+   inference.evaluate_vae
+   inference.benchmark_mds
+
+Models
+------
+
+.. autosummary::
+   :toctree: autosummary
+   :recursive:
+
+   models.vae
+   models.diffusion
+   models.unet
+   models.vit
+   models.transformer
+   models.attention
+   models.blocks
+   models.normalization
+   models.ema
+   models.continuous_diffusion
+   models.vae_components
+   models.quantize
+   models.resnets_original
+
+Samplers
+--------
+
+.. autosummary::
+   :toctree: autosummary
+   :recursive:
+
+   samplers.ddpm_sampler
+   samplers.ddim_sampler
+   samplers.plms_sampler
 
 Data Processing
 ---------------
@@ -54,6 +91,11 @@ Data Processing
    :recursive:
 
    data.tokenizer
+   data.distributions
+   data.positional_encodings
+   data.schedulers
+   data.data_wrangler
+   data.argument_parser
 
 Search & Indexing
 -----------------
@@ -78,3 +120,12 @@ Configuration & Utilities
 
    configs
    utilities
+
+Training
+--------
+
+.. autosummary::
+   :toctree: autosummary
+   :recursive:
+
+   training

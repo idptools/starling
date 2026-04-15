@@ -1,17 +1,17 @@
 Working with Ensembles
-=====================
+======================
 
 The ``Ensemble`` class is a core component of STARLING that represents multiple conformations of a protein chain. This guide covers how to load, analyze, and manipulate conformational ensembles.
 
 .. seealso::
 
-     * :doc:`usage/constraints` for generating ensembles that satisfy
+     * :doc:`constraints` for generating ensembles that satisfy
          experimental restraints.
-     * :doc:`usage/ensemble_generation` for details on controlling the diffusion
+     * :doc:`ensemble_generation` for details on controlling the diffusion
          sampler.
 
 Loading Ensembles
-----------------
+-----------------
 
 Ensembles can be loaded from STARLING format files:
 
@@ -30,10 +30,10 @@ Ensembles can be loaded from STARLING format files:
     print(len(ensemble))  # Number of conformations
 
 Structural Analysis
-------------------
+-------------------
 
 Calculating Ensemble Properties
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The ``Ensemble`` class provides methods to compute various biophysical properties:
 
@@ -53,7 +53,7 @@ The ``Ensemble`` class provides methods to compute various biophysical propertie
     rh_kr = ensemble.hydrodynamic_radius(mode="kr", return_mean=True)
 
 Distance and Contact Analysis
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Access distance maps and contact information:
 
@@ -76,10 +76,10 @@ Access distance maps and contact information:
     mean_contacts = ensemble.contact_map(return_mean=True)
 
 Working with 3D Structures
--------------------------
+--------------------------
 
 Accessing and Generating Coordinates
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 STARLING can generate 3D structures from distance maps:
 
@@ -104,7 +104,7 @@ STARLING can generate 3D structures from distance maps:
     ensemble.save_trajectory("my_structures")  # Save as PDB/XTC
 
 Ensemble Reweighting with BME
----------------------------
+-----------------------------
 
 Optimize ensemble weights to match experimental data:
 
@@ -135,7 +135,7 @@ Optimize ensemble weights to match experimental data:
     weighted_rg = ensemble.radius_of_gyration(use_bme_weights=True, return_mean=True)
 
 Saving Ensembles
---------------
+----------------
 
 Save ensembles in STARLING format:
 

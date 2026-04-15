@@ -28,10 +28,12 @@ def dynamic_thresholding_fn(
 ) -> torch.Tensor:
     """
     Applies dynamic thresholding to VAE latent predictions.
+
     Args:
         x0: Tensor of shape (B, C, H, W) — predicted x_0 in latent space
         p: Quantile threshold, e.g., 0.995
         max_val: Absolute minimum threshold cap to avoid over-compression
+
     Returns:
         Clamped and rescaled tensor.
     """
@@ -46,7 +48,8 @@ def dynamic_thresholding_fn(
 
 def make_ddim_sampling_parameters(alphacums, ddim_timesteps, eta):
     # select alphas for computing the variance schedule
-    alphas = alphacums[ddim_timesteps]
+    # Convert to plain numpy arrays to avoid torch/numpy interop deprecation warnings
+    alphas = np.asarray(alphacums[ddim_timesteps])
     alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
 
     # according the the formula provided in https://arxiv.org/abs/2010.02502

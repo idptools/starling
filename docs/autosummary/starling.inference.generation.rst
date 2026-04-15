@@ -2,6 +2,7 @@ starling.inference.generation
 =============================
 
 .. automodule:: starling.inference.generation
+   :no-members:
 
    
    

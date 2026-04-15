@@ -6,7 +6,6 @@ starling.search.search\_utils.CandidateFilter
 .. autoclass:: CandidateFilter
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

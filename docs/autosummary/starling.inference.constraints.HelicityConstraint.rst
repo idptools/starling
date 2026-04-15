@@ -6,7 +6,6 @@ starling.inference.constraints.HelicityConstraint
 .. autoclass:: HelicityConstraint
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

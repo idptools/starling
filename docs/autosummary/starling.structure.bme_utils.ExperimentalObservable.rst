@@ -1,12 +1,11 @@
-starling.structure.bme.ExperimentalObservable
-=============================================
+starling.structure.bme\_utils.ExperimentalObservable
+====================================================
 
-.. currentmodule:: starling.structure.bme
+.. currentmodule:: starling.structure.bme_utils
 
 .. autoclass:: ExperimentalObservable
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

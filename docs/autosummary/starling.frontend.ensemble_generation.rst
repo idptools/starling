@@ -2,6 +2,7 @@
 ======================================
 
 .. automodule:: starling.frontend.ensemble_generation
+   :no-members:
 
    
    

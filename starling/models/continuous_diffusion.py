@@ -304,6 +304,7 @@ class ContinuousDiffusion(pl.LightningModule):
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        """Validation step that evaluates diffusion loss on a batch."""
         latent_encoding, sequences = batch
 
         # Scale the latent encoding to have unit std

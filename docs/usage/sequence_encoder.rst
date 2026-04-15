@@ -1,12 +1,12 @@
 Sequence Embeddings
-==================
+===================
 
 STARLING can generate **ensemble-aware sequence embeddings** that capture ensemble properties of intrinsically disordered proteins.
 STARLING's sequence encoder was trained jointly with the diffusion model to produce embeddings that are informative for ensemble generation.
 
 .. seealso::
 
-    Use :doc:`usage/search` to index large databases or retrieve similar
+    Use :doc:`search` to index large databases or retrieve similar
     sequences with the same embeddings.
 
 Basic Usage
@@ -25,10 +25,10 @@ The ``aggregate`` parameter controls whether to return per-residue embeddings or
 Single aggregated embeddings are useful when comparing sequences of the same length, while per-residue embeddings are useful for downstream tasks that require residue-level information.
 
 Advanced Usage
--------------
+--------------
 
 Processing Multiple Sequences
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The sequence encoder accepts various input formats including single sequences, lists, dictionaries, and FASTA files:
 
@@ -52,7 +52,7 @@ The sequence encoder accepts various input formats including single sequences, l
     embeddings = sequence_encoder("path/to/sequences.fasta", ionic_strength=150)
 
 Controlling Ionic Strength
-~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 STARLING's encoder was trained at different ionic strengths. You can specify the ionic strength to model specific conditions:
 
@@ -68,7 +68,7 @@ STARLING's encoder was trained at different ionic strengths. You can specify the
     high_ionic_strength = sequence_encoder(sequence, ionic_strength=300)
 
 Output Options
-~~~~~~~~~~~~
+~~~~~~~~~~~~~~
 
 Control how embeddings are returned and saved:
 

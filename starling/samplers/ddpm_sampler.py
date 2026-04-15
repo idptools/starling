@@ -45,13 +45,13 @@ class DDPMSampler(nn.Module):
     def __init__(self, ddpm_model, encoder_model, ionic_strength=150):
         super(DDPMSampler, self).__init__()
         self.ddpm_model = ddpm_model
+        self.device = ddpm_model.device
         self.n_steps = self.ddpm_model.num_timesteps
         self.ionic_strength = torch.tensor(
             [ionic_strength], device=self.device
         ).unsqueeze(0)
 
         self.encoder_model = encoder_model
-        self.device = ddpm_model.device
 
         self.alpha_bar = self.ddpm_model.alphas_cumprod
         self.betas = self.ddpm_model.betas

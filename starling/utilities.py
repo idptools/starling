@@ -421,12 +421,12 @@ def symmetrize_distance_maps(dist_maps):
     Symmetrizes a stack of distance maps along an axis by reflecting the upper triangle
     onto the lower triangle and setting the diagonal values to zero.
 
-    Parameters:
+    Parameters
     ----------
     dist_maps : np.ndarray
         A 3D NumPy array of shape (N, M, M), where N is the number of distance maps.
 
-    Returns:
+    Returns
     -------
     np.ndarray
         A symmetrized stack of distance maps.

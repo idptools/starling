@@ -7,7 +7,7 @@ This page summarises the most common commands and how they fit into an
 end-to-end workflow.
 
 ``starling``
------------
+------------
 
 Generate conformational ensembles directly from the shell. The CLI mirrors the
 :func:`starling.generate` signature and accepts sequences, FASTA/TSV files, or
@@ -90,7 +90,7 @@ sequence collections.
 * ``starling-search query`` - embed query sequences with the STARLING encoder and
   retrieve the nearest neighbours with optional reranking.
 
-See :doc:`usage/search` for a complete walkthrough of building and querying
+See :doc:`search` for a complete walkthrough of building and querying
 indexes as well as the Python API.
 
 Tips

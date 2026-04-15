@@ -6,7 +6,6 @@ starling.search.search\_utils.L2DistanceFilter
 .. autoclass:: L2DistanceFilter
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

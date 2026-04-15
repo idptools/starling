@@ -39,7 +39,7 @@ If you're on an Intel Mac and torch > 2.2.2 is not available, downgrade NumPy:
     pip install numpy==1.26.1
 
 PyTorch / CUDA Version Issues
-----------------------------
+-----------------------------
 
 **Issue:**
 

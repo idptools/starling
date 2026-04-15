@@ -6,7 +6,6 @@ starling.search.search\_engine.SearchEngine
 .. autoclass:: SearchEngine
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

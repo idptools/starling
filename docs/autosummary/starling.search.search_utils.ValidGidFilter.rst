@@ -6,7 +6,6 @@ starling.search.search\_utils.ValidGidFilter
 .. autoclass:: ValidGidFilter
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

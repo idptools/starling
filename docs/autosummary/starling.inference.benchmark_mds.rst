@@ -2,6 +2,7 @@ starling.inference.benchmark\_mds
 =================================
 
 .. automodule:: starling.inference.benchmark_mds
+   :no-members:
 
    
    

@@ -2,21 +2,13 @@
 ======================
 
 .. automodule:: starling.structure.bme
+   :no-members:
 
    
    
    
 
    
-   
-   .. rubric:: Functions
-
-   .. autosummary::
-      :toctree:
-      :nosignatures:
-   
-      diagnose_bme_result
-      print_bme_diagnostics
    
    
 
@@ -29,8 +21,6 @@
       :nosignatures:
    
       BME
-      BMEResult
-      ExperimentalObservable
    
    
 

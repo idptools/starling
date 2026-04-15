@@ -2,6 +2,7 @@
 =======================
 
 .. automodule:: starling.data.tokenizer
+   :no-members:
 
    
    

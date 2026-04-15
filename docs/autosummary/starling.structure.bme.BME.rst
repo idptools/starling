@@ -6,7 +6,6 @@ starling.structure.bme.BME
 .. autoclass:: BME
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    
@@ -19,6 +18,7 @@ starling.structure.bme.BME
       ~BME.__init__
       ~BME.fit
       ~BME.predict
+      ~BME.scan_theta
    
    
 
@@ -29,5 +29,7 @@ starling.structure.bme.BME
    .. autosummary::
    
       ~BME.result
+      ~BME.theta
+      ~BME.theta_scan_result
    
    

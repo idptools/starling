@@ -149,8 +149,8 @@ if available and caches it locally.
 Next steps
 ----------
 
-* :doc:`usage/sequence_encoder` - extract embeddings for downstream analysis or
+* :doc:`sequence_encoder` - extract embeddings for downstream analysis or
   custom similarity metrics.
-* :doc:`usage/ensemble_generation` - generate new ensembles for promising hits.
-* :doc:`usage/possible_issues` - diagnose FAISS installation or GPU related
+* :doc:`ensemble_generation` - generate new ensembles for promising hits.
+* :doc:`possible_issues` - diagnose FAISS installation or GPU related
   problems.

@@ -2,6 +2,7 @@ starling.inference.evaluate\_vae
 ================================
 
 .. automodule:: starling.inference.evaluate_vae
+   :no-members:
 
    
    

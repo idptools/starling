@@ -6,7 +6,6 @@ starling.data.tokenizer.StarlingTokenizer
 .. autoclass:: StarlingTokenizer
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

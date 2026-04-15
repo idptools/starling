@@ -19,6 +19,10 @@ from soursop.sstrajectory import SSTrajectory
 
 import torch
 
+# Resolve outdata/ relative to this test file so tests work regardless of CWD
+_TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+_OUTDATA = os.path.join(_TEST_DIR, "outdata")
+
 
 def test_starling_imported():
     """Sample test, will always pass so long as import statement worked."""
@@ -36,94 +40,75 @@ def test_ensemble_generation_save_and_load():
     assert len(E) == 10
 
     # check we can write a trajectory and load it uncompressed
-    E.save('outdata/test_uncompressed')
-    E_test_uncompressed = load_ensemble('outdata/test_uncompressed.starling')
+    E.save(os.path.join(_OUTDATA, 'test_uncompressed'))
+    E_test_uncompressed = load_ensemble(os.path.join(_OUTDATA, 'test_uncompressed.starling'))
     assert np.all(E_test_uncompressed.end_to_end_distance() == E.end_to_end_distance())
-    os.remove('outdata/test_uncompressed.starling')
+    os.remove(os.path.join(_OUTDATA, 'test_uncompressed.starling'))
 
     ##
     ## COMPRESSION TESTS
     ## 
 
     # check we can write a trajectory using default compression and load 
-    E.save('outdata/test_compressed', compress=True)
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.xz')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True)
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
     assert np.all(np.isclose(E_test_compressed.end_to_end_distance(), E.end_to_end_distance(), atol=0.1))
-    os.remove('outdata/test_compressed.starling.xz')
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
 
     # check we can write a trajectory using default lzma explicitly
-    E.save('outdata/test_compressed', compress=True, compression_algorithm='lzma')
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.xz')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, compression_algorithm='lzma')
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
     assert np.all(np.isclose(E_test_compressed.end_to_end_distance(), E.end_to_end_distance(), atol=0.1))
-    os.remove('outdata/test_compressed.starling.xz')
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
 
     # check we can write a trajectory using default gzip explicitly
-    E.save('outdata/test_compressed', compress=True, compression_algorithm='gzip')
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.gzip')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, compression_algorithm='gzip')
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.gzip'))
     assert np.all(np.isclose(E_test_compressed.end_to_end_distance(), E.end_to_end_distance(), atol=0.1))
-    os.remove('outdata/test_compressed.starling.gzip')    
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.gzip'))    
 
 
     ## now check we can do compresion with reduce precision explicitly to False (means should be lossless)
 
     # check we can write a trajectory using default compression and load 
-    E.save('outdata/test_compressed', compress=True, reduce_precision=False)
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.xz')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, reduce_precision=False)
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
     assert np.all(E_test_compressed.end_to_end_distance() == E.end_to_end_distance())
-    os.remove('outdata/test_compressed.starling.xz')
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
 
     # check we can write a trajectory using default lzma explicitly
-    E.save('outdata/test_compressed', compress=True, compression_algorithm='lzma',  reduce_precision=False)
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.xz')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, compression_algorithm='lzma',  reduce_precision=False)
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
     assert np.all(E_test_compressed.end_to_end_distance() == E.end_to_end_distance())
-    os.remove('outdata/test_compressed.starling.xz')
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
 
     # check we can write a trajectory using default gzip explicitly
-    E.save('outdata/test_compressed', compress=True, compression_algorithm='gzip',  reduce_precision=False)
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.gzip')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, compression_algorithm='gzip',  reduce_precision=False)
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.gzip'))
     assert np.all(E_test_compressed.end_to_end_distance() == E.end_to_end_distance())
-    os.remove('outdata/test_compressed.starling.gzip')    
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.gzip'))    
 
     ## now check we can do compresion with reduce precision explicitly to True (again should be lossy)
 
     # check we can write a trajectory using default compression and load 
-    E.save('outdata/test_compressed', compress=True, reduce_precision=False)
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.xz')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, reduce_precision=False)
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
     assert np.all(np.isclose(E_test_compressed.end_to_end_distance(), E.end_to_end_distance(), atol=0.1))
-    os.remove('outdata/test_compressed.starling.xz')
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
 
     # check we can write a trajectory using default lzma explicitly
-    E.save('outdata/test_compressed', compress=True, compression_algorithm='lzma',  reduce_precision=False)
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.xz')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, compression_algorithm='lzma',  reduce_precision=False)
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
     assert np.all(np.isclose(E_test_compressed.end_to_end_distance(), E.end_to_end_distance(), atol=0.1))
-    os.remove('outdata/test_compressed.starling.xz')
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.xz'))
 
     # check we can write a trajectory using default gzip explicitly
-    E.save('outdata/test_compressed', compress=True, compression_algorithm='gzip',  reduce_precision=False)
-    E_test_compressed = load_ensemble('outdata/test_compressed.starling.gzip')
+    E.save(os.path.join(_OUTDATA, 'test_compressed'), compress=True, compression_algorithm='gzip',  reduce_precision=False)
+    E_test_compressed = load_ensemble(os.path.join(_OUTDATA, 'test_compressed.starling.gzip'))
     assert np.all(np.isclose(E_test_compressed.end_to_end_distance(), E.end_to_end_distance(), atol=0.1))
-    os.remove('outdata/test_compressed.starling.gzip')    
+    os.remove(os.path.join(_OUTDATA, 'test_compressed.starling.gzip'))    
 
 
-
-
-def test_ensemble_generation():
-
-    # define sequence
-    seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'
-
-    
-    C = generate(seq,conformations=100, verbose=False, show_progress_bar=False, return_data=True, return_structures=False)
-    E = C['sequence_1']
-
-    assert len(E) == 100
-    assert abs(E.radius_of_gyration(return_mean=True) - 32) < 3
-    assert abs(E.end_to_end_distance(return_mean=True) - 85) < 8
-    assert E.sequence == seq
-
-    # check we can build a trajectory
-    t = E.trajectory
-    np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
 
 def test_ensemble_generation():
@@ -145,7 +130,7 @@ def test_ensemble_generation():
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
-    E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
+    E.save_trajectory(os.path.join(_OUTDATA, 'test'), pdb_trajectory=True)
 
 
 def test_ensemble_generation_single_ensemble():
@@ -166,7 +151,7 @@ def test_ensemble_generation_single_ensemble():
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
-    E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
+    E.save_trajectory(os.path.join(_OUTDATA, 'test'), pdb_trajectory=True)
 
 def test_ensemble_generation_cpu():
 
@@ -187,7 +172,7 @@ def test_ensemble_generation_cpu():
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
-    E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
+    E.save_trajectory(os.path.join(_OUTDATA, 'test'), pdb_trajectory=True)
 
 
 
@@ -213,7 +198,7 @@ def test_ensemble_generation_mps():
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
-    E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
+    E.save_trajectory(os.path.join(_OUTDATA, 'test'), pdb_trajectory=True)
 
 
 def test_ensemble_generation_cuda():
@@ -240,7 +225,7 @@ def test_ensemble_generation_cuda():
     np.isclose(np.mean(t.get_radius_of_gyration()) , E.radius_of_gyration(return_mean=True), rtol=0.01, atol=0.01)
 
     # check we can write a trajectory
-    E.save_trajectory('outdata/test.pdb', pdb_trajectory=True)
+    E.save_trajectory(os.path.join(_OUTDATA, 'test'), pdb_trajectory=True)
     
 def test_ensemble_reconstruction_re():
     seq = 'ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP'

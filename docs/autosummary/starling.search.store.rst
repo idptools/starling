@@ -2,6 +2,7 @@ starling.search.store
 =====================
 
 .. automodule:: starling.search.store
+   :no-members:
 
    
    

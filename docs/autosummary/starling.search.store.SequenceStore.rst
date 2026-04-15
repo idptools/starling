@@ -6,7 +6,6 @@ starling.search.store.SequenceStore
 .. autoclass:: SequenceStore
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

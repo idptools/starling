@@ -6,7 +6,6 @@ starling.search.search\_utils.LengthFilter
 .. autoclass:: LengthFilter
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    

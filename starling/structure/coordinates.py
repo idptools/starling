@@ -400,10 +400,12 @@ def compare_distance_matrices(original_distance_matrix, coords, return_abs_diff=
 
     Returns
     -------
-    tuple (np.ndarray, np.ndarray)
-        [0] - The distance matrix computed from the 3D coordinates.
-        [1] - The absolute difference between the original and computed
-              distance matrices.
+    tuple
+        A 2-element tuple of np.ndarray:
+
+        - [0]: The distance matrix computed from the 3D coordinates.
+        - [1]: The absolute difference between the original and computed
+          distance matrices.
     """
 
     # compute the redundant inter-residue distance map based on the

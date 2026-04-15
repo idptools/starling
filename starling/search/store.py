@@ -216,16 +216,17 @@ class SequenceStore:
     """
     SQLite-backed per-gid sequence metadata store.
 
-    Table:
-      sequences(
-        gid       INTEGER PRIMARY KEY,
-        len       INTEGER NOT NULL,
-        hash8     INTEGER,
-        seq       BLOB NOT NULL,   -- 1 byte flag + payload (0=plain UTF-8, 1=zstd)
-        shard     INTEGER,
-        local_idx INTEGER,
-        header    BLOB              -- 1 byte flag + payload (0=plain UTF-8, 1=zstd, NULL if missing)
-      )
+    Table::
+
+        sequences(
+            gid       INTEGER PRIMARY KEY,
+            len       INTEGER NOT NULL,
+            hash8     INTEGER,
+            seq       BLOB NOT NULL,   -- 1 byte flag + payload (0=plain UTF-8, 1=zstd)
+            shard     INTEGER,
+            local_idx INTEGER,
+            header    BLOB              -- 1 byte flag + payload (0=plain UTF-8, 1=zstd, NULL if missing)
+        )
     """
 
     # ---------- Constructors ----------

@@ -1,12 +1,11 @@
-starling.structure.bme.BMEResult
-================================
+starling.structure.bme\_utils.BMEResult
+=======================================
 
-.. currentmodule:: starling.structure.bme
+.. currentmodule:: starling.structure.bme_utils
 
 .. autoclass:: BMEResult
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    
@@ -17,6 +16,8 @@ starling.structure.bme.BMEResult
       :nosignatures:
    
       ~BMEResult.__init__
+      ~BMEResult.diagnostics
+      ~BMEResult.print_diagnostics
    
    
 
@@ -26,6 +27,7 @@ starling.structure.bme.BMEResult
 
    .. autosummary::
    
+      ~BMEResult.kl_divergence
       ~BMEResult.weights
       ~BMEResult.initial_weights
       ~BMEResult.lambdas

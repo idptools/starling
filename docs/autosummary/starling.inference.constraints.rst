@@ -2,6 +2,7 @@ starling.inference.constraints
 ==============================
 
 .. automodule:: starling.inference.constraints
+   :no-members:
 
    
    

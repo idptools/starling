@@ -6,7 +6,6 @@ starling.structure.ensemble.Ensemble
 .. autoclass:: Ensemble
    :members:
    :show-inheritance:
-   :inherited-members:
    :special-members: __init__, __call__
 
    
@@ -29,6 +28,7 @@ starling.structure.ensemble.Ensemble
       ~Ensemble.rij
       ~Ensemble.save
       ~Ensemble.save_trajectory
+      ~Ensemble.view_theta_scan
    
    
 
@@ -41,6 +41,7 @@ starling.structure.ensemble.Ensemble
       ~Ensemble.bme_result
       ~Ensemble.has_bme_weights
       ~Ensemble.has_structures
+      ~Ensemble.theta_scan_result
       ~Ensemble.trajectory
    
    

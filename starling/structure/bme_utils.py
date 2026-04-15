@@ -148,11 +148,11 @@ class BMEResult:
         We report two notions of effective sample size:
 
         - neff_entropy (N_eff^(S)): entropy-based, derived from Φ = exp(-D_KL).
-        This is the standard BME measure: N_eff^(S) = N * Φ.
+          This is the standard BME measure: N_eff^(S) = N * Φ.
 
         - neff_renyi2 (N_eff^(2)): 1 / sum_i w_i^2 (Rényi-2 / participation ratio).
-        This is more sensitive to a few large weights, so it is always
-        <= neff_entropy for the same weights.
+          This is more sensitive to a few large weights, so it is always
+          <= neff_entropy for the same weights.
         """
         diagnostics: dict = {}
         warnings: List[str] = []

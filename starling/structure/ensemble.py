@@ -918,8 +918,9 @@ class Ensemble:
         theta_method : str, optional
             Method to select optimal theta during the scan (only used when theta=None).
             Options:
-              - 'perpendicular' (default): knee by max perpendicular distance to chord
-              - 'curvature': knee by Menger curvature
+
+            - 'perpendicular' (default): knee by max perpendicular distance to chord
+            - 'curvature': knee by Menger curvature
 
         Returns
         -------

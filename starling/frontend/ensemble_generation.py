@@ -19,41 +19,45 @@ def handle_input(
     as the starting index.
 
     Parameters
-    -----------
-    user_input: str, list, dict
+    ----------
+    user_input : str, list, or dict
         This can be one of a few different options:
-            str: A .fasta file
-            str: A seq.in file formatted as a .tsv with name\tseq
-            str: A .tsv file formatted as name\tseq. Same as seq.in
-                except a different file extension. Borna used a seq.in
-                in his tutorial, so I'm rolling with it.
-            str: A sequence as a string
-            list: A list of sequences
-            dict: A dict of sequences (name: seq)
 
-    invalid_sequence_action: str
+        - str: A .fasta file
+        - str: A seq.in file formatted as a .tsv with name\\tseq
+        - str: A .tsv file formatted as name\\tseq. Same as seq.in
+          except a different file extension. Borna used a seq.in
+          in his tutorial, so I'm rolling with it.
+        - str: A sequence as a string
+        - list: A list of sequences
+        - dict: A dict of sequences (name: seq)
+
+    invalid_sequence_action : str
         This can be one of 3 options:
-            fail - invalid sequence cause parsing to fail and throw an exception
-            remove - invalid sequences are removed
-            convert - invalid sequences are converted
-            Default is 'convert'
-            Only these 3 options are allowed because STARLING cannot handle
-            non-canonical residues, so we don't want to use the protfasta.read_fasta()
-            options that allow this to happen.
+
+        - fail - invalid sequence cause parsing to fail and throw an exception
+        - remove - invalid sequences are removed
+        - convert - invalid sequences are converted
+
+        Default is 'convert'.
+        Only these 3 options are allowed because STARLING cannot handle
+        non-canonical residues, so we don't want to use the protfasta.read_fasta()
+        options that allow this to happen.
 
     output_name : str
         If provided and if a single amino acid sequence is passed in, this will be the key
         in the output dictionary. If None, the key will be 'sequence_<index>'. If a dictionary
         or list or path to a FASTA file is passed, this is ignored. Default is None.
 
-    seq_index_start: int
+    seq_index_start : int
         If we need to number sequences in the output dictionary, this is the starting index.
         This is only needed if a sequence as a string is passed in or if a list of sequences
         is passed in.
 
     Returns
-    --------
-    dict: A dictionary of sequences (name: seq)
+    -------
+    dict
+        A dictionary of sequences (name: seq)
     """
 
     # Helper function to validate and clean sequences.

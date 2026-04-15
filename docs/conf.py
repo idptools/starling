@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(".."))
 
 project = "starling"
 copyright = (
-    "2024, Borna Novak. Project structure based on the "
+    "2024-2026, Borna Novak, Jeff Lotthammer and Alex Holehouse. Project structure based on the "
     "Computational Molecular Science Python Cookiecutter version 1.1"
 )
 author = "Borna Novak"
@@ -55,7 +55,7 @@ extensions = [
 
 # Autosummary settings
 autosummary_generate = True
-autosummary_generate_overwrite = True  # Allow regeneration when code changes
+autosummary_generate_overwrite = False  # Preserve hand-edited stubs
 autosummary_imported_members = False
 
 # Napoleon settings (for NumPy/Google style docstrings)
@@ -72,16 +72,19 @@ napoleon_include_special_with_doc = False
 autodoc_default_options = {
     "members": True,
     "member-order": "bysource",
-    "special-members": "__init__",
     "undoc-members": False,
     "exclude-members": "__weakref__",
     "show-inheritance": True,
     "inherited-members": False,
 }
-autodoc_typehints = "description"  # Show type hints in the description
-autodoc_typehints_description_target = "documented"
+autodoc_typehints = "signature"  # Show type hints in the signature only
 autodoc_class_signature = "separated"  # Show __init__ signature separately
 add_module_names = False  # Don't prepend module name to class/function names
+
+# Suppress "more than one target found" for symbols re-exported in multiple
+# modules (e.g. BMEResult lives in structure.bme_utils but is also importable
+# from inference and structure.bme).
+suppress_warnings = ["ref.python"]
 
 # Mock heavy optional dependencies so docs can build on Read the Docs without
 # GPU-centric packages such as FAISS or GPy, and optional visualization packages.
@@ -94,6 +97,9 @@ autodoc_mock_imports = [
     "einops",
     "lightning",
     "hdf5plugin",
+    "hydra",
+    "omegaconf",
+    "wandb",
 ]
 
 # Intersphinx mapping for cross-referencing other libraries
@@ -138,6 +144,9 @@ pygments_style = "default"
 # a list of builtin themes.
 #
 html_theme = "sphinx_rtd_theme"
+
+# Logo displayed at the top of the sidebar and on the index page.
+html_logo = "_static/starling_logo.png"
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the

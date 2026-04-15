@@ -2,6 +2,7 @@
 ===========================
 
 .. automodule:: starling.structure.ensemble
+   :no-members:
 
    
    
