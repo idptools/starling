@@ -18,6 +18,7 @@ starling.structure.ensemble.Ensemble
       ~Ensemble.__init__
       ~Ensemble.build_ensemble_trajectory
       ~Ensemble.check_for_errors
+      ~Ensemble.check_for_errors_trajectory
       ~Ensemble.contact_map
       ~Ensemble.distance_maps
       ~Ensemble.end_to_end_distance

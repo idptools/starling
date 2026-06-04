@@ -499,49 +499,72 @@ def get_off_diagonals(
         return np.array(values)
 
 
-def check_distance_map_for_error(distance_map, min_separation=1, max_separation=2):
+def check_distance_map_for_error(
+    distance_map, min_separation=1, max_separation=None, max_bond_length=4.81
+):
     """
-    Function to check the distance map for errors.
+    Check a distance map for physically impossible inter-residue distances.
+
+    Two residues separated by ``|i - j|`` positions in the sequence are
+    connected by ``|i - j|`` bonds, so the largest distance they can possibly
+    be apart is ``|i - j| * max_bond_length`` (a fully extended chain). Any
+    measured distance that exceeds this bound is physically impossible and
+    flags the conformation as erroneous.
+
+    Crucially, the bound is applied *per residue pair* using each pair's own
+    sequence separation. A single global threshold (as used previously) either
+    misses short-range errors -- a sequence-adjacent pair could be ~4 x too
+    far apart without being caught -- or falsely flags valid long-range pairs.
+
+    The bound is a hard physical maximum, so it never produces false positives
+    (assuming no bond exceeds ``max_bond_length``). For large separations it
+    becomes loose and therefore less sensitive, but it remains correct, which
+    is why all pairs can safely be checked at once.
 
     Parameters
     ---------------
     distance_map : np.ndarray
-        The distance map to check for errors.
+        The ``(n, n)`` distance map to check for errors.
 
     min_separation : int
-        The minimum sequence separation to check across.
+        The minimum sequence separation ``|i - j|`` to check across. Default
+        is 1, which skips only the zero diagonal.
 
-    max_separation : int
-        The maxiumum sequence separation to check across.
+    max_separation : int or None
+        The maximum sequence separation ``|i - j|`` to check across. If None
+        (default) every pair of residues is checked.
+
+    max_bond_length : float
+        Maximum physical length of a single bond in Angstroms, including an
+        error term. The Mpipi bond length is 3.81 A; the default of 4.81 A adds
+        a +1 A per-bond error margin to minimise the risk of false positives.
 
     Returns
     ---------------
     bool
-        Returns True if an error was detected,
-        and False if not.
+        Returns True if any residue pair is further apart than physically
+        possible, and False otherwise.
 
     """
 
-    ij_abs = abs(max_separation - min_separation) + 1
+    if distance_map.shape[0] != distance_map.shape[1]:
+        raise ValueError("Input matrix must be square.")
 
-    # we can KNOW the max distance any i-j residues are
-    # nb 3.81 is Mpipi bond length, but we add a +1 Angstrom to EACH
-    # bond as an error term; this likely makes the efficacy of this approach
-    # VERY poor if you have large sequence separation, but it also minimizes
-    # the risk of false positives.
-    # changes should update this but we'll hardcode it for now...
-    max_possible_dist = 4.5 * ij_abs
+    n = distance_map.shape[0]
 
-    # get biggest distance from the set
-    max_ods = np.max(
-        get_off_diagonals(
-            distance_map, min_separation=min_separation, max_separation=max_separation
-        )
-    )
-    if max_ods > max_possible_dist:
-        return True
-    else:
-        return False
+    # sequence separation |i - j| for every residue pair
+    sep = np.abs(np.subtract.outer(np.arange(n), np.arange(n)))
+
+    # maximum physically possible distance for each pair (fully extended chain)
+    max_possible_dist = sep * max_bond_length
+
+    # restrict to the requested separation window
+    mask = sep >= min_separation
+    if max_separation is not None:
+        mask &= sep <= max_separation
+
+    # flag if ANY in-window pair exceeds its own physical maximum
+    return bool(np.any((distance_map > max_possible_dist) & mask))
 
 
 def helix_dm(L: int, rise_per_res=1.5, angle_per_res_deg=100, radius=2.3):

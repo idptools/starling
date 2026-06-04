@@ -272,9 +272,17 @@ STARLING generates output in its native format, which can be converted to common
 
     # Convert to PDB trajectory
     starling2pdb example_ensemble.starling
-    
+
     # Convert to XTC/PDB for molecular dynamics software
     starling2xtc example_ensemble.starling
+
+    # Drop physically impossible reconstructed frames before writing
+    starling2xtc example_ensemble.starling --remove-errors
+
+Both ``starling2pdb`` and ``starling2xtc`` accept ``--remove-errors``, which
+scans the reconstructed trajectory and discards any frames with physically
+impossible inter-residue distances before the trajectory is written. See
+:doc:`cli` for details.
 
 From Python:
 

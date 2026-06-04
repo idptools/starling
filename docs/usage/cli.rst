@@ -62,10 +62,12 @@ All converters operate on ``.starling`` archives created by the generator.
    * - Command
      - Purpose
    * - ``starling2pdb``
-     - Convert a STARLING archive into a multi-model PDB trajectory.
+     - Convert a STARLING archive into a multi-model PDB trajectory. Pass
+       ``--remove-errors`` to drop physically impossible frames first (see below).
    * - ``starling2xtc``
      - Export a topology PDB paired with an XTC trajectory (reconstructs
-       coordinates if necessary).
+       coordinates if necessary). Pass ``--remove-errors`` to drop physically
+       impossible frames first (see below).
    * - ``starling2numpy``
      - Dump raw distance maps to a Numpy ``.npy`` array for custom analyses.
    * - ``starling2sequence``
@@ -77,6 +79,27 @@ All converters operate on ``.starling`` archives created by the generator.
 
 By default outputs are written next to the source file; pass ``-o`` to choose a
 new directory or filename prefix.
+
+Removing erroneous frames
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``starling2pdb`` and ``starling2xtc`` accept a ``--remove-errors`` flag. When
+set, the reconstructed 3D trajectory is scanned for frames containing
+physically impossible inter-residue distances (a pair of residues separated by
+``|i - j|`` positions in the sequence cannot be further apart than
+``|i - j|`` bond lengths), and any such frames are removed *before* the
+trajectory is written to disk. This is helpful when a particular sequence is
+badly behaved and the SMACOF reconstruction occasionally produces unphysical
+geometry.
+
+.. code-block:: bash
+
+   starling2xtc my_ensemble.starling -o cleaned.xtc --remove-errors
+
+The equivalent distance-map check (operating on the raw STARLING distance maps
+rather than the reconstructed coordinates) is available via ``starling2starling
+--error-check --remove-errors`` and the
+:meth:`starling.structure.ensemble.Ensemble.check_for_errors` method.
 
 Search tooling
 --------------

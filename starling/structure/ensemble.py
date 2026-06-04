@@ -216,7 +216,7 @@ class Ensemble:
         bad_frames = []
         for idx, distance_map in enumerate(self.__distance_maps):
             if utilities.check_distance_map_for_error(
-                distance_map, min_separation=1, max_separation=4
+                distance_map, min_separation=1, max_separation=None
             ):
                 bad_frames.append(idx)
 
@@ -239,6 +239,105 @@ class Ensemble:
                     if rebuild_trajectory:
                         # delete and zero
                         self.build_ensemble_trajectory(force_recompute=True)
+
+        return bad_frames
+
+    def check_for_errors_trajectory(self, remove_errors=False, verbose=True):
+        """
+        Scan the reconstructed 3D ensemble (the SSProtein trajectory) for
+        frames with physically impossible inter-residue distances.
+
+        This mirrors :meth:`check_for_errors`, but instead of inspecting the raw
+        STARLING distance maps it inspects the per-frame CA-CA distance maps
+        derived from the reconstructed 3D coordinates. It is therefore useful
+        for catching reconstruction artefacts (e.g. a SMACOF embedding that
+        introduces unphysical geometry even when the source distance map was
+        well-behaved).
+
+        Detection uses the same physical bound as :meth:`check_for_errors`
+        (``utilities.check_distance_map_for_error``): a pair of residues
+        separated by ``|i - j|`` positions can be at most ``|i - j|`` bond
+        lengths apart.
+
+        Note that the trajectory frames correspond one-to-one (and in order) to
+        the distance maps. When ``remove_errors`` is True, the flagged frames are
+        therefore removed from *both* the trajectory and the distance maps so the
+        two representations stay in sync, and any cached derived values (Rg, Rh)
+        are invalidated.
+
+        Parameters
+        ----------
+        remove_errors : bool
+            If True, the erroneous frames are removed from both the trajectory
+            and the distance maps. Default is False.
+
+        verbose : bool
+            If True, print the number and indices of the erroneous frames (and a
+            message when frames are removed). Default is True.
+
+        Returns
+        -------
+        list
+            List of indices of the erroneous frames (note that once they have
+            been removed these indices no longer make sense).
+
+        Raises
+        ------
+        RuntimeError
+            If no SSProtein trajectory is associated with this ensemble. Build
+            one first with :meth:`build_ensemble_trajectory`, or use
+            :meth:`check_for_errors` to check the distance maps directly.
+
+        """
+
+        if self.__trajectory is None:
+            raise RuntimeError(
+                "No SSProtein trajectory is associated with this ensemble; "
+                "build one with build_ensemble_trajectory() before calling "
+                "check_for_errors_trajectory(), or use check_for_errors() to "
+                "check the distance maps directly."
+            )
+
+        # per-frame CA-CA distance maps in Angstroms, shape (n_frames, N, N).
+        # These are upper-triangular, which is fine for the error check (the
+        # zeroed lower triangle never exceeds the positive distance bound).
+        instantaneous_maps, _ = self.__trajectory.get_distance_map(
+            return_instantaneous_maps=True, verbose=False
+        )
+
+        bad_frames = []
+        for idx, distance_map in enumerate(instantaneous_maps):
+            if utilities.check_distance_map_for_error(
+                distance_map, min_separation=1, max_separation=None
+            ):
+                bad_frames.append(idx)
+
+        if len(bad_frames) > 0:
+            if verbose:
+                print(f"Found {len(bad_frames)} bad frames: {bad_frames}")
+
+            # remove frames and update any derived values
+            if remove_errors:
+                if verbose:
+                    print("Removing bad frames")
+
+                # slice the trajectory down to the good frames and rewrap as an
+                # SSProtein (mirrors how build_ensemble_trajectory constructs it)
+                bad_set = set(bad_frames)
+                good_frames = [
+                    i for i in range(len(instantaneous_maps)) if i not in bad_set
+                ]
+                self.__trajectory = SSTrajectory(
+                    TRJ=self.__trajectory.traj.slice(good_frames)
+                ).proteinTrajectoryList[0]
+
+                # keep the distance maps (and derived values) in sync
+                self.__distance_maps = np.delete(
+                    self.__distance_maps, bad_frames, axis=0
+                )
+                self.__rg_vals = []
+                self.__rh_vals = []
+                self.number_of_conformations = len(self.__distance_maps)
 
         return bad_frames
 

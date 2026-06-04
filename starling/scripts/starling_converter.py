@@ -36,6 +36,13 @@ def starling2xtc():
         help="Device we run conversion on (default: None)",
     )
 
+    parser.add_argument(
+        "--remove-errors",
+        action="store_true",
+        default=False,
+        help="If set, scan the reconstructed trajectory for frames with physically impossible inter-residue distances and remove them before writing the XTC.",
+    )
+
     # Parse the command-line arguments
     args = parser.parse_args()
 
@@ -46,6 +53,10 @@ def starling2xtc():
 
     # build with specified device
     E.build_ensemble_trajectory(device=args.device)
+
+    # optionally remove erroneous frames from the trajectory before writing
+    if args.remove_errors:
+        E.check_for_errors_trajectory(remove_errors=True, verbose=True)
 
     # save
     E.save_trajectory(outname)
@@ -67,11 +78,18 @@ def starling2pdb():
         help="Directory and/or filename to save output (default: '.')",
     )
 
-    parser.add_argument(        
+    parser.add_argument(
         "--device",
         type=str,
         default=None,
         help="Device we run conversion on (default: None)",
+    )
+
+    parser.add_argument(
+        "--remove-errors",
+        action="store_true",
+        default=False,
+        help="If set, scan the reconstructed trajectory for frames with physically impossible inter-residue distances and remove them before writing the PDB trajectory.",
     )
 
 
@@ -84,6 +102,10 @@ def starling2pdb():
 
     # build with specified device
     E.build_ensemble_trajectory(device=args.device)
+
+    # optionally remove erroneous frames from the trajectory before writing
+    if args.remove_errors:
+        E.check_for_errors_trajectory(remove_errors=True, verbose=True)
 
     # save the ensemble as a pdb trajectory
     E.save_trajectory(outname, pdb_trajectory=True)
