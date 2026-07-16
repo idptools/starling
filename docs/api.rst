@@ -60,17 +60,13 @@ Models
 
    models.vae
    models.diffusion
-   models.unet
    models.vit
    models.transformer
    models.attention
    models.blocks
    models.normalization
-   models.ema
    models.continuous_diffusion
    models.vae_components
-   models.quantize
-   models.resnets_original
 
 Samplers
 --------
