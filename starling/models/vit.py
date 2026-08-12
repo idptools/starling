@@ -3,8 +3,7 @@ from einops import rearrange
 from einops.layers.torch import Rearrange
 from torch import nn
 
-from starling.models.transformer import DiTBlock
-from starling.models.unet import SinusoidalPosEmb
+from starling.models.transformer import DiTBlock, SinusoidalPosEmb
 
 
 class PatchEmbed(nn.Module):

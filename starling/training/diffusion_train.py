@@ -12,13 +12,11 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
-import starling.data.ddpm_loader as ddpm_loader
 from starling.data.argument_parser import get_params
 from starling.data.ddpm_loader_tar import DDPMDataLoader
 from starling.models.continuous_diffusion import ContinuousDiffusion
 from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
-from starling.models.unet import UNetConditional
 from starling.models.vae import VAE
 from starling.models.vit import ViT
 
@@ -82,14 +80,12 @@ def setup_data_module(cfg, effective_batch_size=None):
 
 
 def setup_models(config):
-    """Set up the UNet and Diffusion models."""
+    """Set up the ViT backbone and Diffusion model."""
     model_path = config.trainer.checkpoint
 
     diffusion_models = {"discrete": DiffusionModel, "continuous": ContinuousDiffusion}
 
-    unet_config_dict = OmegaConf.to_container(config.unet, resolve=True)
     seq_encoder_dict = OmegaConf.to_container(config.sequence_encoder, resolve=True)
-    UNet_model = UNetConditional(**unet_config_dict)
     vit = ViT(12, 512, 8, 512)
     sequence_encoder = SequenceEncoder(**seq_encoder_dict)
 
@@ -118,7 +114,7 @@ def setup_models(config):
             **diffusion_config_dict,
         )
 
-    return UNet_model, diffusion_model
+    return diffusion_model
 
 
 def setup_logger(config, diffusion_model):
@@ -173,11 +169,11 @@ def train_model(cfg: DictConfig):
     dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
 
     # Setup models
-    UNet_model, diffusion_model = setup_models(cfg)
+    diffusion_model = setup_models(cfg)
 
     # Save model architecture
     with open(f"{output_path}/model_architecture.txt", "w") as f:
-        f.write(str(UNet_model))
+        f.write(str(diffusion_model))
 
     # Setup logger
     wandb_logger = setup_logger(cfg, diffusion_model)
