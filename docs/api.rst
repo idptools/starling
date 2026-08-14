@@ -65,7 +65,6 @@ Models
    models.attention
    models.blocks
    models.normalization
-   models.continuous_diffusion
    models.vae_components
 
 Samplers

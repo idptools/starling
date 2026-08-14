@@ -14,7 +14,6 @@ from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 from starling.data.argument_parser import get_params
 from starling.data.ddpm_loader_tar import DDPMDataLoader
-from starling.models.continuous_diffusion import ContinuousDiffusion
 from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
 from starling.models.vae import VAE
@@ -83,17 +82,13 @@ def setup_models(config):
     """Set up the ViT backbone and Diffusion model."""
     model_path = config.trainer.checkpoint
 
-    diffusion_models = {"discrete": DiffusionModel, "continuous": ContinuousDiffusion}
+    diffusion_models = {"discrete": DiffusionModel}
 
     seq_encoder_dict = OmegaConf.to_container(config.sequence_encoder, resolve=True)
     vit = ViT(12, 512, 8, 512)
     sequence_encoder = SequenceEncoder(**seq_encoder_dict)
 
-    if config.diffusion.type == "continuous":
-        diffusion_config_dict = OmegaConf.to_container(
-            config.diffusion.continuous, resolve=True
-        )
-    elif config.diffusion.type == "discrete":
+    if config.diffusion.type == "discrete":
         diffusion_config_dict = OmegaConf.to_container(
             config.diffusion.discrete, resolve=True
         )
