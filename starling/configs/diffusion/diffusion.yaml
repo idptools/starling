@@ -1,6 +1,6 @@
 
 
-type: discrete # options: continuous, discrete
+type: discrete # options: discrete
 
 discrete:
   beta_scheduler: cosine
@@ -10,10 +10,3 @@ discrete:
   min_snr_loss: False
   min_snr_gamma: 5.0
   distance_map_encoder: /work/bnovak/projects/sequence2ensemble/vae_training/preprint_VAE_cont_training_KLD_1e4/model-kernel-epoch=09-epoch_val_loss=2.04.ckpt
-
-continuous:
-  noise_schedule: karras
-  min_snr_loss_weight: false
-  min_snr_gamma: 5
-  set_lr: 0.00001
-  config_scheduler: CosineAnnealingLR
