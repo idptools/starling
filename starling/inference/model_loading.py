@@ -2,7 +2,6 @@ import os
 
 import torch
 
-import starling
 from starling import configs
 
 # local imports
@@ -21,23 +20,12 @@ class ModelManager:
     def load_models(self, encoder_path, ddpm_path, device):
         """Load the models from local files or URLs."""
 
-        def load_from_path_or_url(path):
-            if path.startswith("http"):
-                # Download from URL if not cached
-                cache_dir = torch.hub.get_dir() + "/checkpoints/"
-                os.makedirs(cache_dir, exist_ok=True)
-                cached_path = cache_dir + os.path.basename(path)
-                if not os.path.exists(cached_path):
-                    torch.hub.download_url_to_file(path, cached_path)
-                return cached_path
-            return path
-
-        # Resolve paths
-        encoder_path = encoder_path or DEFAULT_ENCODER_WEIGHTS_PATH
-        ddpm_path = ddpm_path or DEFAULT_DDPM_WEIGHTS_PATH
-
-        encoder_path = load_from_path_or_url(encoder_path)
-        ddpm_path = load_from_path_or_url(ddpm_path)
+        # Resolve paths: local files (~/.starling_weights, torch hub cache)
+        # are preferred; downloads only happen if STARLING_OFFLINE is unset.
+        encoder_path = configs.resolve_weights_path(
+            encoder_path, DEFAULT_ENCODER_WEIGHTS_PATH
+        )
+        ddpm_path = configs.resolve_weights_path(ddpm_path, DEFAULT_DDPM_WEIGHTS_PATH)
 
         # Continue with existing loading logic
         if not os.path.exists(encoder_path):

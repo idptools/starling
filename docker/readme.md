@@ -286,3 +286,36 @@ Note that CPU inference is significantly slower than GPU.
 - **Image size:** The image is large (~8–10 GB) due to bundled PyTorch, CUDA runtime, model weights, and search artifacts. This is expected.
 - **Rebuilding:** If you modify STARLING source code, only the `COPY starling/` and subsequent layers will rebuild. Earlier layers (system packages, PyTorch install) are cached.
 
+
+---
+
+## Running Offline / Air-Gapped
+
+The image downloads model weights and search artifacts at **build** time, so a container built on a networked machine needs no network access at runtime. To make that explicit — and to get a clear error rather than a hung connection if anything is missing — set `STARLING_OFFLINE`:
+
+```bash
+docker run --rm -e STARLING_OFFLINE=1 --gpus all \
+  -v $(pwd)/output:/work \
+  starling MQDRVKRPMNAFIVWSRDQRRKMALENPRMRNSEISKQLGYQWKMLTEK -c 200
+```
+
+To move the image to a machine with no internet access, export and load it:
+
+```bash
+# on the networked machine
+docker save starling | gzip > starling.tar.gz
+
+# on the offline machine
+gunzip -c starling.tar.gz | docker load
+```
+
+If you would rather mount weights from the host than bake them into the image, place the two checkpoint files in a directory and mount it at `/root/.starling_weights`:
+
+```bash
+docker run --rm -e STARLING_OFFLINE=1 --gpus all \
+  -v /path/to/weights:/root/.starling_weights:ro \
+  -v $(pwd)/output:/work \
+  starling --info
+```
+
+`starling --info` prints the weights file that will actually be loaded, so it is the quickest way to confirm an offline setup is wired up correctly. See the [offline installation docs](https://idptools-starling.readthedocs.io/en/latest/usage/installation.html#offline-air-gapped-installation) for the full list of environment variables.

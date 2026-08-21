@@ -1,8 +1,67 @@
 # Changelog
 
-This file contains our changelog for 
+This file contains our changelog for STARLING
 
+## August 21st 2026
 
+### Bug Fixes
+
+- **Locally placed model weights were ignored, breaking offline/air-gapped installs** (`starling/configs.py`, `starling/inference/model_loading.py`).
+  `DEFAULT_ENCODER_WEIGHTS_PATH` and `DEFAULT_DDPM_WEIGHTS_PATH` were computed twice: first as paths inside `DEFAULT_MODEL_DIR` (`~/.starling_weights`), and then immediately overwritten with the GitHub release URLs. The `~/.starling_weights` values were dead by the time anything read them, so weights placed there were never found. `ModelManager.load_models` then keyed its cache lookup on the URL, checking only `$TORCH_HOME/hub/checkpoints/<basename>` and downloading if that exact file was absent. Weight resolution now lives in `configs.resolve_weights_path()`, which searches `~/.starling_weights/` first and the torch hub cache second, and only downloads when the file is genuinely missing from both.
+
+### New
+
+- **`STARLING_OFFLINE` environment variable** (`starling/configs.py`).
+  When set to a truthy value (`1`, `true`, `yes`, `on`), STARLING never attempts a network connection. If a required checkpoint or search artifact is missing, it raises a `FileNotFoundError` listing every location that was searched and how to fix it, instead of trying to download and failing on a dropped connection. Exposed as `configs.is_offline()`.
+
+- **`configs.candidate_weights_paths()` and `configs.torch_hub_checkpoint_dir()`**.
+  Helpers exposing the local search order for a weights file. `torch_hub_checkpoint_dir()` resolves `TORCH_HOME` (and `XDG_CACHE_HOME`) lazily at call time rather than at import, so setting `TORCH_HOME` after importing `starling` is honoured.
+
+- **Offline support for search artifacts** (`starling/configs.py`).
+  `_download_if_missing()` now respects `STARLING_OFFLINE`: a missing artifact raises a `FileNotFoundError` naming the relevant `STARLING_FAISS_INDEX_PATH` / `STARLING_SEQSTORE_PATH` / `STARLING_FAISS_MANIFEST_PATH` override, and an artifact that is present but fails its MD5 check is used with a warning rather than triggering a re-download.
+
+- **Offline resolution test suite** (`starling/tests/test_offline_weights.py`).
+  20 tests covering local-path passthrough, `~` expansion, the `~/.starling_weights`-over-hub-cache precedence, `STARLING_OFFLINE` parsing, the contents of the offline error messages, and the search-artifact offline paths. None of them touch the network.
+
+### Improvements
+
+- **`starling --info` now reports the weights file that will actually be loaded** (`starling/scripts/starling_main_cli.py`).
+  It previously printed `DEFAULT_ENCODER_WEIGHTS_PATH` / `DEFAULT_DDPM_WEIGHTS_PATH` verbatim, which — because of the bug above — was always a GitHub URL and told you nothing about what was on disk. It now prints the resolved local file (or `NOT FOUND LOCALLY`), whether offline mode is on, and the directories searched, making it the natural first check when diagnosing a deployment.
+
+### Documentation
+
+- Added an **Offline / air-gapped installation** section to `docs/usage/installation.rst` covering the weights search order, required filenames, `STARLING_OFFLINE`, shared read-only weight directories, the Zenodo search artifacts, the `torch.hub` protein language model cache (which `STARLING_OFFLINE` does not govern), Docker, and a summary table of the relevant environment variables.
+
+## August 17th 2026
+
+This release is a cleanup of the model code: several exploratory and superseded model implementations that were never used by the released STARLING models have been removed from `main`, along with the training-config plumbing and autosummary stubs that referenced them. No user-facing behaviour of `starling`, `generate()`, or `Ensemble` changes.
+
+### Removed
+
+- **Continuous-time diffusion formulation** (`starling/models/continuous_diffusion.py`).
+  Removed the `ContinuousDiffusion` model and its log-SNR noise schedules (`beta_linear_log_snr`, `alpha_cosine_log_snr`, `karras_log_snr`). The released models use the discrete DDPM formulation in `starling/models/diffusion.py`. The `continuous:` block has been dropped from `starling/configs/diffusion/diffusion.yaml`, and `diffusion.type` now only accepts `discrete`.
+
+- **Pre-transformer UNet backbone** (`starling/models/unet.py`, `starling/configs/unet/unet.yaml`).
+  Removed `UNetConditional` and its building blocks (`ResnetLayer`, `CrossAttentionResnetLayer`, `Downsample`, `ConditionalSequential`). The diffusion model is built on the ViT backbone (`starling/models/vit.py`), so the UNet was dead code. The `unet` entry was removed from the Hydra defaults in `starling/configs/configs.yaml`, and `starling/models/vit.py` now imports `SinusoidalPosEmb` from `starling/models/transformer.py` rather than from the UNet module.
+
+- **Orphaned exploratory modules**: the VQ-VAE quantizer (`starling/models/quantize.py`, `VectorQuantizer2`), the original ResNet encoder/decoder family (`starling/models/resnets_original.py`, `Resnet18`–`Resnet152` encoders/decoders), and the EMA helper (`starling/models/ema.py`). None of these were imported anywhere in the package.
+
+- **Broken console entry points** (`pyproject.toml`).
+  Removed the `starling-sample` and `ae-train` scripts, which pointed at `starling.training.vae_generate` and `starling.training.ae_train`; neither module exists, so the entry points failed on invocation.
+
+### Bug Fixes
+
+- **`starling-ddpm-train` failed at import time** (`starling/training/diffusion_train.py`).
+  Removed a stale `import starling.data.ddpm_loader`; that module no longer exists (only `ddpm_loader_tar` is present), so the training entry point raised `ModuleNotFoundError` before doing anything. The alias was never referenced.
+
+### Code Quality
+
+- **`setup_models()` in `starling/training/diffusion_train.py`** now returns only the diffusion model instead of a `(UNet, diffusion_model)` tuple, and the `model_architecture.txt` written at the start of training now records the diffusion model (i.e. the ViT backbone plus sequence encoder) rather than the unused UNet.
+
+### Documentation
+
+- Removed the `models.unet`, `models.ema`, `models.continuous_diffusion`, `models.quantize`, and `models.resnets_original` entries from `docs/api.rst` and deleted their autosummary stubs under `docs/autosummary/`.
+- Fixed the description line in this changelog, which was previously missing the package name.
 
 ## June 3rd 2026
 

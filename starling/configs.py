@@ -70,21 +70,174 @@ load_user_config()
 
 ### Derived default values
 
-# default paths to the model weights
-DEFAULT_ENCODER_WEIGHTS_PATH = fix_ref_to_home(
-    os.path.join(DEFAULT_MODEL_DIR, DEFAULT_ENCODE_WEIGHTS)
-)
-DEFAULT_DDPM_WEIGHTS_PATH = fix_ref_to_home(
-    os.path.join(DEFAULT_MODEL_DIR, DEFAULT_DDPM_WEIGHTS)
-)
-
 # Github Releases URLs for model weights
-GITHUB_ENCODER_URL = (
-    f"https://github.com/idptools/starling/releases/download/v2.0.0/{DEFAULT_ENCODE_WEIGHTS}"
-)
+GITHUB_ENCODER_URL = f"https://github.com/idptools/starling/releases/download/v2.0.0/{DEFAULT_ENCODE_WEIGHTS}"
 GITHUB_DDPM_URL = f"https://github.com/idptools/starling/releases/download/v2.0.0/{DEFAULT_DDPM_WEIGHTS}"
 
-# Update default paths to check Hub first
+
+def _env_flag(name: str) -> bool:
+    """
+    Interpret an environment variable as a boolean switch.
+
+    Parameters
+    ----------
+    name : str
+        Name of the environment variable.
+
+    Returns
+    -------
+    bool
+        True if the variable is set to something other than an empty string,
+        ``0``, ``false``, ``no`` or ``off`` (case-insensitive).
+    """
+    value = os.environ.get(name, "")
+    return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def is_offline() -> bool:
+    """
+    Return True if STARLING has been told never to touch the network.
+
+    Offline mode is enabled by setting the ``STARLING_OFFLINE`` environment
+    variable (e.g. ``export STARLING_OFFLINE=1``). In offline mode STARLING
+    will only ever use locally available model weights and search artifacts,
+    and raises a ``FileNotFoundError`` (listing every location it looked in)
+    rather than attempting a download if something is missing.
+
+    Returns
+    -------
+    bool
+        True if ``STARLING_OFFLINE`` is set to a truthy value.
+    """
+    return _env_flag("STARLING_OFFLINE")
+
+
+def torch_hub_checkpoint_dir() -> str:
+    """
+    Return the directory torch.hub uses to cache downloaded checkpoints.
+
+    This is ``$TORCH_HOME/hub/checkpoints`` if ``TORCH_HOME`` is set, and
+    ``~/.cache/torch/hub/checkpoints`` otherwise. We resolve this lazily
+    (rather than at import) so that a ``TORCH_HOME`` set after import is
+    still honoured, and so importing ``starling.configs`` does not require
+    torch.
+
+    Returns
+    -------
+    str
+        Absolute path to the checkpoint cache directory.
+    """
+    torch_home = os.environ.get("TORCH_HOME")
+    if torch_home is None:
+        xdg = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+        torch_home = os.path.join(xdg, "torch")
+    return os.path.join(os.path.expanduser(torch_home), "hub", "checkpoints")
+
+
+def candidate_weights_paths(filename: str) -> list[str]:
+    """
+    Return the local locations searched (in order) for a weights file.
+
+    Parameters
+    ----------
+    filename : str
+        Basename of the checkpoint file, e.g. ``DEFAULT_ENCODE_WEIGHTS``.
+
+    Returns
+    -------
+    list of str
+        Candidate absolute paths, highest priority first:
+
+        1. ``DEFAULT_MODEL_DIR`` (``~/.starling_weights`` by default, which can
+           be changed via ``~/.starling_weights/configs.py``).
+        2. The torch.hub checkpoint cache (where STARLING saves weights it has
+           downloaded itself).
+    """
+    return [
+        fix_ref_to_home(os.path.join(DEFAULT_MODEL_DIR, filename)),
+        os.path.join(torch_hub_checkpoint_dir(), filename),
+    ]
+
+
+def resolve_weights_path(path_or_url: str | None, default_url: str) -> str:
+    """
+    Resolve a model weights reference to a local file, downloading if allowed.
+
+    The resolution order is:
+
+    1. If ``path_or_url`` is a local path (anything that does not start with
+       ``http``), it is returned as-is.
+    2. Otherwise the basename of the URL is looked for in each of the local
+       directories returned by :func:`candidate_weights_paths`; the first
+       file that exists wins.
+    3. If nothing is found locally and ``STARLING_OFFLINE`` is not set, the
+       file is downloaded from the URL into the torch.hub checkpoint cache.
+    4. If nothing is found locally and ``STARLING_OFFLINE`` *is* set, a
+       ``FileNotFoundError`` is raised listing every location that was
+       searched.
+
+    Parameters
+    ----------
+    path_or_url : str or None
+        A local filesystem path, an ``http(s)`` URL, or None (in which case
+        ``default_url`` is used).
+    default_url : str
+        URL to fall back to when ``path_or_url`` is None.
+
+    Returns
+    -------
+    str
+        Path to a local weights file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the weights cannot be located locally and downloading is not
+        permitted (``STARLING_OFFLINE`` set) or fails.
+    """
+    ref = path_or_url or default_url
+
+    if not ref.startswith("http"):
+        return fix_ref_to_home(ref)
+
+    filename = os.path.basename(ref)
+    candidates = candidate_weights_paths(filename)
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
+    searched = "\n".join(f"  - {c}" for c in candidates)
+    if is_offline():
+        raise FileNotFoundError(
+            f"STARLING_OFFLINE is set and the weights file '{filename}' was not "
+            f"found in any of the following locations:\n{searched}\n"
+            f"Download it from {ref} on a machine with internet access and copy "
+            f"it to one of the directories above (make sure it is readable by the "
+            f"user running STARLING), or point the STARLING_ENCODER_PATH / "
+            f"STARLING_DDPM_PATH environment variables at the file directly."
+        )
+
+    import torch
+
+    cache_dir = torch_hub_checkpoint_dir()
+    os.makedirs(cache_dir, exist_ok=True)
+    cached_path = os.path.join(cache_dir, filename)
+    try:
+        torch.hub.download_url_to_file(ref, cached_path)
+    except Exception as e:
+        raise FileNotFoundError(
+            f"Could not download '{filename}' from {ref} ({e.__class__.__name__}: {e}). "
+            f"If this machine has no internet access, download the file elsewhere "
+            f"and copy it to one of:\n{searched}\n"
+            f"then set STARLING_OFFLINE=1 to suppress download attempts."
+        ) from e
+    return cached_path
+
+
+# Default weight references. These may be a local path or a URL; either way
+# they are resolved (locally first, then by download) via resolve_weights_path()
+# at model-load time. The STARLING_ENCODER_PATH / STARLING_DDPM_PATH
+# environment variables take precedence over everything else.
 DEFAULT_ENCODER_WEIGHTS_PATH = os.environ.get(
     "STARLING_ENCODER_PATH", GITHUB_ENCODER_URL
 )
@@ -217,6 +370,22 @@ def _download_if_missing(url: str, dest: str, expected_checksum: str = "") -> No
             need = False
     if not need:
         return
+    if is_offline():
+        if os.path.exists(dest):
+            # present but failed the checksum; trust the user's file rather
+            # than attempt a download we have been told not to make
+            print(
+                f"[Starling Search] STARLING_OFFLINE is set; using {dest} even "
+                f"though its MD5 does not match the expected value."
+            )
+            return
+        raise FileNotFoundError(
+            f"STARLING_OFFLINE is set and the search artifact '{os.path.basename(dest)}' "
+            f"was not found at {dest}. Download it from {url} on a machine with "
+            f"internet access and copy it to that location, or point the "
+            f"STARLING_FAISS_INDEX_PATH / STARLING_SEQSTORE_PATH / "
+            f"STARLING_FAISS_MANIFEST_PATH environment variables at the files."
+        )
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
     tmp = dest + ".part"
     resume_bytes = os.path.getsize(tmp) if os.path.exists(tmp) else 0

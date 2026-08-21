@@ -20,12 +20,45 @@ def print_starling():
     print("-------------------------------------------------------")
 
 
+def _describe_weights(ref):
+    """
+    Describe where a weights reference will actually be loaded from.
+
+    Parameters
+    ----------
+    ref : str
+        Local path or URL as stored in ``configs``.
+
+    Returns
+    -------
+    str
+        The local file that will be used, or a note that the file is missing
+        and would be downloaded from ``ref``.
+    """
+    if not ref.startswith("http"):
+        return ref
+    for candidate in configs.candidate_weights_paths(os.path.basename(ref)):
+        if os.path.isfile(candidate):
+            return candidate
+    return f"NOT FOUND LOCALLY (will be downloaded from {ref})"
+
+
 def print_info():
     # local imports if needed
     print_starling()
     print("Using models at the following locations:")
-    print(f"  VAE  model weights: {configs.DEFAULT_ENCODER_WEIGHTS_PATH}")
-    print(f"  DDPM model weights: {configs.DEFAULT_DDPM_WEIGHTS_PATH}")
+    print(
+        f"  VAE  model weights: {_describe_weights(configs.DEFAULT_ENCODER_WEIGHTS_PATH)}"
+    )
+    print(
+        f"  DDPM model weights: {_describe_weights(configs.DEFAULT_DDPM_WEIGHTS_PATH)}"
+    )
+    print(
+        f"  Offline mode       : {'ON (STARLING_OFFLINE set)' if configs.is_offline() else 'off'}"
+    )
+    print("  Local weight directories searched (in order):")
+    for d in (configs.DEFAULT_MODEL_DIR, configs.torch_hub_checkpoint_dir()):
+        print(f"    - {d}")
     print("-------------------------------------------------------")
     print("CONFIG INFO:")
     print("  Default # of confs :", configs.DEFAULT_NUMBER_CONFS)

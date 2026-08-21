@@ -281,3 +281,140 @@ Docker tips
 * **Rebuilding:** Modifying STARLING source code only invalidates the
   ``COPY starling/`` layer and later; earlier layers (system packages, PyTorch)
   are cached.
+.. _offline-installation:
+
+Offline / air-gapped installation
+---------------------------------
+
+STARLING downloads two model weight files (the VAE encoder/decoder and the DDPM
+weights) the first time it runs, and — if you use ``starling_search`` — three
+FAISS search artifacts. On a machine with no outbound internet access you can
+pre-place all of these by hand and tell STARLING never to attempt a download.
+
+Where STARLING looks for model weights
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For each of the two checkpoint files, STARLING checks the following locations
+in order and uses the first one that exists:
+
+1. The path given by ``STARLING_ENCODER_PATH`` / ``STARLING_DDPM_PATH``, or the
+   ``encoder_path`` / ``ddpm_path`` arguments to ``generate()``.
+2. ``~/.starling_weights/`` (change this by setting ``DEFAULT_MODEL_DIR`` in
+   ``~/.starling_weights/configs.py``).
+3. The torch hub checkpoint cache, ``$TORCH_HOME/hub/checkpoints/`` — which is
+   ``~/.cache/torch/hub/checkpoints/`` unless ``TORCH_HOME`` is set. This is
+   where STARLING puts weights it has downloaded itself.
+
+Only if the files are absent from all of these does STARLING try to download
+them. Note the files must keep their released names:
+
+.. code-block:: text
+
+    STARLING_v2.0.0_ViT_VAE_2025_10_14.ckpt
+    STARLING_v2.0.0_ViT_DDPM_2025_10_14.ckpt
+
+Forcing offline behaviour
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set ``STARLING_OFFLINE`` to make STARLING use only locally available files:
+
+.. code-block:: bash
+
+    export STARLING_OFFLINE=1
+
+With this set, STARLING never opens a network connection. If a required file is
+missing it raises a ``FileNotFoundError`` that lists every path it searched,
+rather than hanging on a connection attempt that your firewall will drop.
+
+Setting up an offline machine
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On a machine that *does* have internet access, download the two checkpoints
+from the `GitHub release <https://github.com/idptools/starling/releases/tag/v2.0.0>`_
+and copy them to the offline machine:
+
+.. code-block:: bash
+
+    # on the offline machine
+    mkdir -p ~/.starling_weights
+    cp /path/to/STARLING_v2.0.0_ViT_VAE_2025_10_14.ckpt  ~/.starling_weights/
+    cp /path/to/STARLING_v2.0.0_ViT_DDPM_2025_10_14.ckpt ~/.starling_weights/
+    export STARLING_OFFLINE=1
+
+Then confirm STARLING can see them — ``starling --info`` prints the file it will
+actually load for each model, or tells you it could not find it locally:
+
+.. code-block:: bash
+
+    starling --info
+
+If you would rather keep the weights in a shared read-only location (for
+example ``/opt/starling/weights``, so all users on a cluster share one copy),
+point the environment variables at the files directly:
+
+.. code-block:: bash
+
+    export STARLING_ENCODER_PATH=/opt/starling/weights/STARLING_v2.0.0_ViT_VAE_2025_10_14.ckpt
+    export STARLING_DDPM_PATH=/opt/starling/weights/STARLING_v2.0.0_ViT_DDPM_2025_10_14.ckpt
+    export STARLING_OFFLINE=1
+
+Search artifacts
+~~~~~~~~~~~~~~~~
+
+Ensemble generation needs nothing beyond the two checkpoints above. The
+``starling_search`` command additionally needs three FAISS artifacts (~2.4 GB
+total), which are fetched from `Zenodo <https://zenodo.org/records/17342150>`_.
+Pre-place these in ``~/.starling_search/``, keeping their released names:
+
+.. code-block:: text
+
+    ensemble_search_gpu_nlist_32768_m_64_nbits_8_use_opq_True_compressed_False.faiss
+    ensemble_search_gpu_nlist_32768_m_64_nbits_8_use_opq_True_compressed_False.faiss.seqs.sqlite
+    ensemble_search_gpu_nlist_32768_m_64_nbits_8_use_opq_True_compressed_False.faiss.manifest.json
+
+or point ``STARLING_FAISS_INDEX_PATH``, ``STARLING_SEQSTORE_PATH`` and
+``STARLING_FAISS_MANIFEST_PATH`` at them individually.
+
+.. note::
+
+   The protein language model used by the sequence encoder is downloaded by
+   ``torch.hub`` into ``$TORCH_HOME/hub/checkpoints/`` and is **not** covered by
+   ``STARLING_OFFLINE``. If you use the sequence-encoder features, copy that
+   cache directory across from an online machine as well.
+
+Docker
+~~~~~~
+
+The provided Dockerfile downloads weights and search artifacts at *build* time,
+so an image built on a networked machine and exported with ``docker save``
+needs no network at runtime. Set ``STARLING_OFFLINE=1`` in the container to make
+that guarantee explicit:
+
+.. code-block:: bash
+
+    docker run --rm -e STARLING_OFFLINE=1 --gpus all -v $(pwd)/output:/work starling ...
+
+Summary of environment variables
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Variable
+     - Purpose
+   * - ``STARLING_OFFLINE``
+     - Never attempt a network download; fail with a clear error instead.
+   * - ``STARLING_ENCODER_PATH``
+     - Explicit path to the VAE encoder/decoder checkpoint.
+   * - ``STARLING_DDPM_PATH``
+     - Explicit path to the DDPM checkpoint.
+   * - ``TORCH_HOME``
+     - Root of the torch cache; weights are read from/written to
+       ``$TORCH_HOME/hub/checkpoints/``.
+   * - ``STARLING_FAISS_INDEX_PATH``
+     - Explicit path to the FAISS index for ``starling_search``.
+   * - ``STARLING_SEQSTORE_PATH``
+     - Explicit path to the sequence store SQLite database.
+   * - ``STARLING_FAISS_MANIFEST_PATH``
+     - Explicit path to the search manifest JSON.

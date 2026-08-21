@@ -14,7 +14,7 @@ STARLING - prediction of disordered protein ensembles from sequence
 <br>
 
 # About
-##### Last updated April 15th 2026
+##### Last updated August 17th 2026
 
 STARLING (con**ST**ruction of intrinsic**A**lly diso**R**dered proteins ensembles efficient**L**y v**I**a multi-dime**N**sional **G**enerative models) is a latent-space probabilistic denoising diffusion model for predicting coarse-grained ensembles of intrinsically disordered regions.  
 
