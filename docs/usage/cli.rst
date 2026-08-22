@@ -116,6 +116,36 @@ sequence collections.
 See :doc:`search` for a complete walkthrough of building and querying
 indexes as well as the Python API.
 
+Training tools (advanced)
+-------------------------
+
+These entry points are used for model development and retraining, and are not
+needed to generate or analyse ensembles.
+
+* ``starling-vae-train`` - train the VAE encoder/decoder.
+* ``starling-ddpm-train`` - train the diffusion model.
+
+.. important::
+
+   The training tools require Hydra, OmegaConf and Weights & Biases, which are
+   **not** installed by default. Install the ``train`` extra first, otherwise
+   these commands fail at startup with a ``ModuleNotFoundError``:
+
+   .. code-block:: bash
+
+       pip install "idptools-starling[train]"
+
+   From a local clone, use ``pip install ".[train]"``. See
+   :ref:`training-dependencies` for details.
+
+Both commands are Hydra applications, so configuration is supplied through the
+YAML files in ``starling/configs/`` and can be overridden on the command line,
+for example:
+
+.. code-block:: bash
+
+    starling-ddpm-train trainer.max_epochs=100
+
 Tips
 ----
 

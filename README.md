@@ -54,7 +54,7 @@ You can then install STARLING from PyPI using pip (or uv):
 pip install idptools-starling
 ```
 
-Or you can clone and install the bleeding-edge version from GitHub:
+Or you can install the bleeding-edge version from GitHub:
 ```bash
 pip install git+https://github.com/idptools/starling.git
 ```
@@ -395,8 +395,37 @@ These tools are primarily used for model development and retraining.
 |---------|-------------|
 | `starling-vae-train` | Train the VAE encoder model |
 | `starling-ddpm-train` | Train the diffusion model |
-| `starling-sample` | Generate samples from the VAE |
-| `ae-train` | Train the autoencoder |
+
+These commands depend on Hydra, OmegaConf and Weights & Biases, which are **not** part of the default install because they are not needed to generate ensembles. To use them, install STARLING with the `train` extra.
+
+From PyPI:
+
+```bash
+pip install "idptools-starling[train]"
+```
+
+Straight from GitHub, without cloning — note that the extra attaches to the *package name*, not to the URL:
+
+```bash
+pip install "idptools-starling[train] @ git+https://github.com/idptools/starling.git"
+```
+
+To pin a branch, tag or commit, append it to the URL with `@`:
+
+```bash
+pip install "idptools-starling[train] @ git+https://github.com/idptools/starling.git@main"
+```
+
+From a local clone:
+
+```bash
+pip install ".[train]"
+
+# or, for an editable development install
+pip install -e ".[train]"
+```
+
+> **Keep the quotes.** In `zsh` (the default shell on macOS) an unquoted `pip install idptools-starling[train]` is treated as a glob and fails with `zsh: no matches found`. Quoting works in every shell.
 
 ---
 

@@ -5,7 +5,6 @@ import time
 from argparse import ArgumentParser
 
 import numpy as np
-import psutil
 
 import starling
 from starling import configs

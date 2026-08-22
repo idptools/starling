@@ -6,6 +6,12 @@ This file contains our changelog for STARLING
 
 ### Bug Fixes
 
+- **`starling` command failed on every fresh install with `ModuleNotFoundError: No module named 'psutil'`** (`starling/scripts/starling_main_cli.py`).
+  The CLI module carried a module-scope `import psutil`, but `psutil` was never listed in `[project.dependencies]` and the name was never used anywhere in the package. Developers did not see this because `psutil` is commonly present as a transitive dependency, but any clean environment broke at startup before `main()` could run. Removed the unused import.
+
+- **`starling-vae-train` and `starling-ddpm-train` failed on a fresh install** (`pyproject.toml`).
+  Both entry points import `hydra`, `omegaconf`, and `wandb` at module scope, none of which were declared anywhere. They are now declared in a new `train` optional-dependency group rather than as hard requirements, since they are not needed to generate ensembles: install with `pip install "idptools-starling[train]"`.
+
 - **Locally placed model weights were ignored, breaking offline/air-gapped installs** (`starling/configs.py`, `starling/inference/model_loading.py`).
   `DEFAULT_ENCODER_WEIGHTS_PATH` and `DEFAULT_DDPM_WEIGHTS_PATH` were computed twice: first as paths inside `DEFAULT_MODEL_DIR` (`~/.starling_weights`), and then immediately overwritten with the GitHub release URLs. The `~/.starling_weights` values were dead by the time anything read them, so weights placed there were never found. `ModelManager.load_models` then keyed its cache lookup on the URL, checking only `$TORCH_HOME/hub/checkpoints/<basename>` and downloading if that exact file was absent. Weight resolution now lives in `configs.resolve_weights_path()`, which searches `~/.starling_weights/` first and the torch hub cache second, and only downloads when the file is genuinely missing from both.
 
@@ -20,6 +26,9 @@ This file contains our changelog for STARLING
 - **Offline support for search artifacts** (`starling/configs.py`).
   `_download_if_missing()` now respects `STARLING_OFFLINE`: a missing artifact raises a `FileNotFoundError` naming the relevant `STARLING_FAISS_INDEX_PATH` / `STARLING_SEQSTORE_PATH` / `STARLING_FAISS_MANIFEST_PATH` override, and an artifact that is present but fails its MD5 check is used with a warning rather than triggering a re-download.
 
+- **Entry-point dependency test suite** (`starling/tests/test_entry_point_imports.py`).
+  Parses `[project.scripts]` and asserts that every console entry point imports only modules provided by the declared dependencies (or by an entry point's documented extra), so a missing runtime dependency fails in CI rather than on a new user's first run. Includes a specific regression test that `starling.scripts.starling_main_cli` imports with `psutil` unavailable.
+
 - **Offline resolution test suite** (`starling/tests/test_offline_weights.py`).
   20 tests covering local-path passthrough, `~` expansion, the `~/.starling_weights`-over-hub-cache precedence, `STARLING_OFFLINE` parsing, the contents of the offline error messages, and the search-artifact offline paths. None of them touch the network.
 
@@ -29,6 +38,15 @@ This file contains our changelog for STARLING
   It previously printed `DEFAULT_ENCODER_WEIGHTS_PATH` / `DEFAULT_DDPM_WEIGHTS_PATH` verbatim, which — because of the bug above — was always a GitHub URL and told you nothing about what was on disk. It now prints the resolved local file (or `NOT FOUND LOCALLY`), whether offline mode is on, and the directories searched, making it the natural first check when diagnosing a deployment.
 
 ### Documentation
+
+- **Documented the `train` extra** across `README.md`, `docs/usage/installation.rst` and `docs/usage/cli.rst`.
+  The installation page gains a cross-referenceable *Installing the training dependencies* section, and `cli.rst` gains a *Training tools (advanced)* section (it previously did not mention the training entry points at all) that links to it. Covers installing the extra from PyPI, directly from GitHub via the PEP 508 `package[extra] @ url` form (including pinning a branch/tag/commit), and from a local clone (plain and editable), with a note that the brackets must be quoted in `zsh`.
+
+- **Documented installing from GitHub without cloning** (`docs/usage/installation.rst`).
+  The *Install from GitHub* section previously only described the clone-then-install route, even though the README documented the one-line `pip install git+...` form. Both are now shown, along with `pip install -e .` for editable installs.
+
+- **Removed `starling-sample` and `ae-train` from the README's training command table.**
+  Both console scripts were deleted in July 2026 because they pointed at modules that do not exist, but the README still advertised them.
 
 - Added an **Offline / air-gapped installation** section to `docs/usage/installation.rst` covering the weights search order, required filenames, `STARLING_OFFLINE`, shared read-only weight directories, the Zenodo search artifacts, the `torch.hub` protein language model cache (which `STARLING_OFFLINE` does not govern), Docker, and a summary table of the relevant environment variables.
 

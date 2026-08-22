@@ -28,13 +28,73 @@ You can install STARLING from PyPi using pip:
 Install from GitHub (Development)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Or you can clone and install the bleeding-edge version from GitHub:
+You can install the bleeding-edge version straight from GitHub without cloning:
+
+.. code-block:: bash
+
+    pip install git+https://github.com/idptools/starling.git
+
+Or clone first, which is what you want if you plan to edit the code:
 
 .. code-block:: bash
 
     git clone git@github.com:idptools/starling.git
     cd starling
     pip install .
+
+Use ``pip install -e .`` instead for an editable (development) install.
+
+.. _training-dependencies:
+
+Installing the training dependencies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The default install contains everything needed to generate and analyse
+ensembles. The model-training entry points (``starling-vae-train`` and
+``starling-ddpm-train``) additionally need Hydra, OmegaConf and Weights &
+Biases, which are kept out of the default install. If you intend to train
+models, install the ``train`` extra.
+
+From PyPI:
+
+.. code-block:: bash
+
+    pip install "idptools-starling[train]"
+
+Straight from GitHub, without cloning. Note that this uses the PEP 508
+``package[extra] @ url`` form — the extra goes on the *package name*, not on the
+URL:
+
+.. code-block:: bash
+
+    pip install "idptools-starling[train] @ git+https://github.com/idptools/starling.git"
+
+To pin a branch, tag or commit, append it to the URL with ``@``:
+
+.. code-block:: bash
+
+    pip install "idptools-starling[train] @ git+https://github.com/idptools/starling.git@main"
+
+From a local clone:
+
+.. code-block:: bash
+
+    pip install ".[train]"
+
+    # or, for an editable development install
+    pip install -e ".[train]"
+
+.. note::
+
+   Keep the quotes. In ``zsh`` (the default shell on macOS) an unquoted
+   ``pip install idptools-starling[train]`` is treated as a glob pattern and
+   fails with ``zsh: no matches found``. Quoting works in every shell, so it is
+   the safest habit.
+
+Without this extra, ``starling-vae-train`` and ``starling-ddpm-train`` fail
+immediately with a ``ModuleNotFoundError``. Nothing else in STARLING is
+affected — ensemble generation, analysis, the conversion utilities and search
+all work with the default install.
 
 GPU Installation (CUDA)
 -----------------------
@@ -281,6 +341,7 @@ Docker tips
 * **Rebuilding:** Modifying STARLING source code only invalidates the
   ``COPY starling/`` layer and later; earlier layers (system packages, PyTorch)
   are cached.
+
 .. _offline-installation:
 
 Offline / air-gapped installation

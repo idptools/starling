@@ -71,6 +71,14 @@ search-gpu = [
 test = [
   "pytest>=6.1.2",
 ]
+# Dependencies for the model-training entry points (starling-vae-train,
+# starling-ddpm-train). These are not needed to generate ensembles, so they are
+# kept out of the default install: pip install "idptools-starling[train]"
+train = [
+  "hydra-core>=1.3",
+  "omegaconf>=2.3",
+  "wandb",
+]
 
 [tool.setuptools]
 zip-safe = false
