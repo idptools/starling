@@ -90,7 +90,8 @@ where = ["."]
 [tool.setuptools.package-data]
 starling = [
     "py.typed",
-	"configs/**"
+	"configs/**",
+	"minimizer/data/*.tsv"
 ]
 
 [tool.pytest.ini_options]

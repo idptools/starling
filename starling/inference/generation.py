@@ -11,6 +11,7 @@ from tqdm.auto import tqdm
 from starling import configs
 from starling.data.tokenizer import StarlingTokenizer
 from starling.inference.model_loading import ModelManager
+from starling.minimizer import relax_conformations
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.samplers.ddpm_sampler import DDPMSampler
 from starling.samplers.dpmpp_sampler import DPMppSampler
@@ -302,6 +303,367 @@ def ensemble_encoder_backend(
     return np.concatenate(latent_spaces)
 
 
+# Maximum number of sample-and-filter rounds attempted when remove_errors is
+# enabled. This is a backstop so a pathological sequence (where the model keeps
+# producing unphysical conformers) cannot spin forever.
+DEFAULT_MAX_ERROR_FILTER_ROUNDS = 10
+
+
+def _sample_distance_maps(
+    sampler,
+    sequence,
+    conformations,
+    batch_size,
+    show_per_step_progress_bar,
+    constraint,
+):
+    """
+    Sample a set of symmetrized distance maps for a single sequence.
+
+    This is the batching loop used by :func:`generate_backend`, factored out so
+    it can be called repeatedly when erroneous conformers are being filtered and
+    replaced.
+
+    Parameters
+    ----------
+    sampler : object
+        An initialized sampler (``DDIMSampler``, ``PLMSSampler`` or
+        ``DDPMSampler``) exposing a ``.sample()`` method.
+
+    sequence : str
+        The amino acid sequence being sampled.
+
+    conformations : int
+        Number of distance maps to sample.
+
+    batch_size : int
+        Number of conformations sampled per batch.
+
+    show_per_step_progress_bar : bool
+        Whether the sampler should show its per-step progress bar.
+
+    constraint : object or None
+        Optional constraint object passed through to the sampler.
+
+    Returns
+    -------
+    torch.Tensor
+        Tensor of shape ``(conformations, L, L)`` holding the symmetrized
+        distance maps, where ``L`` is the sequence length.
+    """
+    num_batches = conformations // batch_size
+    remaining_samples = conformations % batch_size
+
+    if remaining_samples > 0:
+        real_batch_count = num_batches + 1
+    else:
+        real_batch_count = num_batches
+
+    starling_dm = []
+
+    for batch in range(num_batches):
+        distance_maps = sampler.sample(
+            batch_size,
+            labels=sequence,
+            show_per_step_progress_bar=show_per_step_progress_bar,
+            batch_count=batch + 1,
+            max_batch_count=real_batch_count,
+            constraint=constraint,
+        )
+        starling_dm.append(
+            [
+                symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                for dm in distance_maps
+            ]
+        )
+
+    if remaining_samples > 0:
+        distance_maps = sampler.sample(
+            remaining_samples,
+            labels=sequence,
+            show_per_step_progress_bar=show_per_step_progress_bar,
+            batch_count=real_batch_count,
+            max_batch_count=real_batch_count,
+            constraint=constraint,
+        )
+        starling_dm.append(
+            [
+                symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
+                for dm in distance_maps
+            ]
+        )
+
+    return torch.cat([torch.stack(batch) for batch in starling_dm], dim=0)
+
+
+def _relax_coordinates(
+    sequence,
+    coordinates,
+    distance_maps,
+    ionic_strength,
+    device,
+    batch_size,
+    show_progress_bar,
+    verbose=False,
+):
+    """
+    Relax MDS-reconstructed conformers with Mpipi-GG.
+
+    Thin wrapper around :func:`starling.minimizer.relax_conformations` that
+    works in the nanometre coordinates used throughout this module. Each
+    conformer is restrained to the STARLING distance map it was built from, so
+    local geometry (bond lengths, overlapping beads) is repaired while the
+    global shape is kept.
+
+    Parameters
+    ----------
+    sequence : str
+        The amino acid sequence.
+
+    coordinates : np.ndarray
+        MDS coordinates in nanometres, shape ``(n_conformers, L, 3)``.
+
+    distance_maps : np.ndarray
+        The STARLING distance maps (Angstroms) the coordinates were built
+        from, shape ``(n_conformers, L, L)``.
+
+    ionic_strength : float
+        Ionic strength in mM, which sets the Debye length.
+
+    device : torch.device or str
+        Device to run the minimization on.
+
+    batch_size : int
+        Number of conformers minimized together.
+
+    show_progress_bar : bool
+        Whether to show the relaxation progress bar.
+
+    verbose : bool
+        If True, print a before/after summary of the relaxation.
+
+    Returns
+    -------
+    np.ndarray
+        Relaxed coordinates in nanometres, shape ``(n_conformers, L, 3)``.
+    """
+    result = relax_conformations(
+        np.asarray(coordinates) * configs.CONVERT_ANGSTROM_TO_NM,
+        sequence,
+        reference_distances=distance_maps,
+        ionic_strength=ionic_strength,
+        batch_size=batch_size,
+        device=device,
+        progress_bar=show_progress_bar,
+    )
+
+    if verbose:
+        print(result.summary())
+
+    return result.coordinates / configs.CONVERT_ANGSTROM_TO_NM
+
+
+def _generate_error_filtered_conformers(
+    sampler,
+    sequence,
+    conformations,
+    batch_size,
+    show_per_step_progress_bar,
+    constraint,
+    return_structures,
+    device,
+    show_progress_bar,
+    verbose=False,
+    max_rounds=DEFAULT_MAX_ERROR_FILTER_ROUNDS,
+    relax=False,
+    ionic_strength=configs.DEFAULT_IONIC_STRENGTH,
+):
+    """
+    Generate exactly ``conformations`` conformers that pass the error checks.
+
+    Conformers are sampled, screened, and any that fail are discarded and
+    replaced by fresh samples, repeating until the requested number of clean
+    conformers has been accumulated (or ``max_rounds`` rounds have elapsed).
+
+    Screening happens in two stages, mirroring the two public checks on
+    :class:`~starling.structure.ensemble.Ensemble`:
+
+    1. :meth:`Ensemble.check_for_errors` screens the raw STARLING distance maps
+       for physically impossible inter-residue distances.
+    2. :meth:`Ensemble.check_for_errors_trajectory` screens the reconstructed 3D
+       conformers, catching artefacts introduced by the SMACOF embedding itself.
+
+    Running the cheap distance-map check first means we only pay for 3D
+    reconstruction on conformers that already look physically plausible. The
+    second stage runs only when ``return_structures`` is True, since without a
+    reconstructed trajectory there is nothing for it to inspect.
+
+    If ``relax`` is True, the reconstructed conformers are relaxed with
+    Mpipi-GG *before* the trajectory-level screen. Relaxation repairs most
+    MDS artefacts (including broken bonds), so those conformers are kept
+    rather than discarded, and the screen checks exactly the structures that
+    will be returned.
+
+    Parameters
+    ----------
+    sampler : object
+        An initialized sampler exposing a ``.sample()`` method.
+
+    sequence : str
+        The amino acid sequence being sampled.
+
+    conformations : int
+        Number of *clean* conformations to return.
+
+    batch_size : int
+        Number of conformations sampled per batch.
+
+    show_per_step_progress_bar : bool
+        Whether the sampler should show its per-step progress bar.
+
+    constraint : object or None
+        Optional constraint object passed through to the sampler.
+
+    return_structures : bool
+        If True, 3D conformers are reconstructed and the trajectory-level check
+        is applied in addition to the distance-map check.
+
+    device : torch.device
+        Device used for the MDS reconstruction.
+
+    show_progress_bar : bool
+        Whether to show the reconstruction progress bar.
+
+    verbose : bool
+        If True, report how many conformers were discarded in each round.
+
+    max_rounds : int
+        Maximum number of sample-and-filter rounds before giving up. Guards
+        against an unbounded loop if the model cannot produce clean conformers
+        for a given sequence.
+
+    relax : bool
+        If True (and ``return_structures`` is True), relax the reconstructed
+        conformers with Mpipi-GG before screening them. Default False.
+
+    ionic_strength : float
+        Ionic strength in mM used for the relaxation. Default is STARLING's
+        default ionic strength.
+
+    Returns
+    -------
+    tuple
+        ``(distance_maps, coordinates, n_discarded)`` where ``distance_maps`` is
+        a numpy array of shape ``(conformations, L, L)``, ``coordinates`` is a
+        numpy array of shape ``(conformations, L, 3)`` in nanometres (or None if
+        ``return_structures`` is False), and ``n_discarded`` is the total number
+        of conformers thrown away across all rounds.
+
+    Raises
+    ------
+    RuntimeError
+        If ``max_rounds`` rounds complete without accumulating the requested
+        number of clean conformers.
+    """
+    kept_maps = []
+    kept_coords = []
+    n_kept = 0
+    n_discarded = 0
+
+    for round_index in range(max_rounds):
+        n_needed = conformations - n_kept
+        if n_needed <= 0:
+            break
+
+        if verbose and round_index > 0:
+            print(
+                f"  [error filter] round {round_index + 1}: regenerating "
+                f"{n_needed} conformation(s) to replace discarded ones"
+            )
+
+        sampled = _sample_distance_maps(
+            sampler,
+            sequence,
+            n_needed,
+            batch_size,
+            show_per_step_progress_bar,
+            constraint,
+        )
+
+        # --- stage 1: screen the raw distance maps (cheap, pre-reconstruction)
+        candidate_maps = sampled.detach().cpu().numpy()
+        n_candidates = len(candidate_maps)
+
+        staging = Ensemble(candidate_maps, sequence)
+        staging.check_for_errors(remove_errors=True, verbose=False)
+        candidate_maps = staging.distance_maps()
+
+        if len(candidate_maps) == 0:
+            n_discarded += n_candidates
+            continue
+
+        # --- stage 2: screen the reconstructed 3D conformers
+        if return_structures:
+            coordinates = generate_3d_coordinates_from_distances(
+                device,
+                batch_size,
+                candidate_maps,
+                progress_bar=show_progress_bar,
+            )
+
+            if relax:
+                coordinates = _relax_coordinates(
+                    sequence,
+                    coordinates,
+                    candidate_maps,
+                    ionic_strength,
+                    device,
+                    batch_size,
+                    show_progress_bar,
+                    verbose=verbose,
+                )
+
+            ssprotein = SSTrajectory(
+                TRJ=create_ca_topology_from_coords(sequence, coordinates)
+            ).proteinTrajectoryList[0]
+
+            staging = Ensemble(candidate_maps, sequence, ssprot_ensemble=ssprotein)
+            staging.check_for_errors_trajectory(remove_errors=True, verbose=False)
+
+            candidate_maps = staging.distance_maps()
+            if len(candidate_maps) == 0:
+                n_discarded += n_candidates
+                continue
+
+            # xyz is in nanometres, which is exactly what
+            # create_ca_topology_from_coords() expects back, so this round-trips
+            kept_coords.append(staging.trajectory.traj.xyz)
+
+        kept_maps.append(candidate_maps)
+        n_kept += len(candidate_maps)
+        n_discarded += n_candidates - len(candidate_maps)
+
+    if n_kept < conformations:
+        raise RuntimeError(
+            f"Unable to generate {conformations} error-free conformation(s) for "
+            f"sequence of length {len(sequence)} after {max_rounds} rounds "
+            f"(obtained {n_kept}, discarded {n_discarded}). This usually means "
+            f"the model is producing unphysical conformers for this sequence. "
+            f"Re-run without error filtering to inspect the raw output, or "
+            f"increase the number of allowed rounds."
+        )
+
+    # a round may overshoot, so trim back to exactly what was asked for
+    final_maps = np.concatenate(kept_maps, axis=0)[:conformations]
+
+    if return_structures:
+        final_coords = np.concatenate(kept_coords, axis=0)[:conformations]
+    else:
+        final_coords = None
+
+    return final_maps, final_coords, n_discarded
+
+
 def generate_backend(
     sequence_dict,
     conformations,
@@ -321,6 +683,9 @@ def generate_backend(
     constraint=None,
     encoder_path=None,
     ddpm_path=None,
+    remove_errors=False,
+    max_error_filter_rounds=DEFAULT_MAX_ERROR_FILTER_ROUNDS,
+    relax=False,
 ):
     """
     Backend function for generating the distance maps using STARLING.
@@ -399,6 +764,14 @@ def generate_backend(
         Path to a custom diffusion model checkpoint file to use instead of the default.
         Default is None, which uses the default model path from configs.py.
 
+    relax : bool, optional
+        If True, and return_structures is True, the MDS-reconstructed 3D
+        structures are relaxed with Mpipi-GG while restrained to their
+        STARLING distance maps (see starling.minimizer). This fixes bond
+        lengths and overlapping beads while keeping global dimensions. Has
+        no effect if return_structures is False. Default is False here; the
+        user-facing generate() defaults to True.
+
     Returns
     ---------------
     dict or None:
@@ -455,15 +828,6 @@ def generate_backend(
             f"Error: sampler must be one of 'plms', 'ddim', 'ddpm', or 'dpmpp'. Got {sampler}."
         )
 
-    # get num_batchs and remaining samples
-    num_batches = conformations // batch_size
-    remaining_samples = conformations % batch_size
-
-    if remaining_samples > 0:
-        real_batch_count = num_batches + 1
-    else:
-        real_batch_count = num_batches
-
     # dictionary to hold distance maps and structures if applicable.
     output_dict = {}
 
@@ -484,85 +848,110 @@ def generate_backend(
 
         start_time_prediction = time.time()
 
-        # list to hold distance maps
-        starling_dm = []
-
         # get sequence
         sequence = sequence_dict[seq_name]
 
-        # iterate over batches for actual DDIM sampling
-        for batch in range(num_batches):
-            distance_maps = sampler.sample(
+        if remove_errors:
+            # sample, screen and top-up until we have the requested number of
+            # physically plausible conformers
+            (
+                final_distance_maps,
+                filtered_coordinates,
+                n_discarded,
+            ) = _generate_error_filtered_conformers(
+                sampler,
+                sequence,
+                conformations,
                 batch_size,
-                labels=sequence,
-                show_per_step_progress_bar=show_per_step_progress_bar,
-                batch_count=batch + 1,
-                max_batch_count=real_batch_count,
-                constraint=constraint,
-            )
-            starling_dm.append(
-                [
-                    symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                    for dm in distance_maps
-                ]
-            )
-
-        # iterate over remaining samples
-        if remaining_samples > 0:
-            distance_maps = sampler.sample(
-                remaining_samples,
-                labels=sequence,
-                show_per_step_progress_bar=show_per_step_progress_bar,
-                batch_count=real_batch_count,
-                max_batch_count=real_batch_count,
-                constraint=constraint,
-            )
-            starling_dm.append(
-                [
-                    symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                    for dm in distance_maps
-                ]
-            )
-
-        # concatenate symmetrized distance maps.
-        sym_distance_maps = torch.cat(
-            [torch.stack(batch) for batch in starling_dm], dim=0
-        )
-
-        end_time_prediction = time.time()
-
-        # set time at which we start structure generation to 0
-        start_time_structure_generation = time.time()
-
-        # we initialize this to 0 and will update as needed (or not)
-        end_time_structure_generation = time.time()
-
-        # do ensemble reconstruction if requested
-        if return_structures:
-            coordinates = generate_3d_coordinates_from_distances(
+                show_per_step_progress_bar,
+                constraint,
+                return_structures,
                 device,
-                batch_size,
-                sym_distance_maps,
-                progress_bar=show_progress_bar,
+                show_progress_bar,
+                verbose=verbose,
+                max_rounds=max_error_filter_rounds,
+                relax=relax,
+                ionic_strength=ionic_strength,
             )
 
-            # make traj as an sstrajectory object and extract out the ssprotein object
-            ssprotein = SSTrajectory(
-                TRJ=create_ca_topology_from_coords(sequence, coordinates)
-            ).proteinTrajectoryList[0]
+            end_time_prediction = time.time()
+            start_time_structure_generation = time.time()
+
+            if return_structures:
+                ssprotein = SSTrajectory(
+                    TRJ=create_ca_topology_from_coords(sequence, filtered_coordinates)
+                ).proteinTrajectoryList[0]
+            else:
+                ssprotein = None
 
             end_time_structure_generation = time.time()
 
-        # if no structures are requested, set ssprotein to None
+            if verbose:
+                print(
+                    f"Error filtering: discarded {n_discarded} erroneous "
+                    f"conformation(s); returning {len(final_distance_maps)} "
+                    f"clean conformation(s)."
+                )
+
         else:
-            ssprotein = None
+            sym_distance_maps = _sample_distance_maps(
+                sampler,
+                sequence,
+                conformations,
+                batch_size,
+                show_per_step_progress_bar,
+                constraint,
+            )
 
-        # pull the distance maps out of the tensor and convert to numpy
-        final_distance_maps = sym_distance_maps.detach().cpu().numpy()
+            end_time_prediction = time.time()
 
-        # create Ensemble object. Note if the ssprotein argument is None
-        # this is expected and will initialize the ensemble without
-        # structures
+            # set time at which we start structure generation to 0
+            start_time_structure_generation = time.time()
+
+            # we initialize this to 0 and will update as needed (or not)
+            end_time_structure_generation = time.time()
+
+            # do ensemble reconstruction if requested
+            if return_structures:
+                coordinates = generate_3d_coordinates_from_distances(
+                    device,
+                    batch_size,
+                    sym_distance_maps,
+                    progress_bar=show_progress_bar,
+                )
+
+                # repair MDS artefacts in local geometry, holding each structure
+                # to the distance map it was built from
+                if relax:
+                    coordinates = _relax_coordinates(
+                        sequence,
+                        coordinates,
+                        sym_distance_maps.detach().cpu().numpy(),
+                        ionic_strength,
+                        device,
+                        batch_size,
+                        show_progress_bar,
+                        verbose=verbose,
+                    )
+
+                # make traj as an sstrajectory object and extract out the ssprotein object
+                ssprotein = SSTrajectory(
+                    TRJ=create_ca_topology_from_coords(sequence, coordinates)
+                ).proteinTrajectoryList[0]
+
+                end_time_structure_generation = time.time()
+
+            # if no structures are requested, set ssprotein to None
+            else:
+                ssprotein = None
+
+            # pull the distance maps out of the tensor and convert to numpy
+            final_distance_maps = sym_distance_maps.detach().cpu().numpy()
+
+        # capture this now: final_distance_maps is deleted below when
+        # return_data is False, but the verbose summary still needs the count
+        n_conformers = len(final_distance_maps)
+
         E = Ensemble(final_distance_maps, sequence, ssprot_ensemble=ssprotein)
 
         # if we are saving things, save as we progress through so we generate
@@ -608,7 +997,6 @@ def generate_backend(
             )
             elapsed_time_prediction = end_time_prediction - start_time_prediction
             total_time = elapsed_time_structure_generation + elapsed_time_prediction
-            n_conformers = len(sym_distance_maps)
 
             print(
                 f"\n\n##### SUMMARY OF SEQUENCE PREDICTION ({num + 1}/{len(sequence_dict)}) #####"

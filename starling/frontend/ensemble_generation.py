@@ -177,6 +177,8 @@ def generate(
     constraint=None,
     encoder_path=None,
     ddpm_path=None,
+    remove_errors=False,
+    relax=True,
 ):
     """
     Generate STARLING ensembles and distance maps for one or more sequences.
@@ -234,6 +236,27 @@ def generate(
         if multiple sequences are supplied.
     constraint : Optional[starling.inference.constraints.Constraint], default=None
         Constraint object applied during sampling.
+    remove_errors : bool, default=False
+        When ``True``, conformers with physically impossible inter-residue
+        distances are discarded and replaced with freshly generated ones, so
+        that exactly ``conformations`` clean conformers are returned. Screening
+        uses :meth:`~starling.structure.ensemble.Ensemble.check_for_errors` on
+        the distance maps and, when ``return_structures`` is also True,
+        :meth:`~starling.structure.ensemble.Ensemble.check_for_errors_trajectory`
+        on the reconstructed 3D conformers. Because filtering happens before
+        anything is written to disk, the saved ``.xtc``/``.pdb`` and
+        ``.starling`` outputs contain only clean conformers.
+    relax : bool, default=True
+        When ``True`` and ``return_structures`` is also ``True``, the 3D
+        conformers reconstructed by MDS are relaxed with the Mpipi-GG force
+        field while restrained to their STARLING distance maps (see
+        :mod:`starling.minimizer`). MDS gets the global shape right but
+        compresses bonds and leaves beads overlapping; relaxation restores
+        ~3.81 A bonds and removes clashes while changing the radius of
+        gyration by ~0.1%. Relaxation runs before the trajectory-level error
+        screen when ``remove_errors`` is ``True``, so MDS-broken conformers are
+        repaired rather than discarded. Has no effect when
+        ``return_structures`` is ``False``.
     encoder_path : str or os.PathLike or None, default=None
         Custom encoder checkpoint path overriding the configured default.
     ddpm_path : str or os.PathLike or None, default=None
@@ -348,6 +371,14 @@ def generate(
     if not isinstance(show_per_step_progress_bar, bool):
         raise ValueError("Error: show_per_step_progress_bar must be True or False.")
 
+    # check remove_errors is a bool
+    if not isinstance(remove_errors, bool):
+        raise ValueError("Error: remove_errors must be True or False.")
+
+    # check relax is a bool
+    if not isinstance(relax, bool):
+        raise ValueError("Error: relax must be True or False.")
+
     # we do this specific sanity check to make the logic later in this function easier
     if return_single_ensemble and return_data is False:
         raise ValueError(
@@ -382,6 +413,8 @@ def generate(
         model_manager=generation.model_manager,
         encoder_path=encoder_path,
         ddpm_path=ddpm_path,
+        remove_errors=remove_errors,
+        relax=relax,
     )
 
     # if this is true we KNOW there is only one Ensemble in the return dict because
