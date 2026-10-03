@@ -2,6 +2,22 @@
 
 This file contains our changelog for STARLING
 
+## October 3rd 2026
+
+### New
+
+- **DPM-Solver++(2M)** (`starling/samplers/dpmpp_sampler.py`).
+  Added deterministic second-order sampling through `generate(..., sampler="dpmpp", steps=12)` and CLI `--sampler dpmpp`. Uses existing models and decoding; constraints are explicitly unsupported. DDIM-30 remains the default pending final validation of dpm++
+
+### Bug Fixes
+
+- **Inference models were left in training mode** (`starling/inference/model_loading.py`).
+  Loaded diffusion and VAE models now enter evaluation mode. This disables the sequence encoder's random 20% ionic-strength masking during generation. Predictions change relative to the incorrect training-mode behavior; model weights and sampler equations are unchanged.
+
+- **DDIM high-step numerical instability** (`starling/samplers/ddim_sampler.py`).
+  Cap near-zero-SNR timesteps to bound noise-to-data error amplification and remove duplicate steps. Safe legacy schedules, including DDIM-30, are preserved. Invalid step counts and noise levels now raise clear errors.
+
+
 ## October 2nd 2026
 
 ### Improvements

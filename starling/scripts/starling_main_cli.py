@@ -103,7 +103,13 @@ def main():
         "--steps",
         type=int,
         default=configs.DEFAULT_STEPS,
-        help=f"Number of steps to run the DDPM model (default: {configs.DEFAULT_STEPS})",
+        help=f"Requested sampler steps; DDPM uses the full training schedule (default: {configs.DEFAULT_STEPS})",
+    )
+    parser.add_argument(
+        "--sampler",
+        choices=("ddim", "ddpm", "dpmpp", "plms"),
+        default=configs.DEFAULT_SAMPLER,
+        help=f"Sampling method (default: {configs.DEFAULT_SAMPLER})",
     )
     parser.add_argument(
         "-b",
@@ -204,6 +210,7 @@ def main():
         ionic_strength=args.ionic_strength,
         device=args.device,
         steps=args.steps,
+        sampler=args.sampler,
         return_structures=args.return_structures,
         batch_size=args.batch_size,
         output_directory=args.output_directory,

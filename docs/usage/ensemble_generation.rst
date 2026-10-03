@@ -175,8 +175,24 @@ latency:
     # Deterministic DDIM sampling – faster, deterministic trajectories
     ddim_ensemble = generate(sequence, conformations=100, sampler="ddim", steps=20)
 
-    # Stochastic DDPM sampling – higher fidelity at the cost of runtime
-    ddpm_ensemble = generate(sequence, conformations=100, sampler="ddpm", steps=50)
+    # Second-order DPM-Solver++: fewer model evaluations
+    dpmpp_ensemble = generate(sequence, conformations=100, sampler="dpmpp", steps=12)
+
+    # Stochastic DDPM reference: always uses the full training schedule
+    ddpm_ensemble = generate(sequence, conformations=100, sampler="ddpm")
+
+DDIM-30 remains the default. DPM++ uses the existing model weights and decoder;
+it does not support constraints. Both deterministic solvers still draw random
+initial noise. Reproducibility requires the same seed, device, and batch size.
+
+DDIM preserves its legacy strided schedule: requesting 30 steps performs 31
+model evaluations. Unsafe near-zero-SNR timesteps are capped and duplicates
+removed. DPM++ uses rounded log-SNR spacing; it warns if integer timestep
+collisions reduce the requested number of evaluations.
+
+The comparative validation runner is ``devtools/scripts/validate_samplers.py``.
+It accepts cached DDPM reference ensembles, verifies their model-weight hashes,
+and records per-sequence errors in angstroms, relative errors, timings, and memory.
 
 Model Compilation
 ~~~~~~~~~~~~~~~~~

@@ -13,6 +13,7 @@ from starling.data.tokenizer import StarlingTokenizer
 from starling.inference.model_loading import ModelManager
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.samplers.ddpm_sampler import DDPMSampler
+from starling.samplers.dpmpp_sampler import DPMppSampler
 from starling.samplers.plms_sampler import PLMSSampler
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
@@ -441,9 +442,17 @@ def generate_backend(
             encoder_model=encoder_model,
             ionic_strength=ionic_strength,
         )
+    elif sampler.lower() == "dpmpp":
+        print("Using DPM++ sampler")
+        sampler = DPMppSampler(
+            ddpm_model=diffusion,
+            encoder_model=encoder_model,
+            n_steps=steps,
+            ionic_strength=ionic_strength,
+        )
     else:
         raise ValueError(
-            f"Error: sampler must be one of 'plms', 'ddim', or 'ddpm'. Got {sampler}."
+            f"Error: sampler must be one of 'plms', 'ddim', 'ddpm', or 'dpmpp'. Got {sampler}."
         )
 
     # get num_batchs and remaining samples

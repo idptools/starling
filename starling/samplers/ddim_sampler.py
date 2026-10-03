@@ -57,6 +57,16 @@ class DDIMSampler(nn.Module):
             If the discretization method is not implemented.
         """
         super(DDIMSampler, self).__init__()
+        if (
+            isinstance(n_steps, bool)
+            or not isinstance(n_steps, (int, np.integer))
+            or not 1 <= n_steps <= ddpm_model.num_timesteps
+        ):
+            raise ValueError(
+                f"n_steps must be an integer between 1 and {ddpm_model.num_timesteps}"
+            )
+        if not 0.0 <= ddim_eta <= 1.0:
+            raise ValueError("ddim_eta must be between 0 and 1")
         self.ddpm_model = ddpm_model
         self.encoder_model = encoder_model
         self.n_steps = self.ddpm_model.num_timesteps
@@ -82,6 +92,15 @@ class DDIMSampler(nn.Module):
 
         with torch.no_grad():
             alpha_bar = self.ddpm_model.alphas_cumprod
+            # Bound noise-to-data error amplification to 100x. Preserve safe
+            # legacy schedules; cap and de-duplicate only their unsafe tail.
+            usable = torch.nonzero(alpha_bar.sqrt() >= 0.01).flatten()
+            if not len(usable):
+                raise ValueError("DDIM requires timesteps with sqrt(alpha) >= 0.01")
+            cap = int(usable[-1])
+            if np.any(self.ddim_time_steps > cap):
+                safe = self.ddim_time_steps[self.ddim_time_steps < cap]
+                self.ddim_time_steps = np.append(safe, cap)
             self.ddim_alpha = alpha_bar[self.ddim_time_steps].clone().to(torch.float32)
             self.ddim_alpha_sqrt = torch.sqrt(self.ddim_alpha)
             self.ddim_alpha_prev = torch.cat(

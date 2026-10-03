@@ -206,7 +206,9 @@ def generate(
     steps : int, default=configs.DEFAULT_STEPS
         Number of denoising diffusion steps.
     sampler : str, default=configs.DEFAULT_SAMPLER
-        Sampler backend registered in :mod:`starling.configs`.
+        Sampling method: ``'ddim'``, ``'ddpm'``, ``'dpmpp'`` (DPM-Solver++(2M)),
+        or ``'plms'``. DPM++ is deterministic after initial noise sampling and
+        does not support constraints. DDPM always uses the full training schedule.
     return_structures : bool, default=False
         When ``True`` include 3D coordinate ensembles in the results.
     batch_size : int, default=configs.DEFAULT_BATCH_SIZE
@@ -323,6 +325,12 @@ def generate(
     # check sampler is a string
     if not isinstance(sampler, str):
         raise ValueError("Error: sampler must be a string.")
+    if sampler.lower() not in ("ddim", "ddpm", "dpmpp", "plms"):
+        raise ValueError(
+            "Error: sampler must be one of 'ddim', 'ddpm', 'dpmpp', or 'plms'."
+        )
+    if sampler.lower() == "dpmpp" and constraint is not None:
+        raise ValueError("DPM++ does not support constraints; use DDIM or DDPM")
 
     # check return_structures is a bool
     if not isinstance(return_structures, bool):

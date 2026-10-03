@@ -46,6 +46,8 @@ class ModelManager:
             encoder_path,
             map_location=device,
         )
+        diffusion_model.eval()
+        encoder_model.eval()
         return encoder_model, diffusion_model
 
     def get_models(
