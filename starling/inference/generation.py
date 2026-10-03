@@ -14,7 +14,6 @@ from starling.inference.model_loading import ModelManager
 from starling.minimizer import relax_conformations
 from starling.samplers.ddim_sampler import DDIMSampler
 from starling.samplers.ddpm_sampler import DDPMSampler
-from starling.samplers.dpmpp_sampler import DPMppSampler
 from starling.samplers.plms_sampler import PLMSSampler
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
@@ -816,6 +815,10 @@ def generate_backend(
             ionic_strength=ionic_strength,
         )
     elif sampler.lower() == "dpmpp":
+        # imported here rather than at module level so a missing DPM++ module
+        # only breaks the DPM++ sampler, not every `import starling`
+        from starling.samplers.dpmpp_sampler import DPMppSampler
+
         print("Using DPM++ sampler")
         sampler = DPMppSampler(
             ddpm_model=diffusion,
