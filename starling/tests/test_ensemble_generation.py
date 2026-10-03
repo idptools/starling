@@ -275,6 +275,15 @@ class TestGenerateValidation:
         with pytest.raises(ValueError, match="sampler"):
             generate(SHORT_SEQ, conformations=10, sampler=123)
 
+    def test_dpmpp_with_constraint_raises(self):
+        with pytest.raises(ValueError, match="does not support constraints"):
+            generate(
+                SHORT_SEQ,
+                conformations=10,
+                sampler="dpmpp",
+                constraint=RgConstraint(target=25.0),
+            )
+
     def test_invalid_return_structures_type(self):
         with pytest.raises(ValueError, match="return_structures"):
             generate(SHORT_SEQ, conformations=10, return_structures="yes")
@@ -979,7 +988,7 @@ class TestIntegrationGenerate:
         assert re > rg
 
     def test_generate_different_samplers(self):
-        for sampler_name in ("ddim", "ddpm", "plms"):
+        for sampler_name in ("ddim", "ddpm", "dpmpp", "plms"):
             E = generate(
                 SHORT_SEQ,
                 conformations=5,
@@ -991,6 +1000,25 @@ class TestIntegrationGenerate:
                 sampler=sampler_name,
             )
             assert len(E) == 5
+
+    def test_generate_dpmpp_with_structures_and_error_removal(self):
+        # DPM++ through the remove_errors sampling loop, MDS reconstruction and
+        # (default) relaxation, i.e. every path a sampler is driven through
+        E = generate(
+            SHORT_SEQ,
+            conformations=8,
+            sampler="dpmpp",
+            steps=12,
+            verbose=False,
+            show_progress_bar=False,
+            show_per_step_progress_bar=False,
+            return_data=True,
+            return_structures=True,
+            return_single_ensemble=True,
+            remove_errors=True,
+        )
+        assert len(E) == 8
+        assert E.has_structures is True
 
     def test_generate_batch_size_larger_than_conformations(self):
         E = generate(
