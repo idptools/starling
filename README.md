@@ -129,6 +129,7 @@ starling --info
 | `--outname` | str | auto | Override output filename prefix (single sequence only) |
 | `-r, --return_structures` | flag | off | Generate PDB + XTC 3D structures |
 | `--ionic_strength` | int | 150 | Solvent ionic strength in mM (20, 150, or 300) |
+| `--remove-errors` | flag | off | Discard physically impossible conformations and regenerate replacements, so the output still contains `-c` conformations |
 | `--num-cpus` | int | auto | Max CPUs for MDS reconstruction |
 | `--num-mds-init` | int | 4 | Number of parallel MDS initializations |
 | `-v, --verbose` | flag | off | Enable verbose output |

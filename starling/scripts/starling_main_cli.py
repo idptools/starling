@@ -169,6 +169,35 @@ def main():
         default=True,
         help="Disable progress bar during generation (default: False)",
     )
+    parser.add_argument(
+        "--remove-errors",
+        dest="remove_errors",
+        action="store_true",
+        default=False,
+        help=(
+            "Discard conformations with physically impossible inter-residue "
+            "distances and regenerate replacements, so the number of conformations "
+            "written still matches -c/--conformations. Filtering happens before "
+            "anything is written to disk, so the .xtc/.pdb and .starling outputs "
+            "contain only clean conformations. With -r/--return_structures the "
+            "reconstructed 3D conformations are screened as well as the distance "
+            "maps (default: False)"
+        ),
+    )
+    parser.add_argument(
+        "--relax",
+        dest="relax",
+        action="store_true",
+        default=False,
+        help=(
+            "Relax the reconstructed 3D conformations with the Mpipi-GG force "
+            "field, restrained to their STARLING distance maps. This fixes the "
+            "compressed bonds and overlapping beads left by MDS reconstruction "
+            "while keeping global dimensions. Requires -r/--return_structures. "
+            "With --remove-errors, relaxation runs before the 3D error screen "
+            "(default: False)"
+        ),
+    )
 
     # will need to update this default...
     parser.add_argument(
@@ -210,6 +239,15 @@ def main():
         )
         sys.exit(1)
 
+    # relaxation acts on 3D structures, so without -r it would silently do nothing
+    if args.relax and not args.return_structures:
+        print(
+            "ERROR: --relax relaxes the 3D structures, so it requires "
+            "-r/--return_structures.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if args.verbose:
         print_starling()
 
@@ -229,6 +267,8 @@ def main():
         return_data=False,
         verbose=args.verbose,
         show_progress_bar=args.progress_bar,
+        remove_errors=args.remove_errors,
+        relax=args.relax,
     )
 
 

@@ -32,10 +32,57 @@ Key options:
 * ``--device`` - force CPU, CUDA (``cuda:0``), or Apple MPS
 * ``--num-cpus`` / ``--num-mds-init`` - control MDS reconstruction throughput
 * ``--outname`` - override the output prefix when providing a single sequence
+* ``--remove-errors`` - discard physically impossible conformations and regenerate replacements (see below)
 
 
 Outputs live under the requested directory and includes ``.starling`` archives
 plus optional PDB/XTC trajectories when ``--return_structures`` is set.
+
+Removing erroneous conformations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Occasionally STARLING produces a conformation containing physically impossible
+inter-residue distances - two residues further apart than a fully extended chain
+between them would allow. Passing ``--remove-errors`` discards these and
+generates replacements, so the number of conformations you get back still
+matches ``-c``:
+
+.. code-block:: bash
+
+    starling my_sequence.fasta -c 200 -r --remove-errors -o outputs
+
+Screening happens in two stages:
+
+1. The raw STARLING distance maps are screened with
+   :meth:`~starling.structure.ensemble.Ensemble.check_for_errors`.
+2. When ``-r``/``--return_structures`` is also set, the reconstructed 3D
+   conformations are screened with
+   :meth:`~starling.structure.ensemble.Ensemble.check_for_errors_trajectory`,
+   which catches artefacts introduced by the MDS embedding itself.
+
+The cheap distance-map screen runs first, so 3D reconstruction is only spent on
+conformations that already look plausible. Discarded conformations are replaced
+in further sampling rounds until the requested number of clean conformations has
+been accumulated. Because all of this happens *before* anything is written, the
+``.xtc``, ``.pdb`` and ``.starling`` outputs contain only conformations that
+passed both screens.
+
+.. note::
+
+   Without ``-r``, only the distance-map screen can run - there is no
+   reconstructed trajectory to inspect - but the ``.starling`` archive still
+   ends up free of erroneous distance maps.
+
+   If STARLING cannot accumulate enough clean conformations after 10 sampling
+   rounds it raises a ``RuntimeError`` rather than silently returning fewer
+   conformations than requested. In practice this indicates something is wrong
+   with the sequence or the model, so it is worth re-running without the flag to
+   inspect the raw output.
+
+The related ``--remove-errors`` flag on ``starling2xtc`` / ``starling2pdb``
+(:ref:`below <removing-erroneous-frames>`) is different: those operate on an
+already-generated ``.starling`` archive, so they can only *remove* bad frames -
+they cannot generate replacements.
 
 ``starling-benchmark``
 ----------------------
@@ -79,6 +126,8 @@ All converters operate on ``.starling`` archives created by the generator.
 
 By default outputs are written next to the source file; pass ``-o`` to choose a
 new directory or filename prefix.
+
+.. _removing-erroneous-frames:
 
 Removing erroneous frames
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

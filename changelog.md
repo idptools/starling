@@ -2,6 +2,24 @@
 
 This file contains our changelog for STARLING
 
+## September 28th 2026
+
+### New
+
+- **Mpipi-GG relaxation of 3D conformations** (`starling/minimizer/`).
+  STARLING's distance maps have good local geometry (bonds are 3.85 ± 0.02 Å), but the MDS reconstruction used to build 3D structures does not: because unweighted stress fits every distance with equal absolute weight, bonds come out compressed (~3.1-3.2 ± 0.5-0.7 Å), non-bonded beads routinely overlap (e.g. ~10 pairs closer than 0.6σ per FUS LCD conformation), and in 5-20% of frames at least one bond exceeds 6 Å. The new `starling.minimizer` package fixes this by energy-minimizing each conformation under a local reimplementation of the Mpipi-GG force field (harmonic bonds, Wang-Frenkel with a 3σ cutoff, Debye-Hückel with a 35 Å cutoff, bonded neighbours excluded) while flat-bottomed harmonic restraints on every residue pair at least 4 apart in sequence hold the global shape to the STARLING distance map. On real ensembles this restores bonds to 3.80 Å and removes every clash while changing Rg by ~0.1% per conformation, and repairs the broken-chain frames rather than requiring them to be discarded.
+
+  Use `relax_ensemble(ensemble)` to get back a new `Ensemble` with relaxed structures plus a `RelaxationResult` (call `.summary()` for a before/after report), or `relax_conformations(coordinates, sequence, reference_distances=...)` for raw coordinates in Å. Runs batched in PyTorch on CUDA, MPS or CPU using a locally written FIRE 2.0 minimizer; 400 conformations of a 163-residue IDR take ~25 s on MPS, including the MDS build.
+
+- **`relax` option for `generate()` and `--relax` flag for the `starling` CLI** (`starling/frontend/ensemble_generation.py`, `starling/inference/generation.py`, `starling/scripts/starling_main_cli.py`).
+  Relaxes the MDS-reconstructed structures with Mpipi-GG as they are generated, restrained to the distance map each was built from, so the `.xtc`/`.pdb` and `.starling` outputs carry the relaxed structures. **`generate()` now relaxes by default (`relax=True`)** whenever `return_structures=True`; pass `relax=False` for the previous raw MDS output. The CLI keeps the old behaviour unless `--relax` is given, and `--relax` without `-r`/`--return_structures` is an error rather than silently doing nothing. With `remove_errors`/`--remove-errors`, relaxation runs before the 3D error screen, so conformations MDS broke are repaired and kept rather than discarded and resampled (on α-synuclein, 50 conformations went from a worst bond of 19.8 Å to 3.95 Å with none discarded).
+
+- **Mpipi-GG parameter file** (`starling/minimizer/data/mpipi_gg_pairs.tsv`).
+  Plain-text copy of the FINCHES GGv1 Wang-Frenkel parameters for the 20 amino acids, so STARLING does not depend on FINCHES. Epsilon is stored in kcal/mol (the native LAMMPS units, which is also what the FINCHES pickles contain despite their docstrings saying kJ/mol) and converted to kJ/mol on load.
+
+- **Minimizer test suite** (`starling/tests/test_minimizer.py`).
+  30 tests covering the parameter set (including an exact comparison against FINCHES when it is installed), agreement of the PyTorch energies with a plain NumPy reference implementation, analytic forces against autograd, bonded-neighbour exclusions, restraint behaviour, relaxation repairing local geometry while keeping global dimensions, and the `generate()`/CLI wiring (including that the 3D error screen sees relaxed structures, plus one slow end-to-end test against the real model).
+
 ## August 21st 2026
 
 ### Bug Fixes
@@ -26,6 +44,14 @@ This file contains our changelog for STARLING
 - **Offline support for search artifacts** (`starling/configs.py`).
   `_download_if_missing()` now respects `STARLING_OFFLINE`: a missing artifact raises a `FileNotFoundError` naming the relevant `STARLING_FAISS_INDEX_PATH` / `STARLING_SEQSTORE_PATH` / `STARLING_FAISS_MANIFEST_PATH` override, and an artifact that is present but fails its MD5 check is used with a warning rather than triggering a re-download.
 
+- **`--remove-errors` flag for the `starling` CLI** (`starling/scripts/starling_main_cli.py`, `starling/inference/generation.py`, `starling/frontend/ensemble_generation.py`).
+  Discards conformations containing physically impossible inter-residue distances and generates replacements, so the number of conformations returned still matches `-c`/`--conformations`. Screening runs in two stages: `Ensemble.check_for_errors()` on the raw distance maps, then — when `-r`/`--return_structures` is also set — `Ensemble.check_for_errors_trajectory()` on the reconstructed 3D conformations. The cheap distance-map screen runs first so MDS reconstruction is only spent on conformations that already look plausible. All filtering happens before anything is written to disk, so the `.xtc`, `.pdb` and `.starling` outputs contain only conformations that passed both screens. Exposed on the Python API as `generate(..., remove_errors=True)`.
+
+  Sampling and screening repeat until the requested number of clean conformations has been accumulated, capped at `DEFAULT_MAX_ERROR_FILTER_ROUNDS` (10) rounds; if the target still cannot be met a `RuntimeError` is raised rather than silently returning fewer conformations than requested. Note this differs from the existing `--remove-errors` flag on `starling2xtc`/`starling2pdb`, which operates on an already-generated archive and so can only remove frames, not replace them.
+
+- **Error-filtering test suite** (`starling/tests/test_remove_errors.py`).
+  14 tests driving the filter loop with a stubbed sampler, covering discard-and-replace, multi-round top-up, rounds where every conformation fails, overshoot trimming, the max-rounds backstop and its `RuntimeError`, and — for the 3D path — that coordinates stay aligned 1:1 with the surviving distance maps across top-up rounds.
+
 - **Entry-point dependency test suite** (`starling/tests/test_entry_point_imports.py`).
   Parses `[project.scripts]` and asserts that every console entry point imports only modules provided by the declared dependencies (or by an entry point's documented extra), so a missing runtime dependency fails in CI rather than on a new user's first run. Includes a specific regression test that `starling.scripts.starling_main_cli` imports with `psutil` unavailable.
 
@@ -34,10 +60,17 @@ This file contains our changelog for STARLING
 
 ### Improvements
 
+- **Factored the sampling batch loop out of `generate_backend()`** into `_sample_distance_maps()` (`starling/inference/generation.py`), so it can be invoked repeatedly by the error-filtering loop. Behaviour of the default (unfiltered) path is unchanged.
+
+- **Fixed a latent bug in the verbose per-sequence summary** (`starling/inference/generation.py`).
+  It computed `n_conformers = len(sym_distance_maps)`, reading a variable that is deleted in the `return_data=False` cleanup path. The count is now captured before the ensemble is built and freed.
+
 - **`starling --info` now reports the weights file that will actually be loaded** (`starling/scripts/starling_main_cli.py`).
   It previously printed `DEFAULT_ENCODER_WEIGHTS_PATH` / `DEFAULT_DDPM_WEIGHTS_PATH` verbatim, which — because of the bug above — was always a GitHub URL and told you nothing about what was on disk. It now prints the resolved local file (or `NOT FOUND LOCALLY`), whether offline mode is on, and the directories searched, making it the natural first check when diagnosing a deployment.
 
 ### Documentation
+
+- Documented `--remove-errors` in `README.md` and added a *Removing erroneous conformations* section to `docs/usage/cli.rst`, including how it differs from the same-named converter flag (which is now cross-referenced).
 
 - **Documented the `train` extra** across `README.md`, `docs/usage/installation.rst` and `docs/usage/cli.rst`.
   The installation page gains a cross-referenceable *Installing the training dependencies* section, and `cli.rst` gains a *Training tools (advanced)* section (it previously did not mention the training entry points at all) that links to it. Covers installing the extra from PyPI, directly from GitHub via the PEP 508 `package[extra] @ url` form (including pinning a branch/tag/commit), and from a local clone (plain and editable), with a note that the brackets must be quoted in `zsh`.
