@@ -64,7 +64,7 @@ Notes
 from __future__ import annotations
 
 import os
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 import torch
@@ -305,7 +305,7 @@ class SearchEngine:
             self._log(f"[WARN] Failed to downcast index: {e}")
 
         if inner is not None and hasattr(inner, "nprobe"):
-            inner.nprobe = int(nprobe)
+            cast(Any, inner).nprobe = int(nprobe)
             # Remove scan caps if present
             if hasattr(inner, "max_codes"):
                 try:
@@ -321,7 +321,7 @@ class SearchEngine:
             )
         elif hasattr(self.index, "nprobe"):
             # Fallback for non-wrapped IVF
-            self.index.nprobe = int(nprobe)
+            cast(Any, self.index).nprobe = int(nprobe)
             self._log(f"[SEARCH] Set nprobe={nprobe} (direct)")
         else:
             self._log("[WARN] Could not set nprobe, index has no nprobe attribute")
@@ -367,16 +367,21 @@ class SearchEngine:
             )
 
             try:
-                params = faiss.SearchParametersIVF()
+                faiss_api = cast(Any, faiss)
+                params = faiss_api.SearchParametersIVF()
                 if nprobe is not None:
                     params.nprobe = int(nprobe)
 
-                sel = faiss.IDSelectorBatch(np.asarray(selector_ids, dtype=np.int64))
+                sel = faiss_api.IDSelectorBatch(
+                    np.asarray(selector_ids, dtype=np.int64)
+                )
                 params.sel = sel
 
                 # note: you *must* use params as a kwarg otherwise faiss python wrappers fail
                 # and you experience pain....
-                D, idxs = self.index.search(queries_np, fetch_k, params=params)
+                D, idxs = cast(Any, self.index).search(
+                    queries_np, fetch_k, params=params
+                )
 
                 self._log("[SEARCH] IDSelectorBatch search completed successfully.")
                 return D, idxs
@@ -386,7 +391,7 @@ class SearchEngine:
                 )
 
         self._log("[SEARCH] Using standard search (no selector).")
-        D, idxs = self.index.search(queries_np, fetch_k)
+        D, idxs = cast(Any, self.index).search(queries_np, fetch_k)
         return D, idxs
 
     def _collect_meta(self, idxs: np.ndarray) -> dict:

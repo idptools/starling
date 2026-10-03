@@ -103,29 +103,6 @@ class DDPMDataLoader(pl.LightningDataModule):
             self.batch_size, partial=not is_training
         )
 
-    def _apply_filter_map(self, sample):
-        """Map function that applies filtering by returning None for filtered samples"""
-        if self._filter_sample(sample):
-            return sample
-        else:
-            return None
-
-    def _key_filter(self, sample):
-        """Filter based on keys before decoding content"""
-        # Check if the sample key contains the right ionic strength
-        return f"{self.ionic_strength}" in sample["__key__"]
-
-    def _filter_sample(self, sample):
-        """Filter samples based on custom training criteria"""
-
-        # Example filtering based on distance map properties
-        # ionic_strength = sample["ionic_strength_mm.npz"]
-        ionic_strength = sample["__key__"].split("_")[-1]
-        if ionic_strength == self.ionic_strength:
-            return True
-        else:
-            return False
-
     def _npz_decoder(self, key, data):
         """Decoder for NPZ files with error handling"""
         try:

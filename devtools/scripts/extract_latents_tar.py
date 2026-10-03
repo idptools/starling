@@ -1,7 +1,7 @@
 import io
 import os
 from glob import glob
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -70,7 +70,9 @@ def process_sample(sample: Dict) -> Dict:
     return {"key": sample_key, "data": distance_map, "sequence": sequence}
 
 
-def collate_fn(batch: List[Dict]) -> Optional[Tuple[torch.Tensor, List[str]]]:
+def collate_fn(
+    batch: List[Dict],
+) -> Optional[Tuple[torch.Tensor, List[str], List[str]]]:
     """Collate individual samples into a batch for model processing.
 
     Args:

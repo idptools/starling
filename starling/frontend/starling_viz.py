@@ -109,7 +109,7 @@ def plot_protein_arcs(sequence,
     xtick_numberlabels = []
     for idx in range(1, len(sequence)+1):
         if idx % number_freq == 0:
-            xtick_numberlabels.append(idx)
+            xtick_numberlabels.append(str(idx))
         else:
             xtick_numberlabels.append('')            
     ax.set_xticklabels(xtick_numberlabels)  # Hide default labels
@@ -211,4 +211,3 @@ def plot_protein_arcs(sequence,
         plt.savefig(filename)
     else:
         plt.show()  
-

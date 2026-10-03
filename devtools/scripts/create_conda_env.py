@@ -4,6 +4,8 @@ import re
 import glob
 import shutil
 import subprocess as sp
+import sys
+from importlib import import_module
 from tempfile import TemporaryDirectory
 from contextlib import contextmanager
 # YAML imports
@@ -12,7 +14,7 @@ try:
     loader = yaml.safe_load
 except ImportError:
     try:
-        import ruamel_yaml as yaml  # Ruamel YAML
+            yaml = import_module("ruamel_yaml")  # Ruamel YAML
     except ImportError:
         try:
             # Load Ruamel YAML from the base conda environment
@@ -24,7 +26,11 @@ except ImportError:
             # Based on importlib example, but only needs to load_module since its the whole package, not just
             # a module
             spec = import_util.spec_from_file_location('ruamel_yaml', ruamel_yaml_path)
-            yaml = spec.loader.load_module()
+            if spec is None or spec.loader is None:
+                raise ImportError("Could not load Ruamel YAML from the base environment")
+            yaml = import_util.module_from_spec(spec)
+            sys.modules[spec.name] = yaml
+            spec.loader.exec_module(yaml)
         except (KeyError, ImportError, IndexError):
             raise ImportError("No YAML parser could be found in this or the conda environment. "
                               "Could not find PyYAML or Ruamel YAML in the current environment, "

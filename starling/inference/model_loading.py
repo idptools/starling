@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING, cast
 
 import torch
 
@@ -6,25 +9,28 @@ from starling import configs
 
 # local imports
 from starling.configs import DEFAULT_DDPM_WEIGHTS_PATH, DEFAULT_ENCODER_WEIGHTS_PATH
-from starling.models.diffusion import DiffusionModel
-from starling.models.transformer import SequenceEncoder
-from starling.models.vae import VAE
-from starling.models.vit import ViT
+
+if TYPE_CHECKING:
+    from starling.models.diffusion import DiffusionModel
+    from starling.models.vae import VAE
 
 
 class ModelManager:
     def __init__(self):
-        self.encoder_model = None
-        self.diffusion_model = None
+        self.encoder_model: VAE | None = None
+        self.diffusion_model: DiffusionModel | None = None
 
-    def load_models(self, encoder_path, ddpm_path, device):
+    def load_models(
+        self,
+        encoder_path: str | None,
+        ddpm_path: str | None,
+        device: str | torch.device,
+    ) -> tuple[VAE, DiffusionModel]:
         """Load the models from local files or URLs."""
 
         # Resolve paths: local files (~/.starling_weights, torch hub cache)
         # are preferred; downloads only happen if STARLING_OFFLINE is unset.
-        encoder_path = configs.resolve_weights_path(
-            encoder_path, DEFAULT_ENCODER_WEIGHTS_PATH
-        )
+        encoder_path = configs.resolve_weights_path(encoder_path, DEFAULT_ENCODER_WEIGHTS_PATH)
         ddpm_path = configs.resolve_weights_path(ddpm_path, DEFAULT_DDPM_WEIGHTS_PATH)
 
         # Continue with existing loading logic
@@ -32,6 +38,12 @@ class ModelManager:
             raise FileNotFoundError(f"Encoder model {encoder_path} not found.")
         if not os.path.exists(ddpm_path):
             raise FileNotFoundError(f"DDPM model {ddpm_path} not found.")
+
+        # Checkpoint construction needs Lightning; importing the API or CLI does not.
+        from starling.models.diffusion import DiffusionModel
+        from starling.models.transformer import SequenceEncoder
+        from starling.models.vae import VAE
+        from starling.models.vit import ViT
 
         # Load the diffusion model
         sequence_encoder = SequenceEncoder(12, 512, 8)
@@ -52,10 +64,10 @@ class ModelManager:
 
     def get_models(
         self,
-        encoder_path=DEFAULT_ENCODER_WEIGHTS_PATH,
-        ddpm_path=DEFAULT_DDPM_WEIGHTS_PATH,
-        device="cpu",
-    ):
+        encoder_path: str | None = DEFAULT_ENCODER_WEIGHTS_PATH,
+        ddpm_path: str | None = DEFAULT_DDPM_WEIGHTS_PATH,
+        device: str | torch.device = "cpu",
+    ) -> tuple[VAE, DiffusionModel]:
         """
         Lazy-load models if not already loaded.
 
@@ -79,9 +91,7 @@ class ModelManager:
         """
         if self.encoder_model is None or self.diffusion_model is None:
             # Models haven't been loaded yet, so load them now
-            self.encoder_model, self.diffusion_model = self.load_models(
-                encoder_path, ddpm_path, device
-            )
+            self.encoder_model, self.diffusion_model = self.load_models(encoder_path, ddpm_path, device)
             if configs.TORCH_COMPILATION["enabled"]:
                 # Compile the models if requested
                 self.encoder_model, self.diffusion_model = self.compile()
@@ -89,30 +99,31 @@ class ModelManager:
         # Return the already-loaded models
         return self.encoder_model, self.diffusion_model
 
-    def compile(self):
+    def compile(self) -> tuple[VAE, DiffusionModel]:
         """
         Compile the models using PyTorch's compile function.
         This is a placeholder for the actual compilation logic.
         """
         compile_kwargs = configs.TORCH_COMPILATION["options"].copy()
 
-        self.diffusion_model.model = torch.compile(
-            self.diffusion_model.model, **compile_kwargs
+        if self.diffusion_model is None or self.encoder_model is None:
+            raise RuntimeError("Models must be loaded before compiling")
+
+        self.diffusion_model.model = cast(
+            torch.nn.Module,
+            torch.compile(self.diffusion_model.model, **compile_kwargs),
         )
-        self.encoder_model.decoder = torch.compile(
-            self.encoder_model.decoder, **compile_kwargs
+        self.encoder_model.decoder = cast(
+            torch.nn.Module,
+            torch.compile(self.encoder_model.decoder, **compile_kwargs),
         )
 
         # self.diffusion_model.sequence_encoder = torch.compile(
         #     self.diffusion_model.sequence_encoder, **compile_kwargs
         # )
 
-        print(
-            "\nCompiling the diffusion model for faster inference, this may take a while..."
-        )
-        print(
-            "This is a one-time operation, subsequent inferences will be MUCH faster.\n"
-        )
+        print("\nCompiling the diffusion model for faster inference, this may take a while...")
+        print("This is a one-time operation, subsequent inferences will be MUCH faster.\n")
         print("Compiling with the following options:")
         for key, value in compile_kwargs.items():
             print(f"  {key}: {value}")

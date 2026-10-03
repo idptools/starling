@@ -248,6 +248,7 @@ def build_panel(args):
 def run(args, rows):
     import mdtraj as md
     import torch
+    import torch.version
     from starling.models.vae import VAE
     from starling.inference.constraints import symmetrize_distance_maps
     from starling.structure.coordinates import distance_matrix_to_3d_structure_torch_mds

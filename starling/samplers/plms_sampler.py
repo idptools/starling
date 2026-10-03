@@ -1,6 +1,8 @@
 """SAMPLING ONLY."""
 
-from functools import partial
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -8,12 +10,11 @@ from einops import rearrange
 from tqdm import tqdm
 
 from starling.data.tokenizer import StarlingTokenizer
-from starling.inference.constraints import (
-    ConstraintLogger,
-    DistanceConstraint,
-    HelicityConstraint,
-    RgConstraint,
-)
+from starling.inference.constraints import ConstraintLogger
+
+if TYPE_CHECKING:
+    from starling.models.diffusion import DiffusionModel
+    from starling.models.vae import VAE
 
 # def noise_like(shape, device, repeat=False):
 #     repeat_noise = lambda: torch.randn((1, *shape[1:]), device=device).repeat(
@@ -23,9 +24,7 @@ from starling.inference.constraints import (
 #     return repeat_noise() if repeat else noise()
 
 
-def dynamic_thresholding_fn(
-    x0: torch.Tensor, p: float = 0.995, max_val: float = 1.0
-) -> torch.Tensor:
+def dynamic_thresholding_fn(x0: torch.Tensor, p: float = 0.995, max_val: float = 1.0) -> torch.Tensor:
     """
     Applies dynamic thresholding to VAE latent predictions.
 
@@ -53,19 +52,17 @@ def make_ddim_sampling_parameters(alphacums, ddim_timesteps, eta):
     alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
 
     # according the the formula provided in https://arxiv.org/abs/2010.02502
-    sigmas = eta * np.sqrt(
-        (1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev)
-    )
+    sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))
     return sigmas, alphas, alphas_prev
 
 
 class PLMSSampler(object):
     def __init__(
         self,
-        ddpm_model,
-        encoder_model,
-        n_steps,
-        ionic_strength=150,
+        ddpm_model: DiffusionModel,
+        encoder_model: VAE,
+        n_steps: int,
+        ionic_strength: float = 150,
         ddim_discretize="uniform",
         schedule="linear",
         **kwargs,
@@ -77,9 +74,7 @@ class PLMSSampler(object):
         self.n_steps = n_steps
         self.schedule = schedule
         self.device = ddpm_model.device
-        self.ionic_strength = torch.tensor(
-            [ionic_strength], device=self.device
-        ).unsqueeze(0)
+        self.ionic_strength = torch.tensor([ionic_strength], device=self.device).unsqueeze(0)
 
         self.tokenizer = StarlingTokenizer()
 
@@ -89,24 +84,20 @@ class PLMSSampler(object):
         # Ways to discretize the generative process
         if ddim_discretize == "uniform":
             c = self.ddpm_num_timesteps // n_steps
-            self.ddim_time_steps = (
-                np.asarray(list(range(0, self.ddpm_num_timesteps - 1, c))) + 1
-            )
+            self.ddim_time_steps = np.asarray(list(range(0, self.ddpm_num_timesteps - 1, c))) + 1
         elif ddim_discretize == "quad":
-            self.ddim_time_steps = (
-                (np.linspace(0, np.sqrt(self.ddpm_num_timesteps * 0.8), n_steps)) ** 2
-            ).astype(int) + 1
+            self.ddim_time_steps = ((np.linspace(0, np.sqrt(self.ddpm_num_timesteps * 0.8), n_steps)) ** 2).astype(
+                int
+            ) + 1
         else:
             raise NotImplementedError(ddim_discretize)
 
         with torch.no_grad():
             # ddim sampling parameters
-            self.ddim_sigmas, self.ddim_alphas, self.ddim_alphas_prev = (
-                make_ddim_sampling_parameters(
-                    alphacums=self.ddpm_model.alphas_cumprod.cpu(),
-                    ddim_timesteps=self.ddim_time_steps,
-                    eta=ddim_eta,
-                )
+            self.ddim_sigmas, self.ddim_alphas, self.ddim_alphas_prev = make_ddim_sampling_parameters(
+                alphacums=self.ddpm_model.alphas_cumprod.cpu(),
+                ddim_timesteps=self.ddim_time_steps,
+                eta=ddim_eta,
             )
 
             self.ddim_sqrt_one_minus_alphas = (1.0 - self.ddim_alphas) ** 0.5
@@ -114,14 +105,10 @@ class PLMSSampler(object):
             self.sigmas_for_original_sampling_steps = ddim_eta * torch.sqrt(
                 (1 - self.ddpm_model.alphas_cumprod_prev)
                 / (1 - self.ddpm_model.alphas_cumprod)
-                * (
-                    1
-                    - self.ddpm_model.alphas_cumprod
-                    / self.ddpm_model.alphas_cumprod_prev
-                )
+                * (1 - self.ddpm_model.alphas_cumprod / self.ddpm_model.alphas_cumprod_prev)
             )
 
-    def generate_labels(self, labels: str) -> torch.Tensor:
+    def generate_labels(self, labels: str) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generate labels to condition the generative process on.
 
@@ -136,21 +123,19 @@ class PLMSSampler(object):
             The labels to condition the generative process on.
         """
 
-        labels = torch.tensor(self.tokenizer.encode(labels), device=self.device)
-        labels = rearrange(labels, "f -> 1 f")
-        attention_mask = torch.ones_like(labels, device=self.device, dtype=torch.bool)
+        tokens = torch.tensor(self.tokenizer.encode(labels), device=self.device)
+        tokens = rearrange(tokens, "f -> 1 f")
+        attention_mask = torch.ones_like(tokens, device=self.device, dtype=torch.bool)
 
-        labels = self.ddpm_model.sequence2labels(
-            labels, attention_mask, self.ionic_strength
-        )
+        context = self.ddpm_model.sequence2labels(tokens, attention_mask, self.ionic_strength)
 
-        return labels, attention_mask
+        return context, attention_mask
 
     @torch.no_grad()
     def sample(
         self,
         num_conformations: int,
-        labels: torch.Tensor,
+        labels: str,
         repeat_noise: bool = False,
         temperature: float = 1.0,
         show_per_step_progress_bar: bool = True,
@@ -201,7 +186,7 @@ class PLMSSampler(object):
         time_steps = np.flip(self.ddim_time_steps)
 
         # Get the labels to condition the generative process on
-        labels, attention_mask = self.generate_labels(
+        context, attention_mask = self.generate_labels(
             labels,
         )
 
@@ -223,7 +208,7 @@ class PLMSSampler(object):
 
             constraint.initialize(
                 self.encoder_model,
-                self.latent_space_scaling_factor,
+                self.ddpm_model.latent_space_scaling_factor,
                 self.n_steps,
                 sequence_length,
             )
@@ -247,7 +232,7 @@ class PLMSSampler(object):
             # Sample the generative process
             outs = self.p_sample_plms(
                 x=x,
-                c=labels,
+                c=context,
                 t=ts,
                 attention_mask=attention_mask,
                 index=index,
@@ -295,9 +280,11 @@ class PLMSSampler(object):
         attention_mask,
         index,
         temperature=1.0,
-        old_eps=None,
+        old_eps: list[torch.Tensor] | None = None,
         t_next=None,
     ):
+        if old_eps is None:
+            old_eps = []
         b, *_, device = *x.shape, x.device
 
         alphas = self.ddim_alphas
@@ -310,9 +297,7 @@ class PLMSSampler(object):
             a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
             a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device)
             sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)
-            sqrt_one_minus_at = torch.full(
-                (b, 1, 1, 1), sqrt_one_minus_alphas[index], device=device
-            )
+            sqrt_one_minus_at = torch.full((b, 1, 1, 1), sqrt_one_minus_alphas[index], device=device)
 
             # current prediction for x_0
             pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
@@ -338,9 +323,7 @@ class PLMSSampler(object):
             e_t_prime = (23 * e_t - 16 * old_eps[-1] + 5 * old_eps[-2]) / 12
         elif len(old_eps) >= 3:
             # 4nd order Pseudo Linear Multistep (Adams-Bashforth)
-            e_t_prime = (
-                55 * e_t - 59 * old_eps[-1] + 37 * old_eps[-2] - 9 * old_eps[-3]
-            ) / 24
+            e_t_prime = (55 * e_t - 59 * old_eps[-1] + 37 * old_eps[-2] - 9 * old_eps[-3]) / 24
 
         x_prev, pred_x0 = get_x_prev_and_pred_x0(e_t_prime, index)
 

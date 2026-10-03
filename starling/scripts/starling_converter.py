@@ -190,13 +190,13 @@ def starling2info():
     print("STARLING Generated ensemble")
     print("-------------------------------")
     print(f"Number of conformations     : {E.number_of_conformations}")
-    print(f"Generate with STARLING      : {E._Ensemble__metadata['VERSION']}")
-    print(f"Generate on ....            : {E._Ensemble__metadata['DATE']}")
+    print(f"Generate with STARLING      : {E.metadata['VERSION']}")
+    print(f"Generate on ....            : {E.metadata['DATE']}")
     print(
-        f"DDPM_WEIGHTS_PATH           : {E._Ensemble__metadata['DEFAULT_DDPM_WEIGHTS_PATH']}"
+        f"DDPM_WEIGHTS_PATH           : {E.metadata['DEFAULT_DDPM_WEIGHTS_PATH']}"
     )
     print(
-        f"ENCODER_WEIGHTS_PATH        : {E._Ensemble__metadata['DEFAULT_ENCODER_WEIGHTS_PATH']}"
+        f"ENCODER_WEIGHTS_PATH        : {E.metadata['DEFAULT_ENCODER_WEIGHTS_PATH']}"
     )
     print(f"Average radius of gyration  : {E.radius_of_gyration(return_mean=True)}")
     print(f"Average end-to-end distance : {E.end_to_end_distance(return_mean=True)}")
@@ -329,6 +329,8 @@ def numpy2starling():
 
     # if now sequence parsed get it from the parsed pdb trajectory
     if args.sequence is None:
+        if ssprot is None:
+            raise ValueError("A sequence or a PDB file is required")
         args.sequence = ssprot.get_amino_acid_sequence(oneletter=True)
 
     # overide this so we don't load a single conformer structure as the ensemble
@@ -353,10 +355,10 @@ def numpy2starling():
     DATE = time.ctime(creation_time)
 
     # finally we over-write the metadata
-    E._Ensemble__metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = "UNKNOWN (from numpy array)"
-    E._Ensemble__metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = "UNKNOWN (from numpy array)"
-    E._Ensemble__metadata["VERSION"] = "UNKNOWN (from numpy array)"
-    E._Ensemble__metadata["DATE"] = DATE
+    E.metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = "UNKNOWN (from numpy array)"
+    E.metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = "UNKNOWN (from numpy array)"
+    E.metadata["VERSION"] = "UNKNOWN (from numpy array)"
+    E.metadata["DATE"] = DATE
 
     E.save(outname)
 

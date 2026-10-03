@@ -115,7 +115,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 
 import numpy as np
 import torch
@@ -124,7 +124,7 @@ from tqdm import tqdm
 from starling.search.store import SequenceStore
 
 try:
-    import faiss  # type: ignore
+    import faiss
 except Exception as e:
     raise ImportError(
         "FAISS is required. Install with 'pip install faiss-gpu' (CUDA) or 'pip install faiss-cpu'."
@@ -461,13 +461,14 @@ class IndexBuilder:
             )
 
         if not use_gpu:
-            cpu_template.train(train_np)
+            cast(Any, cpu_template).train(train_np)
             return cpu_template
 
-        res = faiss.StandardGpuResources()
-        co = faiss.GpuClonerOptions()
+        faiss_gpu = cast(Any, faiss)
+        res = faiss_gpu.StandardGpuResources()
+        co = faiss_gpu.GpuClonerOptions()
         co.useFloat16 = gpu_fp16_lut
-        gpu_index = faiss.index_cpu_to_gpu(res, gpu_device, cpu_template, co)
+        gpu_index = faiss_gpu.index_cpu_to_gpu(res, gpu_device, cpu_template, co)
         gpu_index.train(train_np)
         return gpu_index
 
@@ -603,7 +604,7 @@ class IndexBuilder:
                 batch_ids[:batch_size] = np.arange(
                     gid_base + s, gid_base + e, dtype=np.int64
                 )
-                index.add_with_ids(batch, batch_ids[:batch_size])
+                cast(Any, index).add_with_ids(batch, batch_ids[:batch_size])
                 s = e
             gid_base += n
 
@@ -636,7 +637,7 @@ class IndexBuilder:
     def save_index(self, index: faiss.Index, index_path: str) -> None:
         """Save index to disk (converts GPU to CPU if needed)."""
         try:
-            cpu_index = faiss.index_gpu_to_cpu(index)
+            cpu_index = cast(Any, faiss).index_gpu_to_cpu(index)
         except Exception:
             cpu_index = index
         t0 = time.time()

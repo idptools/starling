@@ -1,24 +1,21 @@
-from typing import Tuple
+from __future__ import annotations
 
-import numpy as np
+from typing import TYPE_CHECKING
+
 import torch
 from einops import rearrange
 from torch import nn
 from tqdm.auto import tqdm
 
 from starling.data.tokenizer import StarlingTokenizer
-from starling.inference.constraints import (
-    ConstraintLogger,
-    DistanceConstraint,
-    HelicityConstraint,
-    RgConstraint,
-)
-from starling.utilities import helix_dm
+from starling.inference.constraints import ConstraintLogger
+
+if TYPE_CHECKING:
+    from starling.models.diffusion import DiffusionModel
+    from starling.models.vae import VAE
 
 
-def extract(
-    constants: torch.Tensor, timestamps: torch.Tensor, shape: int
-) -> torch.Tensor:
+def extract(constants: torch.Tensor, timestamps: torch.Tensor, shape: torch.Size) -> torch.Tensor:
     """
     Extract values from a tensor based on given timestamps.
 
@@ -42,29 +39,30 @@ def extract(
 
 
 class DDPMSampler(nn.Module):
-    def __init__(self, ddpm_model, encoder_model, ionic_strength=150):
+    def __init__(
+        self,
+        ddpm_model: DiffusionModel,
+        encoder_model: VAE,
+        ionic_strength: float = 150,
+    ):
         super(DDPMSampler, self).__init__()
         self.ddpm_model = ddpm_model
         self.device = ddpm_model.device
         self.n_steps = self.ddpm_model.num_timesteps
-        self.ionic_strength = torch.tensor(
-            [ionic_strength], device=self.device
-        ).unsqueeze(0)
+        self.ionic_strength = torch.tensor([ionic_strength], device=self.device).unsqueeze(0)
 
         self.encoder_model = encoder_model
 
         self.alpha_bar = self.ddpm_model.alphas_cumprod
         self.betas = self.ddpm_model.betas
         self.sqrt_recip_alphas = self.ddpm_model.sqrt_recip_alphas
-        self.sqrt_one_minus_alphas_cumprod = (
-            self.ddpm_model.sqrt_one_minus_alphas_cumprod
-        )
+        self.sqrt_one_minus_alphas_cumprod = self.ddpm_model.sqrt_one_minus_alphas_cumprod
         self.posterior_variance = self.ddpm_model.posterior_variance
         self.latent_space_scaling_factor = self.ddpm_model.latent_space_scaling_factor
 
         self.tokenizer = StarlingTokenizer()
 
-    def generate_labels(self, labels: str) -> torch.Tensor:
+    def generate_labels(self, labels: str) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generate labels to condition the generative process on.
 
@@ -79,15 +77,13 @@ class DDPMSampler(nn.Module):
             The labels to condition the generative process on.
         """
 
-        labels = torch.tensor(self.tokenizer.encode(labels), device=self.device)
-        labels = rearrange(labels, "f -> 1 f")
-        attention_mask = torch.ones_like(labels, device=self.device, dtype=torch.bool)
+        tokens = torch.tensor(self.tokenizer.encode(labels), device=self.device)
+        tokens = rearrange(tokens, "f -> 1 f")
+        attention_mask = torch.ones_like(tokens, device=self.device, dtype=torch.bool)
 
-        labels = self.ddpm_model.sequence2labels(
-            labels, attention_mask, self.ionic_strength
-        )
+        context = self.ddpm_model.sequence2labels(tokens, attention_mask, self.ionic_strength)
 
-        return labels, attention_mask
+        return context, attention_mask
 
     def p_sample(
         self,
@@ -117,40 +113,30 @@ class DDPMSampler(nn.Module):
         b, *_, device = *x.shape, x.device
 
         # Batch the timestep to the same size as the input tensor x
-        batched_timestamps = torch.full(
-            (b,), timestamp, device=device, dtype=torch.long
-        )
+        batched_timestamps = torch.full((b,), timestamp, device=device, dtype=torch.long)
 
         preds = self.ddpm_model.model(x, batched_timestamps, labels, attention_mask)
 
         # Extract the necessary values from the buffers to calculate the predicted mean
         betas_t = extract(self.betas, batched_timestamps, x.shape)
-        sqrt_recip_alphas_t = extract(
-            self.sqrt_recip_alphas, batched_timestamps, x.shape
-        )
-        sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, batched_timestamps, x.shape
-        )
+        sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, batched_timestamps, x.shape)
+        sqrt_one_minus_alphas_cumprod_t = extract(self.sqrt_one_minus_alphas_cumprod, batched_timestamps, x.shape)
 
         # Calculate the predicted mean based on the model prediction of the noise
-        predicted_mean = sqrt_recip_alphas_t * (
-            x - betas_t * preds / sqrt_one_minus_alphas_cumprod_t
-        )
+        predicted_mean = sqrt_recip_alphas_t * (x - betas_t * preds / sqrt_one_minus_alphas_cumprod_t)
 
         # If the timestamp is 0, return the predicted mean
         if timestamp == 0:
             return predicted_mean
         else:
-            posterior_variance = extract(
-                self.posterior_variance, batched_timestamps, x.shape
-            )
+            posterior_variance = extract(self.posterior_variance, batched_timestamps, x.shape)
             noise = torch.randn_like(x)
             return predicted_mean + torch.sqrt(posterior_variance) * noise
 
     def p_sample_loop(
         self,
-        shape: tuple,
-        labels: torch.Tensor,
+        shape: tuple[int, ...],
+        labels: str,
         return_all_timesteps: bool = False,
         constraint=None,
     ) -> torch.Tensor:
@@ -177,7 +163,7 @@ class DDPMSampler(nn.Module):
             that can be decoded using a pre-trained VAE
         """
 
-        batch_size, device = shape[0], self.device
+        device = self.device
 
         sequence_length = len(labels)
 
@@ -216,6 +202,7 @@ class DDPMSampler(nn.Module):
         ):
             # Store current state if tracking trajectory
             if return_all_timesteps:
+                assert denoising_trajectory is not None
                 denoising_trajectory.append(latents)
 
             # Use inference mode only for the model's prediction step
@@ -235,17 +222,15 @@ class DDPMSampler(nn.Module):
 
         # Return appropriate result based on tracking option
         if return_all_timesteps:
-            return (
-                torch.stack(denoising_trajectory, dim=1)
-                / self.latent_space_scaling_factor
-            )
+            assert denoising_trajectory is not None
+            return torch.stack(denoising_trajectory, dim=1) / self.latent_space_scaling_factor
 
         return scaled_latents
 
     def sample(
         self,
         num_conformations: int,
-        labels: torch.Tensor,
+        labels: str,
         show_per_step_progress_bar: bool = True,
         batch_count: int = 1,
         max_batch_count: int = 1,

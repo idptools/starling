@@ -30,7 +30,7 @@ Units are Angstroms, kJ/mol and kJ/mol/Angstrom throughout.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import numpy as np
 import numpy.typing as npt
@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     import mdtraj as md
 
     from starling.structure.ensemble import Ensemble
+
 
 # a conformation is relaxed once no bead feels more than this force
 # (kJ/mol/Angstrom; kT is ~2.5 kJ/mol at 300 K)
@@ -671,9 +672,9 @@ def relax_conformations(
 def relax_ensemble(
     ensemble: Ensemble,
     use_distance_maps: bool = True,
-    ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
+    ionic_strength: float | None = None,
     progress_bar: bool = True,
-    **kwargs: object,
+    **kwargs: Any,
 ) -> tuple[Ensemble, RelaxationResult]:
     """
     Relax the 3D structures of a STARLING ensemble with Mpipi-GG.
@@ -683,9 +684,8 @@ def relax_ensemble(
     returns a new Ensemble that carries the same distance maps and the
     relaxed structures. The original ensemble is left untouched.
 
-    Note that the ensemble does not record the ionic strength it was
-    generated at, so pass the same value here if you used something other
-    than the default.
+    Generated ensembles record their ionic strength. Legacy or manually created
+    ensembles may not have this metadata; STARLING's default is used for those.
 
     Parameters
     ----------
@@ -698,7 +698,8 @@ def relax_ensemble(
         starting distances.
 
     ionic_strength : float, optional
-        Ionic strength in mM. Default is STARLING's default (150 mM).
+        Ionic strength in mM. Overrides the ensemble metadata; if omitted,
+        uses the recorded value or STARLING's default (150 mM).
 
     progress_bar : bool, optional
         If True (default), show progress bars.
@@ -716,6 +717,13 @@ def relax_ensemble(
     from soursop.sstrajectory import SSTrajectory
 
     from starling.structure.ensemble import Ensemble
+
+    if ionic_strength is None:
+        ionic_strength = (
+            ensemble.ionic_strength
+            if ensemble.ionic_strength is not None
+            else configs.DEFAULT_IONIC_STRENGTH
+        )
 
     # SOURSOP/MDTraj coordinates are in nm
     trajectory = ensemble.build_ensemble_trajectory(progress_bar=progress_bar)
@@ -735,7 +743,10 @@ def relax_ensemble(
 
     relaxed_protein = SSTrajectory(TRJ=result.to_trajectory()).proteinTrajectoryList[0]
     relaxed_ensemble = Ensemble(
-        distance_maps, ensemble.sequence, ssprot_ensemble=relaxed_protein
+        distance_maps,
+        ensemble.sequence,
+        ssprot_ensemble=relaxed_protein,
+        ionic_strength=ionic_strength,
     )
 
     return relaxed_ensemble, result

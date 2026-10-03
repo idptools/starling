@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import warnings
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -6,6 +9,10 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from starling.data.tokenizer import StarlingTokenizer
+
+if TYPE_CHECKING:
+    from starling.models.diffusion import DiffusionModel
+    from starling.models.vae import VAE
 
 
 class DPMppSampler(nn.Module):
@@ -20,27 +27,21 @@ class DPMppSampler(nn.Module):
 
     def __init__(
         self,
-        ddpm_model: nn.Module,
-        encoder_model: nn.Module,
+        ddpm_model: DiffusionModel,
+        encoder_model: VAE,
         n_steps: int,
         ionic_strength: float = 150,
     ) -> None:
         super().__init__()
         total = ddpm_model.num_timesteps
-        if (
-            isinstance(n_steps, bool)
-            or not isinstance(n_steps, (int, np.integer))
-            or not 1 <= n_steps <= total
-        ):
+        if isinstance(n_steps, bool) or not isinstance(n_steps, (int, np.integer)) or not 1 <= n_steps <= total:
             raise ValueError(f"n_steps must be an integer between 1 and {total}")
         self.ddpm_model = ddpm_model
         self.encoder_model = encoder_model
-        self.device = ddpm_model.device
+        self.device = ddpm_model.alphas_cumprod.device
         self.tokenizer = StarlingTokenizer()
         self.ionic_strength = torch.tensor([[ionic_strength]], device=self.device)
-        abar = ddpm_model.alphas_cumprod.detach().to(
-            device=self.device, dtype=torch.float32
-        )
+        abar = ddpm_model.alphas_cumprod.detach().to(device=self.device, dtype=torch.float32)
         self.alpha = abar.sqrt()
         self.sigma = (1 - abar).sqrt()
         self.lambda_t = self.alpha.log() - self.sigma.log()
@@ -49,14 +50,10 @@ class DPMppSampler(nn.Module):
         if usable.size < 2 or usable[-1] <= 1:
             raise ValueError("DPM++ requires a finite, decreasing log-SNR schedule")
         top = int(usable[-1])
-        if not np.all(np.isfinite(lam[1 : top + 1])) or not np.all(
-            np.diff(lam[1 : top + 1]) < 0
-        ):
+        if not np.all(np.isfinite(lam[1 : top + 1])) or not np.all(np.diff(lam[1 : top + 1]) < 0):
             raise ValueError("DPM++ requires a finite, decreasing log-SNR schedule")
         targets = np.linspace(lam[top], lam[1], n_steps + 1)
-        raw = np.rint(
-            np.interp(targets, lam[1 : top + 1][::-1], np.arange(1, top + 1)[::-1])
-        ).astype(int)
+        raw = np.rint(np.interp(targets, lam[1 : top + 1][::-1], np.arange(1, top + 1)[::-1])).astype(int)
         self.timesteps = np.unique(raw)[::-1].tolist()
         self.n_steps = len(self.timesteps) - 1
         if self.n_steps != n_steps:
@@ -100,9 +97,7 @@ class DPMppSampler(nn.Module):
                 desc=f"DPM++ steps (batch {batch_count} of {max_batch_count})",
             )
         ):
-            ts = torch.full(
-                (num_conformations,), source, device=self.device, dtype=torch.long
-            )
+            ts = torch.full((num_conformations,), source, device=self.device, dtype=torch.long)
             noise = self.ddpm_model.model(x, ts, context, mask).float()
             clean = (x - self.sigma[source] * noise) / self.alpha[source]
             h = self.lambda_t[target] - self.lambda_t[source]
@@ -110,11 +105,6 @@ class DPMppSampler(nn.Module):
             if previous is not None and i != self.n_steps - 1:
                 ratio = (self.lambda_t[source] - self.lambda_t[previous_time]) / h
                 estimate = clean + (clean - previous) / (2 * ratio)
-            x = (
-                self.sigma[target] / self.sigma[source] * x
-                - self.alpha[target] * torch.expm1(-h) * estimate
-            )
+            x = self.sigma[target] / self.sigma[source] * x - self.alpha[target] * torch.expm1(-h) * estimate
             previous, previous_time = clean, source
-        return self.encoder_model.decode(
-            x / self.ddpm_model.latent_space_scaling_factor
-        )
+        return self.encoder_model.decode(x / self.ddpm_model.latent_space_scaling_factor)

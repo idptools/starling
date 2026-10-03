@@ -27,7 +27,6 @@ from starling.frontend.ensemble_generation import (
 )
 from starling.inference.constraints import (
     BondConstraint,
-    Constraint,
     DistanceConstraint,
     HelicityConstraint,
     MultiConstraint,
@@ -87,6 +86,7 @@ def tmpdir():
 # 1. check_positive_int
 # ===========================================================================
 
+
 class TestCheckPositiveInt:
     def test_positive_integer(self):
         assert check_positive_int(1) is True
@@ -124,6 +124,7 @@ class TestCheckPositiveInt:
 # ===========================================================================
 # 2. handle_input
 # ===========================================================================
+
 
 class TestHandleInput:
     """Tests for the input normalisation logic."""
@@ -230,6 +231,7 @@ class TestHandleInput:
 # 3. generate() validation / error paths
 # ===========================================================================
 
+
 class TestGenerateValidation:
     """Test parameter validation without actually running the model."""
 
@@ -312,6 +314,7 @@ class TestGenerateValidation:
 # ===========================================================================
 # 4. Ensemble class
 # ===========================================================================
+
 
 class TestEnsembleConstruction:
     """Tests for Ensemble object creation and validation."""
@@ -429,10 +432,11 @@ class TestEnsembleProperties:
         dms = _make_synthetic_distance_maps(10, len(seq))
         ens = Ensemble(dms, seq)
         rg1 = ens.radius_of_gyration()
-        # Build a fresh ensemble to test force_recompute without stale cache
-        ens2 = Ensemble(dms, seq)
-        rg2 = ens2.radius_of_gyration(force_recompute=True)
-        assert np.allclose(rg1, rg2)
+        ens.distance_maps()[:] *= 2
+        np.testing.assert_array_equal(ens.radius_of_gyration(), rg1)
+        rg2 = ens.radius_of_gyration(force_recompute=True)
+        np.testing.assert_allclose(rg2, 2 * rg1)
+        assert rg2.shape == rg1.shape
 
     def test_local_radius_of_gyration(self, synthetic_ensemble):
         local_rg = synthetic_ensemble.local_radius_of_gyration(2, 10)
@@ -501,15 +505,11 @@ class TestEnsembleSerialization:
         loaded = load_ensemble(path + ".starling")
         assert len(loaded) == len(synthetic_ensemble)
         assert loaded.sequence == synthetic_ensemble.sequence
-        assert np.allclose(
-            loaded.distance_maps(), synthetic_ensemble.distance_maps()
-        )
+        assert np.allclose(loaded.distance_maps(), synthetic_ensemble.distance_maps())
 
     def test_save_load_compressed_lzma(self, synthetic_ensemble, tmpdir):
         path = os.path.join(tmpdir, "test_lzma")
-        synthetic_ensemble.save(
-            path, compress=True, compression_algorithm="lzma", verbose=False
-        )
+        synthetic_ensemble.save(path, compress=True, compression_algorithm="lzma", verbose=False)
         loaded = load_ensemble(path + ".starling.xz")
         assert len(loaded) == len(synthetic_ensemble)
         assert np.allclose(
@@ -520,9 +520,7 @@ class TestEnsembleSerialization:
 
     def test_save_load_compressed_gzip(self, synthetic_ensemble, tmpdir):
         path = os.path.join(tmpdir, "test_gzip")
-        synthetic_ensemble.save(
-            path, compress=True, compression_algorithm="gzip", verbose=False
-        )
+        synthetic_ensemble.save(path, compress=True, compression_algorithm="gzip", verbose=False)
         loaded = load_ensemble(path + ".starling.gzip")
         assert len(loaded) == len(synthetic_ensemble)
         assert np.allclose(
@@ -540,9 +538,7 @@ class TestEnsembleSerialization:
             verbose=False,
         )
         loaded = load_ensemble(path + ".starling.xz")
-        assert np.allclose(
-            loaded.distance_maps(), synthetic_ensemble.distance_maps()
-        )
+        assert np.allclose(loaded.distance_maps(), synthetic_ensemble.distance_maps())
 
     def test_save_load_preserves_sequence(self, synthetic_ensemble, tmpdir):
         path = os.path.join(tmpdir, "test_seq")
@@ -550,6 +546,31 @@ class TestEnsembleSerialization:
         loaded = load_ensemble(path + ".starling")
         assert loaded.sequence == synthetic_ensemble.sequence
         assert loaded.sequence_length == synthetic_ensemble.sequence_length
+
+    @pytest.mark.parametrize("ionic_strength", [None, 0, 300])
+    @pytest.mark.parametrize("compression", [None, "gzip", "lzma"])
+    def test_save_load_preserves_ionic_strength(self, synthetic_ensemble, tmpdir, ionic_strength, compression):
+        ensemble = Ensemble(
+            synthetic_ensemble.distance_maps(),
+            synthetic_ensemble.sequence,
+            ionic_strength=ionic_strength,
+        )
+        path = os.path.join(tmpdir, "test_ionic_strength")
+        ensemble.save(
+            path,
+            verbose=False,
+            compress=compression is not None,
+            compression_algorithm=compression or "lzma",
+        )
+
+        suffix = {None: ".starling", "gzip": ".starling.gzip", "lzma": ".starling.xz"}[compression]
+        loaded = load_ensemble(path + suffix)
+
+        assert loaded.ionic_strength == ionic_strength
+        if ionic_strength is None:
+            from starling.utilities import read_starling_ensemble
+
+            assert "IONIC_STRENGTH" not in read_starling_ensemble(path + suffix)
 
 
 class TestEnsembleErrorChecking:
@@ -575,6 +596,7 @@ class TestEnsembleErrorChecking:
 # ===========================================================================
 # 5. Distance map symmetrization
 # ===========================================================================
+
 
 class TestSymmetrizeDistanceMap:
     def test_basic_symmetrization(self):
@@ -611,6 +633,7 @@ class TestSymmetrizeDistanceMap:
 # ===========================================================================
 # 6. Constraint classes
 # ===========================================================================
+
 
 class TestConstraintBase:
     """Tests for the abstract Constraint base class functionality."""
@@ -833,9 +856,7 @@ class TestMultiConstraint:
 
     def test_guidance_starts_ends_extracted(self):
         c1 = RgConstraint(target=20.0, guidance_start=0.1, guidance_end=0.8)
-        c2 = DistanceConstraint(
-            resid1=0, resid2=5, target=10.0, guidance_start=0.2, guidance_end=0.9
-        )
+        c2 = DistanceConstraint(resid1=0, resid2=5, target=10.0, guidance_start=0.2, guidance_end=0.9)
         mc = MultiConstraint([c1, c2])
         assert mc.guidance_starts == [0.1, 0.2]
         assert mc.guidance_ends == [0.8, 0.9]
@@ -844,6 +865,7 @@ class TestMultiConstraint:
 # ===========================================================================
 # 7. Config sanity checks
 # ===========================================================================
+
 
 class TestConfigs:
     def test_defaults_exist(self):
@@ -865,6 +887,7 @@ class TestConfigs:
 # ===========================================================================
 # 8. Integration tests (require model weights, marked slow)
 # ===========================================================================
+
 
 @pytest.mark.slow
 class TestIntegrationGenerate:
@@ -1072,9 +1095,7 @@ class TestIntegrationGenerate:
         )
         assert len(E) == 5
 
-    @pytest.mark.skipif(
-        not torch.backends.mps.is_available(), reason="MPS not available"
-    )
+    @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
     def test_generate_device_mps(self):
         E = generate(
             SHORT_SEQ,
@@ -1088,9 +1109,7 @@ class TestIntegrationGenerate:
         )
         assert len(E) == 5
 
-    @pytest.mark.skipif(
-        not torch.cuda.is_available(), reason="CUDA not available"
-    )
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_generate_device_cuda(self):
         E = generate(
             SHORT_SEQ,
@@ -1128,6 +1147,7 @@ class TestIntegrationGenerate:
             return_data=False,
             output_directory=tmpdir,
         )
+        assert result is None
         # Should return None when return_data=False
         # but files should exist
         files = os.listdir(tmpdir)

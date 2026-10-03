@@ -9,6 +9,7 @@ to have the package installed transitively. This suite guards that boundary.
 """
 
 import ast
+from importlib import import_module
 import pathlib
 import re
 import subprocess
@@ -31,11 +32,11 @@ DIST_TO_IMPORT = {
 
 def _read_pyproject():
     if not PYPROJECT.is_file():
-        pytest.skip("pyproject.toml not available (installed package, not a checkout)")
+        raise FileNotFoundError(PYPROJECT)
     try:
-        import tomllib
+        tomllib = import_module("tomllib")
     except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-        pytest.skip("tomllib not available")
+        tomllib = import_module("tomli")
     with open(PYPROJECT, "rb") as fh:
         return tomllib.load(fh)
 
@@ -52,6 +53,8 @@ def declared_import_names():
 
 def entry_point_modules():
     """Return the module portion of every ``[project.scripts]`` entry point."""
+    if not PYPROJECT.is_file():
+        return []
     pyproject = _read_pyproject()
     scripts = pyproject["project"].get("scripts", {})
     return sorted({target.split(":")[0] for target in scripts.values()})
@@ -77,9 +80,7 @@ def top_level_third_party_imports(path):
             found.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
             found.add(node.module.split(".")[0])
-    return {
-        m for m in found if m not in sys.stdlib_module_names and m != "starling" and m
-    }
+    return {m for m in found if m not in sys.stdlib_module_names and m != "starling" and m}
 
 
 def extra_import_names(extra):
@@ -106,7 +107,7 @@ def test_entry_point_only_imports_declared_dependencies(module_name):
     """Every entry-point module must import only declared dependencies."""
     path = module_path(module_name)
     if path is None:
-        pytest.skip(f"{module_name} not found in checkout")
+        raise pytest.skip.Exception(f"{module_name} not found in checkout")
     allowed = declared_import_names()
     extra = ENTRY_POINT_EXTRAS.get(module_name)
     if extra is not None:
@@ -123,7 +124,7 @@ def test_entry_point_only_imports_declared_dependencies(module_name):
 
 def test_main_cli_imports_without_psutil():
     """
-    Regression test: ``starling`` must import without psutil installed.
+    CLI help must work without psutil or loading the model-training stack.
 
     ``starling_main_cli`` carried an unused ``import psutil`` while psutil was
     never a declared dependency, so the ``starling`` command failed at startup
@@ -138,12 +139,13 @@ def test_main_cli_imports_without_psutil():
         "        raise ModuleNotFoundError(\"No module named 'psutil'\")\n"
         "    return _real(name, *a, **k)\n"
         "builtins.__import__ = _fake\n"
-        "importlib.import_module('starling.scripts.starling_main_cli')\n"
+        "cli = importlib.import_module('starling.scripts.starling_main_cli')\n"
+        "assert 'pytorch_lightning' not in sys.modules\n"
+        "sys.argv = ['starling', '--help']\n"
+        "cli.main()\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True
-    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, (
-        "starling.scripts.starling_main_cli failed to import without psutil:\n"
-        + result.stderr
+        "starling.scripts.starling_main_cli failed to import without psutil:\n" + result.stderr
     )
+    assert "--sampler" in result.stdout

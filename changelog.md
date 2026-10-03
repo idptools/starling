@@ -16,6 +16,15 @@ This file contains our changelog for STARLING
 
 ### Bug Fixes
 
+- **CLI startup no longer loads the model-training stack** (`starling/inference/model_loading.py`, `starling/samplers`).
+  Lightning model imports are deferred until checkpoint loading. CLI help and ensemble utilities no longer import optional text-metric dependencies or require `psutil` at startup; checkpoint loading and sampler equations are unchanged.
+
+- **Ensembles retain ionic strength for later relaxation** (`starling/structure/ensemble.py`, `starling/minimizer/relax.py`).
+  Generated and saved ensembles record ionic strength. Later relaxation uses an explicit override, the recorded value, or 150 mM for legacy files without this metadata. Zero ionic strength is preserved.
+
+- **Save-only generation returns `None`** (`starling/frontend/ensemble_generation.py`).
+  `generate(return_data=False)` now follows its documented return contract instead of returning an empty dictionary. Ensemble files are still saved normally.
+
 - **Inference models were left in training mode** (`starling/inference/model_loading.py`).
   Loaded diffusion and VAE models now enter evaluation mode. This disables the sequence encoder's random 20% ionic-strength masking during generation. Predictions change relative to the incorrect training-mode behavior; model weights and sampler equations are unchanged.
 

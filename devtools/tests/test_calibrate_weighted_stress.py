@@ -13,6 +13,7 @@ PATH = Path(__file__).parents[1] / "scripts" / "calibrate_weighted_stress.py"
 
 def module():
     spec = importlib.util.spec_from_file_location("calibrate", PATH)
+    assert spec is not None and spec.loader is not None
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result

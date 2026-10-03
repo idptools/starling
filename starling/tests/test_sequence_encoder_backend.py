@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from starling.inference.generation import sequence_encoder_backend
+from starling.data.tokenizer import StarlingTokenizer
 
 
 class _DummyDiffusion:
@@ -10,15 +11,10 @@ class _DummyDiffusion:
 
     def sequence2labels(self, sequences, sequence_mask, ionic_strength):  # noqa: D401
         """Return predictable embeddings with shape (B, L, D)."""
-        # sequences: (B, Lmax)
-        B, Lmax = sequences.shape
-        # Create position embeddings: value = position index
-        pos = (
-            torch.arange(Lmax, device=sequences.device)
-            .view(1, Lmax, 1)
-            .repeat(B, 1, self.emb_dim)
-        )
-        return pos.float()
+        tokens = sequences.float()
+        context = (tokens * sequence_mask).sum(1) / sequence_mask.sum(1)
+        values = (tokens + context[:, None] + ionic_strength) * sequence_mask
+        return values[..., None].expand(-1, -1, self.emb_dim)
 
 
 class _DummyModelManager:
@@ -35,32 +31,40 @@ def dummy_manager():
     return _DummyModelManager(emb_dim=7)
 
 
-def test_sequence_encoder_backend_basic(dummy_manager):
+def _expected_embedding(tokens, salt=150):
+    tokens = torch.tensor(tokens, dtype=torch.float32)
+    return (tokens + tokens.mean() + salt)[:, None].expand(-1, 7)
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+@pytest.mark.parametrize("bucket", [False, True])
+def test_sequence_encoder_backend_basic(dummy_manager, aggregate, bucket):
     sequences = {
         "seq1": "ACDE",  # len 4
         "seq2": "AC",  # len 2
         "seq3": "ACDEF",  # len 5 (longest)
         "seq4": "A",  # len 1
+        "same_length": "KLMN",
     }
     out = sequence_encoder_backend(
         sequence_dict=sequences,
         device="cpu",
         batch_size=2,
-        ionic_strength=150,
+        ionic_strength=300,
         output_directory=None,
         model_manager=dummy_manager,
-        aggregate=False,
+        aggregate=aggregate,
+        bucket=bucket,
+        bucket_size=2,
     )
     # Should return dict with same keys
     assert set(out.keys()) == set(sequences.keys())
     # Each embedding trimmed to sequence length, last dim = emb_dim
     for name, seq in sequences.items():
-        emb = out[name]
-        assert emb.shape == (len(seq), 7)
-        # Check that positions are increasing along first axis for dim 0
-        if len(seq) > 1:
-            # emb is a torch.Tensor; position encoding placed in all dims
-            assert torch.equal(emb[:, 0], torch.arange(len(seq)))
+        expected = _expected_embedding(StarlingTokenizer().encode(seq), salt=300)
+        if aggregate:
+            expected = expected.mean(0)
+        torch.testing.assert_close(out[name], expected)
 
 
 def test_sequence_encoder_backend_remainder_batch(dummy_manager):
@@ -77,7 +81,8 @@ def test_sequence_encoder_backend_remainder_batch(dummy_manager):
     )
     assert set(out.keys()) == set(sequences.keys())
     for k, v in out.items():
-        assert v.shape == (len(sequences[k]), 7)
+        expected = _expected_embedding(StarlingTokenizer().encode(sequences[k]))
+        torch.testing.assert_close(v, expected)
 
 
 def test_sequence_encoder_backend_saves_files(tmp_path, dummy_manager):
@@ -98,14 +103,14 @@ def test_sequence_encoder_backend_saves_files(tmp_path, dummy_manager):
         fpath = tmp_path / f"{name}.pt"
         assert fpath.exists()
         tensor = torch.load(fpath)
-        assert tensor.shape == (len(seq), 7)
+        torch.testing.assert_close(tensor, _expected_embedding(StarlingTokenizer().encode(seq)))
 
 
 def test_sequence_encoder_backend_pretokenized(dummy_manager):
     # Create pretokenized integer lists (simulate external tokenization)
     sequences = {
         "x": [1, 2, 3, 4],
-        "y": [1, 2],
+        "y": [20, 19, 18, 17],
         "z": [1],
     }
     out = sequence_encoder_backend(
@@ -120,5 +125,4 @@ def test_sequence_encoder_backend_pretokenized(dummy_manager):
     )
     assert set(out.keys()) == set(sequences.keys())
     for name, toks in sequences.items():
-        emb = out[name]
-        assert emb.shape[0] == len(toks)
+        torch.testing.assert_close(out[name], _expected_embedding(toks))

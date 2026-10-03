@@ -12,7 +12,6 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-# from finches.forcefields.mpipi import Mpipi_model, harmonic
 from tabulate import tabulate
 from tqdm import tqdm
 
@@ -61,25 +60,6 @@ def symmetrize(dm):
     dm = np.array([np.triu(m, k=1) + np.triu(m, k=1).T for m in dm])
 
     return dm
-
-
-def finches_potential_energy(data):
-    mpipi = Mpipi_model()
-    interaction_energy = 0
-    dm = data[0]
-    seq = data[1]
-    bonds = np.diagonal(dm, offset=1)
-    harmonic_energy = harmonic(bonds).sum()
-    sequence = list(seq)
-    for num, residue in enumerate(sequence):
-        for next_residue in range(2, len(sequence[num:])):
-            residue_interaction = mpipi.compute_full_Mpipi(
-                residue,
-                sequence[num + next_residue],
-                dm[num, num + next_residue],
-            )
-            interaction_energy += residue_interaction
-    return interaction_energy, harmonic_energy, interaction_energy + harmonic_energy
 
 
 # def load_hdf5_compressed(file_path, keys_to_load=None):

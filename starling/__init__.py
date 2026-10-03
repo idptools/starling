@@ -2,6 +2,7 @@
 
 # Add imports here
 import starling.configs
+from typing import cast
 
 # Import submodules to make them accessible as part of the top-level package
 from starling.data import *
@@ -62,7 +63,7 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
 
     # Update any provided options
     for key, value in torch_compile_kwargs.items():
-        configs.TORCH_COMPILATION["options"][key] = value
+        cast(dict[str, object], configs.TORCH_COMPILATION["options"])[key] = value
 
     # Clear cached models to ensure settings take effect
     if hasattr(model_loading, "model_manager"):

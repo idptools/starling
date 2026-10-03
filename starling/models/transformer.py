@@ -7,9 +7,8 @@ from torch import nn
 
 from starling.data.positional_encodings import (
     PositionalEncoding1D,
-    PositionalEncoding2D,
 )
-from starling.models.attention import CrossAttention, MultiHeadAttention, SelfAttention
+from starling.models.attention import MultiHeadAttention
 
 
 class SinusoidalPosEmb(nn.Module):
@@ -190,7 +189,6 @@ class FeedForward(nn.Module):
         x = self.net(x)
         return x
 
-
 class TransformerEncoder(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int):
         """
@@ -337,48 +335,3 @@ class DiTBlock(nn.Module):
         x_normed = self.norm3(x)
         x = x + self.feed_forward(x_normed)
         return x
-
-
-class SpatialTransformer(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, context_dim: int):
-        """
-        Spatial transformer network. The spatial transformer network consists of a transformer encoder
-        and a transformer decoder. The transformer encoder is used to process the features of the
-        context data (in our case protein sequences). The transformer decoder is used to capture the relationships
-        between the input data and the context data. The spatial transformer network is used to generate
-        the latent space representation of the input data.
-
-        Parameters
-        ----------
-        embed_dim : int
-            The input dimension of the data. Used to initialize the transformer encoder and decoder.
-        num_heads : int
-            The number of heads in the multi-head attention layer. Used to initialize the transformer encoder and decoder.
-        context_dim : int
-            The dimension of the context data. Used to initialize the transformer encoder and decoder.
-        """
-        super().__init__()
-
-        # Add positional encodings to the latent space representation of images (e.i. distance maps)
-        self.image_positional_encodings = PositionalEncoding2D(embed_dim)
-        self.group_norm = nn.GroupNorm(num_groups=32, num_channels=embed_dim)
-        self.conv_in = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
-        # self.transformer_block = TransformerDecoder(embed_dim, num_heads, context_dim)
-        self.conv_out = nn.Conv2d(embed_dim, embed_dim, kernel_size=1)
-
-    def forward(self, x: torch.Tensor, context, mask) -> torch.Tensor:
-        # Save the input for the residual connection
-        x_in = x
-
-        # Add positional encodings to the latent space representation of images
-        x = self.image_positional_encodings(x)
-        x = self.group_norm(x)
-        x = self.conv_in(x)
-
-        # Transformer block to capture the relationships between the input data and the context data
-        x = self.transformer_block(x, context, mask)
-
-        x = self.conv_out(x)
-
-        # Residual connection
-        return x + x_in

@@ -1,6 +1,4 @@
 import math
-from typing import List, Tuple
-
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -22,7 +20,7 @@ class KLDWeightScheduler:
     def __init__(
         self,
         max_weight: float,
-        warmup_fraction: float = None,
+        warmup_fraction: float | None = None,
         scheduler_type="cyclical",
     ):
         self._max_weight = max_weight
@@ -99,8 +97,8 @@ class VAE(pl.LightningModule):
         optimizer: str = "SGD",
         KLD_warmup_fraction: float = 0,
         KLD_scheduler_type: str = "cyclical",
-        compile_mode: str = "max-autotune",
-        weights_type: str = None,  # Here for compatibility, not used in VAE
+        compile_mode: str | None = "max-autotune",
+        weights_type: str | None = None,  # Here for compatibility, not used in VAE
     ) -> None:
         """
         The variational autoencoder (VAE) model that is used to learn the latent space of
@@ -153,17 +151,6 @@ class VAE(pl.LightningModule):
 
         self.save_hyperparameters()
 
-        # Set up the ResNet Encoder and Decoder combinations
-        resnets = {
-            "Resnet18": {
-                "encoder": vae_components.Resnet18_Encoder,
-                "decoder": vae_components.Resnet18_Decoder,
-            },
-            "Resnet34": {
-                "encoder": vae_components.Resnet34_Encoder,
-                "decoder": vae_components.Resnet34_Decoder,
-            },
-        }
         self.compile_mode = compile_mode
 
         self.optimizer = optimizer
@@ -200,11 +187,20 @@ class VAE(pl.LightningModule):
         self.monitor = "epoch_val_loss"
 
         # Initialize encoder
-        self.encoder = resnets[model_type]["encoder"](
-            in_channels=in_channels,  # Use the parameter directly
-            base=base,
-            norm=norm,
-        )
+        if model_type == "Resnet18":
+            self.encoder = vae_components.Resnet18_Encoder(
+                in_channels=in_channels,
+                base=base,
+                norm=norm,
+            )
+        elif model_type == "Resnet34":
+            self.encoder = vae_components.Resnet34_Encoder(
+                in_channels=in_channels,
+                base=base,
+                norm=norm,
+            )
+        else:
+            raise KeyError(model_type)
 
         # Calculate network dimensions based on ResNet architecture
         num_stages = 4  # Standard in ResNets
@@ -237,26 +233,34 @@ class VAE(pl.LightningModule):
         # Decoder
         decoder_channels = in_channels
 
-        self.decoder = resnets[model_type]["decoder"](
-            out_channels=decoder_channels,
-            dimension=dimension,
-            base=base,
-            norm=norm,
-        )
+        if model_type == "Resnet18":
+            self.decoder = vae_components.Resnet18_Decoder(
+                out_channels=decoder_channels,
+                dimension=dimension,
+                base=base,
+                norm=norm,
+            )
+        else:
+            self.decoder = vae_components.Resnet34_Decoder(
+                out_channels=decoder_channels,
+                dimension=dimension,
+                base=base,
+                norm=norm,
+            )
 
         # Params to learn for reconstruction loss
         if self.loss_type == "nll":
             self.log_std = nn.Parameter(torch.zeros(dimension, dimension))
 
-    def setup(self, stage=None):
+    def setup(self, stage: str | None = None) -> None:
         """Set up the model, including optional compilation."""
         if stage == "fit" and self.compile_mode is not None:
             # Compile the forward components separately for better optimization
-            self.encode = torch.compile(self.encode, mode=self.compile_mode)
-            self.decode = torch.compile(self.decode, mode=self.compile_mode)
-            self.forward = torch.compile(self.forward, mode=self.compile_mode)
+            setattr(self, "encode", torch.compile(self.encode, mode=self.compile_mode))
+            setattr(self, "decode", torch.compile(self.decode, mode=self.compile_mode))
+            setattr(self, "forward", torch.compile(self.forward, mode=self.compile_mode))
 
-    def encode(self, data: torch.Tensor) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    def encode(self, data: torch.Tensor) -> DiagonalGaussianDistribution:
         """
         Takes the data and encodes it into the latent space,
         by returning the mean and log variance
@@ -268,8 +272,8 @@ class VAE(pl.LightningModule):
 
         Returns
         -------
-        List[Tuple[torch.Tensor, torch.Tensor]]
-            Return the mean and log variance of the latent space
+        DiagonalGaussianDistribution
+            Distribution over the latent space.
         """
 
         data = self.encoder(data)
@@ -364,7 +368,7 @@ class VAE(pl.LightningModule):
         data: torch.Tensor,
         mu: torch.Tensor,
         logvar: torch.Tensor,
-    ) -> dict:
+    ) -> dict[str, torch.Tensor]:
         """
         Calculates the loss of the VAE, using the sum between the KLD loss
         of the latent space to N(0, I) and either mean squared error
@@ -446,7 +450,7 @@ class VAE(pl.LightningModule):
     def forward(
         self,
         data: torch.Tensor,
-    ) -> List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, DiagonalGaussianDistribution]:
         """
         Forward pass of the VAE
 
@@ -457,8 +461,8 @@ class VAE(pl.LightningModule):
 
         Returns
         -------
-        List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]
-            Returns the reconstructed data, the mean of the latent space, and the log variance
+        tuple[torch.Tensor, DiagonalGaussianDistribution]
+            Reconstructed data and the latent distribution.
         """
 
         moments = self.encode(data)
@@ -469,13 +473,13 @@ class VAE(pl.LightningModule):
 
         return data_reconstructed, moments
 
-    def training_step(self, batch: dict, batch_idx) -> torch.Tensor:
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """
         Training step of the VAE compatible with Pytorch Lightning
 
         Parameters
         ----------
-        batch : dict
+        batch : torch.Tensor
             A batch of data read in using the DataLoader
         batch_idx : _type_
             Batch number the model is on during training
@@ -536,7 +540,7 @@ class VAE(pl.LightningModule):
         # Reset metrics for next epoch
         self._reset_epoch_metrics()
 
-    def validation_step(self, batch: torch.Tensor, batch_idx) -> torch.Tensor:
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """
         Validation step of the VAE compatible with Pytorch Lightning. This is
         called after each epoch.
@@ -654,14 +658,16 @@ class VAE(pl.LightningModule):
                 "scheduler": OneCycleLR(
                     optimizer,
                     max_lr=0.01,
-                    total_steps=self.trainer.estimated_stepping_batches,
+                    total_steps=int(self.trainer.estimated_stepping_batches),
                 ),
                 "monitor": self.monitor,
                 "interval": "step",
             }
         elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
             num_epochs = self.trainer.max_epochs
-            total_steps = self.trainer.estimated_stepping_batches
+            if num_epochs is None:
+                raise RuntimeError("max_epochs must be set for this scheduler")
+            total_steps = int(self.trainer.estimated_stepping_batches)
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
             warmup_steps = int(steps_per_epoch * num_epochs * 0.01)
@@ -687,6 +693,8 @@ class VAE(pl.LightningModule):
             }
         elif self.config_scheduler == "CosineAnnealingLR":
             num_epochs = self.trainer.max_epochs
+            if num_epochs is None:
+                raise RuntimeError("max_epochs must be set for this scheduler")
             lr_scheduler = {
                 "scheduler": CosineAnnealingLR(
                     optimizer,
@@ -729,16 +737,20 @@ class VAE(pl.LightningModule):
 
         return symmetrized_arrays
 
-    def on_train_start(self):
+    def on_train_start(self) -> None:
         # Calculate correct training steps (not including validation)
-        steps_per_epoch = len(self.trainer.train_dataloader)
-        total_training_steps = steps_per_epoch * self.trainer.max_epochs
+        train_dataloader = self.trainer.train_dataloader
+        max_epochs = self.trainer.max_epochs
+        if train_dataloader is None or max_epochs is None:
+            raise RuntimeError("Training data and max_epochs must be set")
+        steps_per_epoch = len(train_dataloader)
+        total_training_steps = steps_per_epoch * max_epochs
         self.kld_scheduler.configure(total_training_steps)
 
     def _reset_epoch_metrics(self) -> None:
         """Reset all epoch-level metric accumulators to zero."""
 
-        self.KLD_step_losses = 0
-        self.recon_step_losses = 0
-        self.total_train_step_losses = 0
+        self.KLD_step_losses = 0.0
+        self.recon_step_losses = 0.0
+        self.total_train_step_losses = 0.0
         self.num_batches = 0

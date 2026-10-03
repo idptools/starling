@@ -1,5 +1,6 @@
-import sys
-from typing import Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 import torch
@@ -8,19 +9,18 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from starling.data.tokenizer import StarlingTokenizer
-from starling.inference.constraints import (
-    ConstraintLogger,
-    DistanceConstraint,
-    HelicityConstraint,
-    RgConstraint,
-)
+from starling.inference.constraints import ConstraintLogger
+
+if TYPE_CHECKING:
+    from starling.models.diffusion import DiffusionModel
+    from starling.models.vae import VAE
 
 
 class DDIMSampler(nn.Module):
     def __init__(
         self,
-        ddpm_model,
-        encoder_model,
+        ddpm_model: DiffusionModel,
+        encoder_model: VAE,
         n_steps: int,
         ionic_strength: float = 150,
         ddim_discretize: str = "uniform",
@@ -62,9 +62,7 @@ class DDIMSampler(nn.Module):
             or not isinstance(n_steps, (int, np.integer))
             or not 1 <= n_steps <= ddpm_model.num_timesteps
         ):
-            raise ValueError(
-                f"n_steps must be an integer between 1 and {ddpm_model.num_timesteps}"
-            )
+            raise ValueError(f"n_steps must be an integer between 1 and {ddpm_model.num_timesteps}")
         if not 0.0 <= ddim_eta <= 1.0:
             raise ValueError("ddim_eta must be between 0 and 1")
         self.ddpm_model = ddpm_model
@@ -75,18 +73,14 @@ class DDIMSampler(nn.Module):
         self.tokenizer = StarlingTokenizer()
 
         self.device = self.ddpm_model.device
-        self.ionic_strength = torch.tensor(
-            [ionic_strength], device=self.device
-        ).unsqueeze(0)
+        self.ionic_strength = torch.tensor([ionic_strength], device=self.device).unsqueeze(0)
 
         # Ways to discretize the generative process
         if ddim_discretize == "uniform":
             c = self.n_steps // n_steps
             self.ddim_time_steps = np.asarray(list(range(0, self.n_steps - 1, c))) + 1
         elif ddim_discretize == "quad":
-            self.ddim_time_steps = (
-                (np.linspace(0, np.sqrt(self.n_steps * 0.8), n_steps)) ** 2
-            ).astype(int) + 1
+            self.ddim_time_steps = ((np.linspace(0, np.sqrt(self.n_steps * 0.8), n_steps)) ** 2).astype(int) + 1
         else:
             raise NotImplementedError(ddim_discretize)
 
@@ -103,22 +97,16 @@ class DDIMSampler(nn.Module):
                 self.ddim_time_steps = np.append(safe, cap)
             self.ddim_alpha = alpha_bar[self.ddim_time_steps].clone().to(torch.float32)
             self.ddim_alpha_sqrt = torch.sqrt(self.ddim_alpha)
-            self.ddim_alpha_prev = torch.cat(
-                [alpha_bar[0:1], alpha_bar[self.ddim_time_steps[:-1]]]
-            )
+            self.ddim_alpha_prev = torch.cat([alpha_bar[0:1], alpha_bar[self.ddim_time_steps[:-1]]])
             self.ddim_sigma = (
                 ddim_eta
-                * (
-                    (1 - self.ddim_alpha_prev)
-                    / (1 - self.ddim_alpha)
-                    * (1 - self.ddim_alpha / self.ddim_alpha_prev)
-                )
+                * ((1 - self.ddim_alpha_prev) / (1 - self.ddim_alpha) * (1 - self.ddim_alpha / self.ddim_alpha_prev))
                 ** 0.5
             )
 
             self.ddim_sqrt_one_minus_alpha = (1.0 - self.ddim_alpha) ** 0.5
 
-    def generate_labels(self, labels: str) -> torch.Tensor:
+    def generate_labels(self, labels: str) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Generate labels to condition the generative process on.
 
@@ -133,20 +121,18 @@ class DDIMSampler(nn.Module):
             The labels to condition the generative process on.
         """
 
-        labels = torch.tensor(self.tokenizer.encode(labels), device=self.device)
-        labels = rearrange(labels, "f -> 1 f")
-        attention_mask = torch.ones_like(labels, device=self.device, dtype=torch.bool)
-        labels = self.ddpm_model.sequence2labels(
-            labels, attention_mask, self.ionic_strength
-        )
+        tokens = torch.tensor(self.tokenizer.encode(labels), device=self.device)
+        tokens = rearrange(tokens, "f -> 1 f")
+        attention_mask = torch.ones_like(tokens, device=self.device, dtype=torch.bool)
+        context = self.ddpm_model.sequence2labels(tokens, attention_mask, self.ionic_strength)
 
-        return labels, attention_mask
+        return context, attention_mask
 
     @torch.no_grad()
     def sample(
         self,
         num_conformations: int,
-        labels: torch.Tensor,
+        labels: str,
         repeat_noise: bool = False,
         temperature: float = 1.0,
         show_per_step_progress_bar: bool = True,
@@ -197,7 +183,7 @@ class DDIMSampler(nn.Module):
         time_steps = np.flip(self.ddim_time_steps)
 
         # Get the labels to condition the generative process on
-        labels, attention_mask = self.generate_labels(
+        context, attention_mask = self.generate_labels(
             labels,
         )
 
@@ -234,7 +220,7 @@ class DDIMSampler(nn.Module):
             # Sample the generative process
             x, *_ = self.p_sample(
                 x=x,
-                c=labels,
+                c=context,
                 t=ts,
                 attention_mask=attention_mask,
                 step=step,

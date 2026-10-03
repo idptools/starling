@@ -9,7 +9,9 @@ from starling.models.normalization import RMSNorm
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, embed_dim: int, num_heads: int, context_dim: int = None):
+    def __init__(
+        self, embed_dim: int, num_heads: int, context_dim: int | None = None
+    ):
         """
         Multi-head attention module supporting both self- and cross-attention.
 

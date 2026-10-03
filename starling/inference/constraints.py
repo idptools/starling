@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 import math
 from abc import ABC
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import torch
 from einops import rearrange, reduce
 from tqdm.auto import tqdm
 
 from starling.utilities import helix_dm
+
+if TYPE_CHECKING:
+    from starling.models.vae import VAE
 
 
 def symmetrize_distance_maps(dist_maps: torch.Tensor) -> torch.Tensor:
@@ -64,10 +69,10 @@ class Constraint(ABC):
         """
 
         # These will be set by the sampler
-        self.encoder_model = None
-        self.latent_space_scaling_factor = None
-        self.n_steps = None
-        self.device = None
+        self.encoder_model: VAE | None = None
+        self.latent_space_scaling_factor: torch.Tensor | None = None
+        self.n_steps: int | None = None
+        self.device: torch.device | None = None
 
         # User-controlled parameters
         self.constraint_weight = constraint_weight
@@ -82,8 +87,12 @@ class Constraint(ABC):
         pass  # Implemented by subclasses
 
     def initialize(
-        self, encoder_model, latent_space_scaling_factor, n_steps, sequence_length
-    ):
+        self,
+        encoder_model: VAE,
+        latent_space_scaling_factor: torch.Tensor,
+        n_steps: int,
+        sequence_length: int,
+    ) -> "Constraint":
         """Called by the sampler to set model parameters."""
         self.encoder_model = encoder_model
         self.latent_space_scaling_factor = latent_space_scaling_factor
@@ -93,7 +102,12 @@ class Constraint(ABC):
         self._setup_constraint()
         return self
 
-    def should_apply_guidance(self, timestep, total_steps):
+    def _require_n_steps(self) -> int:
+        if self.n_steps is None:
+            raise RuntimeError("Constraint must be initialized by a sampler first")
+        return self.n_steps
+
+    def should_apply_guidance(self, timestep: int, total_steps: int) -> bool:
         """
         Check if guidance should be applied at the current timestep.
 
@@ -150,11 +164,9 @@ class Constraint(ABC):
         float
             Guidance strength factor (peaks in the middle of sampling)
         """
-        normalized_t = timestep / self.n_steps
+        normalized_t = timestep / self._require_n_steps()
         # Peak at 60% through the sampling process
-        return math.sin(normalized_t * math.pi) * math.exp(
-            -((normalized_t - 0.6) ** 2) / 0.1
-        )
+        return math.sin(normalized_t * math.pi) * math.exp(-((normalized_t - 0.6) ** 2) / 0.1)
 
     def get_adaptive_clip_threshold(self, timestep):
         """
@@ -178,13 +190,11 @@ class Constraint(ABC):
         min_threshold = 1.0  # Minimum threshold at end
 
         # Cosine decay from max_threshold to min_threshold
-        fraction_complete = 1 - (timestep / self.n_steps)
+        fraction_complete = 1 - (timestep / self._require_n_steps())
         cosine_factor = math.cos(fraction_complete * math.pi / 2)
         return min_threshold + cosine_factor**2 * (max_threshold - min_threshold)
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Compute the loss for this constraint without applying gradients.
 
@@ -203,8 +213,12 @@ class Constraint(ABC):
     def apply(self, latents: torch.Tensor, timestep: int, logger=None) -> torch.Tensor:
         """Apply the constraint to the given latents."""
 
+        n_steps = self._require_n_steps()
+        if self.encoder_model is None or self.latent_space_scaling_factor is None:
+            raise RuntimeError("Constraint must be initialized by a sampler first")
+
         # Check if the constraint should be applied
-        if not self.should_apply_guidance(timestep, self.n_steps):
+        if not self.should_apply_guidance(timestep, n_steps):
             return latents
 
         with torch.inference_mode(False):
@@ -273,12 +287,13 @@ class Constraint(ABC):
 
     def get_time_scale(self, timestep: int) -> float:
         """Get the time-dependent scaling factor."""
+        n_steps = self._require_n_steps()
         if self.schedule == "cosine":
-            return self.cosine_weight(timestep, total_steps=self.n_steps)
+            return self.cosine_weight(timestep, total_steps=n_steps)
         elif self.schedule == "bell_shaped":
             return self.bell_shaped_schedule(timestep)
         else:
-            return 1.0 - (timestep / self.n_steps)
+            return 1.0 - (timestep / n_steps)
 
 
 class BondConstraint(Constraint):
@@ -288,9 +303,7 @@ class BondConstraint(Constraint):
         self.tolerance = tolerance
         self.force_constant = force_constant
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Compute bond loss based on distance maps.
         This loss penalizes deviations from the ideal bond length of 3.81 Å
@@ -307,9 +320,7 @@ class BondConstraint(Constraint):
             Per-batch loss and mean loss
         """
 
-        distance_maps = distance_maps[
-            :, :, : self.sequence_length, : self.sequence_length
-        ].squeeze()
+        distance_maps = distance_maps[:, :, : self.sequence_length, : self.sequence_length].squeeze()
 
         # Take the one off diagonal
         bonds = torch.diagonal(distance_maps, offset=1, dim1=1, dim2=2)
@@ -332,9 +343,7 @@ class StericClashConstraint(Constraint):
         self.steric_clash_definition = steric_clash_definition
         self.force_constant = force_constant
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Compute steric clash loss based on distance maps.
         This loss penalizes distances below a certain threshold (default 5.0 Å)
@@ -351,15 +360,11 @@ class StericClashConstraint(Constraint):
             Per-batch loss and mean loss
         """
         mask = torch.triu(
-            torch.ones(
-                self.sequence_length, self.sequence_length, device=distance_maps.device
-            ),
+            torch.ones(self.sequence_length, self.sequence_length, device=distance_maps.device),
             diagonal=2,
         )
 
-        distance_maps = distance_maps[
-            :, :, : self.sequence_length, : self.sequence_length
-        ]
+        distance_maps = distance_maps[:, :, : self.sequence_length, : self.sequence_length]
 
         # Calculate the deviation from steric_clash_definition (only when distances are smaller)
         deviation = torch.relu(self.steric_clash_definition - distance_maps)
@@ -379,9 +384,7 @@ class StericClashConstraint(Constraint):
 
 
 class HelicityConstraint(Constraint):
-    def __init__(
-        self, resid_start, resid_end, tolerance=0.0, force_constant=2.0, **kwargs
-    ):
+    def __init__(self, resid_start, resid_end, tolerance=0.0, force_constant=2.0, **kwargs):
         super().__init__(**kwargs)
 
         self.resid_start = resid_start
@@ -396,29 +399,27 @@ class HelicityConstraint(Constraint):
 
     def _setup_constraint(self):
         """Set up device-specific tensors."""
-        if not self.encoder_model:
+        if self.encoder_model is None:
             return
+        if self.device is None:
+            raise RuntimeError("Constraint device is unavailable before initialization")
 
         # Create helix reference
         self.helix_ref = torch.from_numpy(helix_dm(L=384)).to(self.device)
 
         # Create mask
         self.mask = torch.zeros((384, 384), device=self.device)
-        self.mask[
-            self.resid_start : self.resid_end, self.resid_start : self.resid_end
-        ] = torch.triu(
-            torch.ones(
-                (self.resid_end - self.resid_start, self.resid_end - self.resid_start)
-            ),
+        self.mask[self.resid_start : self.resid_end, self.resid_start : self.resid_end] = torch.triu(
+            torch.ones((self.resid_end - self.resid_start, self.resid_end - self.resid_start)),
             diagonal=1,
         )
 
         # Create weights
         self.weights = 1.0 / (self.helix_ref + 1e-2)
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.helix_ref is None or self.mask is None:
+            raise RuntimeError("HelicityConstraint must be initialized first")
         # Calculate deviation from reference helix
         deviation = torch.abs(distance_maps - self.helix_ref)
 
@@ -428,18 +429,14 @@ class HelicityConstraint(Constraint):
         # Calculate harmonic potential for the excess deviation
         region_loss = 0.5 * self.force_constant * (excess**2) * self.mask
         normalization_factor = self.mask.sum()
-        per_batch_loss = (
-            reduce(region_loss, "b c h w -> b", "sum") / normalization_factor
-        )
+        per_batch_loss = reduce(region_loss, "b c h w -> b", "sum") / normalization_factor
 
         # Return per-batch and mean loss
         return per_batch_loss, per_batch_loss.mean()
 
 
 class DistanceConstraint(Constraint):
-    def __init__(
-        self, resid1, resid2, target, tolerance=0.0, force_constant=2.0, **kwargs
-    ):
+    def __init__(self, resid1, resid2, target, tolerance=0.0, force_constant=2.0, **kwargs):
         """Create constraint for distance between two residues."""
         super().__init__(**kwargs)
         self.resid1 = resid1
@@ -448,9 +445,7 @@ class DistanceConstraint(Constraint):
         self.tolerance = tolerance
         self.force_constant = force_constant
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # Extract distances between specified residues
         distances = distance_maps[:, :, self.resid1, self.resid2]
 
@@ -504,9 +499,7 @@ class RgConstraint(Constraint):
             Calculated Rg values for each protein in the batch
         """
         sequence_length = torch.tensor(self.sequence_length, device=self.device)
-        distance_maps = distance_maps[
-            :, :, : self.sequence_length, : self.sequence_length
-        ]
+        distance_maps = distance_maps[:, :, : self.sequence_length, : self.sequence_length]
 
         squared_distances = torch.square(distance_maps)
 
@@ -514,9 +507,7 @@ class RgConstraint(Constraint):
         rg_vals = torch.sqrt(distances / (2 * torch.pow(sequence_length, 2)))
         return rg_vals
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute loss based on deviation from target Rg.
 
         Parameters
@@ -551,9 +542,7 @@ class ReConstraint(Constraint):
         self.tolerance = tolerance
         self.force_constant = force_constant
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         distances = distance_maps[:, :, 0, self.sequence_length]
 
         # Calculate deviation from target
@@ -595,39 +584,29 @@ class MultiConstraint(Constraint):
         """
         super().__init__(schedule=schedule, verbose=verbose)
         self.constraints = constraints
-        self.constraint_weights = [
-            constraint.constraint_weight for constraint in constraints
-        ]
+        self.constraint_weights = [constraint.constraint_weight for constraint in constraints]
 
         self.guidance_starts = [constraint.guidance_start for constraint in constraints]
         self.guidance_ends = [constraint.guidance_end for constraint in constraints]
 
-    def initialize(
-        self, encoder_model, latent_space_scaling_factor, n_steps, sequence_length
-    ):
+    def initialize(self, encoder_model, latent_space_scaling_factor, n_steps, sequence_length):
         """Initialize all constraints with the model parameters."""
-        super().initialize(
-            encoder_model, latent_space_scaling_factor, n_steps, sequence_length
-        )
+        super().initialize(encoder_model, latent_space_scaling_factor, n_steps, sequence_length)
 
         # Initialize all subconstraints
         for constraint in self.constraints:
-            constraint.initialize(
-                encoder_model, latent_space_scaling_factor, n_steps, sequence_length
-            )
+            constraint.initialize(encoder_model, latent_space_scaling_factor, n_steps, sequence_length)
 
         return self
 
-    def compute_loss(
-        self, distance_maps: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute weighted combination of all constraint losses."""
-        total_per_batch_loss = None
-        total_loss = 0.0
+        if not self.constraints:
+            raise ValueError("MultiConstraint requires at least one constraint")
+        total_per_batch_loss = distance_maps.new_zeros(distance_maps.shape[0])
+        total_loss = distance_maps.new_zeros(())
 
-        for i, (constraint, weight) in enumerate(
-            zip(self.constraints, self.constraint_weights)
-        ):
+        for i, (constraint, weight) in enumerate(zip(self.constraints, self.constraint_weights)):
             # Get per-batch and mean loss from each constraint
             per_batch_loss, mean_loss = constraint.compute_loss(distance_maps)
 
@@ -636,11 +615,7 @@ class MultiConstraint(Constraint):
             weighted_loss = weight * mean_loss
 
             # Accumulate
-            if total_per_batch_loss is None:
-                total_per_batch_loss = weighted_per_batch
-            else:
-                total_per_batch_loss = total_per_batch_loss + weighted_per_batch
-
+            total_per_batch_loss = total_per_batch_loss + weighted_per_batch
             total_loss += weighted_loss
 
         return total_per_batch_loss, total_loss

@@ -62,10 +62,7 @@ def _patch_sampling(monkeypatch, spacing_plan):
 
     def fake_sample(sampler, sequence, conformations, *args, **kwargs):
         calls.append(conformations)
-        try:
-            spacings = next(rounds)
-        except StopIteration:  # pragma: no cover - defensive
-            spacings = [GOOD_SPACING] * conformations
+        spacings = next(rounds)
         return _stack(spacings)
 
     monkeypatch.setattr(generation, "_sample_distance_maps", fake_sample)
@@ -219,12 +216,12 @@ def test_cli_exposes_remove_errors_flag():
         [
             sys.executable,
             "-c",
-            "import sys; sys.argv=['starling','--help']; "
-            "from starling.scripts.starling_main_cli import main; main()",
+            "import sys; sys.argv=['starling','--help']; from starling.scripts.starling_main_cli import main; main()",
         ],
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 0, result.stderr
     assert "--remove-errors" in result.stdout
 
 
@@ -252,15 +249,23 @@ def _run_with_structures(conformations, max_rounds=10):
     )
 
 
+def _assert_matching_coordinates(maps, coords):
+    assert coords is not None
+    # Reconstruction returns nm; sampled distance maps use Angstroms.
+    recovered = np.linalg.norm(coords[:, :, None] - coords[:, None, :], axis=-1) * 10
+    np.testing.assert_allclose(recovered, maps, atol=1e-3, rtol=1e-5)
+
+
 def test_structures_path_returns_matching_maps_and_coordinates(monkeypatch):
     """Coordinates must come back aligned 1:1 with the surviving distance maps."""
-    _patch_sampling(monkeypatch, [[GOOD_SPACING] * 3])
+    _patch_sampling(monkeypatch, [[3.6, 3.7, 3.8]])
     maps, coords, discarded = _run_with_structures(3)
 
     assert len(maps) == 3
     assert coords is not None
     assert coords.shape == (3, L, 3), "expect (n_conformers, n_residues, xyz)"
     assert discarded == 0
+    _assert_matching_coordinates(maps, coords)
 
 
 def test_structures_path_tops_up_and_keeps_coordinates_in_sync(monkeypatch):
@@ -274,8 +279,8 @@ def test_structures_path_tops_up_and_keeps_coordinates_in_sync(monkeypatch):
     calls = _patch_sampling(
         monkeypatch,
         [
-            [GOOD_SPACING, BAD_SPACING, BAD_SPACING, GOOD_SPACING],
-            [GOOD_SPACING, GOOD_SPACING],
+            [3.4, BAD_SPACING, BAD_SPACING, 3.6],
+            [3.7, 3.8],
         ],
     )
     maps, coords, discarded = _run_with_structures(4)
@@ -285,15 +290,19 @@ def test_structures_path_tops_up_and_keeps_coordinates_in_sync(monkeypatch):
     assert coords.shape == (4, L, 3)
     assert discarded == 2
     assert calls == [4, 2]
+    np.testing.assert_allclose(maps[:, 0, 1], [3.4, 3.6, 3.7, 3.8])
+    _assert_matching_coordinates(maps, coords)
 
 
 def test_structures_path_trims_overshoot_consistently(monkeypatch):
     """Trimming an overshoot must trim maps and coordinates identically."""
 
     def fake_sample(sampler, sequence, conformations, *args, **kwargs):
-        return _stack([GOOD_SPACING] * (conformations + 3))
+        return _stack([3.4, 3.5, 3.6, 3.7, 3.8])
 
     monkeypatch.setattr(generation, "_sample_distance_maps", fake_sample)
     maps, coords, _ = _run_with_structures(2)
     assert len(maps) == 2
     assert len(coords) == 2
+    np.testing.assert_allclose(maps[:, 0, 1], [3.4, 3.5])
+    _assert_matching_coordinates(maps, coords)

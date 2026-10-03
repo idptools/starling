@@ -1,5 +1,3 @@
-from typing import Iterator, Tuple
-
 import h5py
 import hdf5plugin
 import numpy as np
@@ -55,7 +53,7 @@ def one_hot_encode(sequences):
     return one_hot_encoded_seq
 
 
-def MaxPad(original_array: np.array, shape: tuple) -> np.array:
+def MaxPad(original_array: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     """
     A function that takes in a distance map and pads it to a desired shape
 
@@ -106,7 +104,7 @@ def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
     return data
 
 
-def read_tsv_file(tsv_file: str) -> Iterator[Tuple[str, str]]:
+def read_tsv_file(tsv_file: str) -> pd.DataFrame:
     """
     A function that reads the paths to distance maps from a tsv file
 
@@ -118,10 +116,10 @@ def read_tsv_file(tsv_file: str) -> Iterator[Tuple[str, str]]:
 
     Returns
     -------
-    Iterator[Tuple[str, str]]
-        An iterator of tuples containing paths to distance maps and their indices
+    pandas.DataFrame
+        Rows containing paths to distance maps and their indices.
     """
-    df = pd.read_csv(tsv_file, sep="\t", header=None, usecols=[0, 1])
+    df = pd.read_csv(tsv_file, sep="\t", header=None, usecols=range(2))
     return df
 
 

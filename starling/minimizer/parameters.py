@@ -231,7 +231,7 @@ def load_pair_table() -> MpipiGGPairTable:
     }
 
     data_file = resources.files("starling.minimizer").joinpath(
-        "data", _PAIR_TABLE_FILENAME
+        f"data/{_PAIR_TABLE_FILENAME}"
     )
     with data_file.open("r") as fh:
         rows = csv.DictReader(

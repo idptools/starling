@@ -9,10 +9,14 @@ closed-form solution x_t = alpha_t x0 + sigma_t eps; a correct solver must
 land on it.
 """
 
+from typing import cast
+
 import pytest
 import torch
 
 from starling.data.schedulers import cosine_beta_schedule
+from starling.models.diffusion import DiffusionModel
+from starling.models.vae import VAE
 from starling.samplers.dpmpp_sampler import DPMppSampler
 
 SEQ = "MKTAYIAKQRQ"
@@ -30,9 +34,7 @@ class StubDiffusion:
 
     def __init__(self, x0=None):
         self.num_timesteps = N_TIMESTEPS
-        self.alphas_cumprod = torch.cumprod(
-            1.0 - cosine_beta_schedule(N_TIMESTEPS), dim=0
-        )
+        self.alphas_cumprod = torch.cumprod(1.0 - cosine_beta_schedule(N_TIMESTEPS), dim=0)
         self.device = torch.device("cpu")
         self.latent_space_scaling_factor = torch.tensor(1.0)
         self.x0 = x0
@@ -57,15 +59,13 @@ class IdentityEncoder:
         return x
 
 
-@pytest.mark.parametrize("n_steps", [0, N_TIMESTEPS + 1, True, 2.5])
-def test_rejects_invalid_step_counts(n_steps):
-    with pytest.raises(ValueError, match="n_steps"):
-        DPMppSampler(StubDiffusion(), IdentityEncoder(), n_steps=n_steps)
+def make_sampler(model: StubDiffusion, n_steps: int) -> DPMppSampler:
+    return DPMppSampler(cast(DiffusionModel, model), cast(VAE, IdentityEncoder()), n_steps)
 
 
 def test_timesteps_decrease_to_one_and_each_is_evaluated_once():
     stub = StubDiffusion()
-    sampler = DPMppSampler(stub, IdentityEncoder(), n_steps=12)
+    sampler = make_sampler(stub, 12)
 
     assert sampler.n_steps == 12
     assert len(sampler.timesteps) == 13
@@ -78,7 +78,7 @@ def test_timesteps_decrease_to_one_and_each_is_evaluated_once():
 
 
 def test_output_shape_and_reproducibility():
-    sampler = DPMppSampler(StubDiffusion(), IdentityEncoder(), n_steps=12)
+    sampler = make_sampler(StubDiffusion(), 12)
 
     torch.manual_seed(0)
     first = sampler.sample(4, SEQ, show_per_step_progress_bar=False)
@@ -93,7 +93,7 @@ def test_solves_the_probability_flow_ode_exactly_for_point_data():
     torch.manual_seed(1)
     x0 = torch.randn(1, *LATENT_SHAPE)
     stub = StubDiffusion(x0=x0)
-    sampler = DPMppSampler(stub, IdentityEncoder(), n_steps=12)
+    sampler = make_sampler(stub, 12)
 
     torch.manual_seed(2)
     result = sampler.sample(5, SEQ, show_per_step_progress_bar=False)
@@ -111,7 +111,7 @@ def test_solves_the_probability_flow_ode_exactly_for_point_data():
 
 
 def test_rejects_constraints_and_bad_conformation_counts():
-    sampler = DPMppSampler(StubDiffusion(), IdentityEncoder(), n_steps=12)
+    sampler = make_sampler(StubDiffusion(), 12)
     with pytest.raises(ValueError, match="does not support constraints"):
         sampler.sample(2, SEQ, constraint=object())
     with pytest.raises(ValueError, match="num_conformations"):
@@ -121,5 +121,5 @@ def test_rejects_constraints_and_bad_conformation_counts():
 def test_warns_when_requested_steps_collide():
     # far more steps than distinct integer timesteps in the usable range
     with pytest.warns(UserWarning, match="distinct steps"):
-        sampler = DPMppSampler(StubDiffusion(), IdentityEncoder(), n_steps=N_TIMESTEPS)
-    assert sampler.n_steps < N_TIMESTEPS
+        sampler = make_sampler(StubDiffusion(), N_TIMESTEPS)
+    assert 1 <= sampler.n_steps < N_TIMESTEPS

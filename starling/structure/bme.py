@@ -85,7 +85,7 @@ to observables not directly supported by STARLING.
 """
 
 from datetime import datetime
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, TypedDict, Union
 
 import numpy as np
 from scipy.optimize import minimize
@@ -103,6 +103,17 @@ from starling.structure.bme_utils import (
     ThetaScanResult,
     theta_scan,
 )
+
+
+class ThetaScanKwargs(TypedDict, total=False):
+    theta_range: tuple[float, float] | np.ndarray
+    n_points: int
+    log_scale: bool
+    max_iterations: int
+    optimizer: str
+    verbose: bool
+    progress_callback: Callable[[int, int, float], None] | None
+    method: str
 
 
 class BME:
@@ -312,7 +323,7 @@ class BME:
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
         optimizer: str = DEFAULT_OPTIMIZER,
         verbose: bool = False,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Callable[[int, int, float], None] | None = None,
         method: str = "perpendicular",
     ) -> "ThetaScanResult":
         """
@@ -445,6 +456,10 @@ class BME:
         ... )
         >>> print(f"Success: {result.success}, Chi²: {result.chi_squared_final:.4f}")
         """
+        theta = self._theta
+        if theta is None:
+            raise RuntimeError("A theta value must be selected before fitting")
+
         chi_squared_initial = self._compute_chi_squared(self.initial_weights)
 
         if verbose:
@@ -492,7 +507,7 @@ class BME:
                 n_iterations=optimization_result.nit,
                 success=True,
                 message=optimization_result.message,
-                theta=self._theta,
+                theta=theta,
                 observables=self.observables,
                 calculated_values=self.calculated_values,
                 metadata={
@@ -516,7 +531,7 @@ class BME:
                 n_iterations=getattr(optimization_result, "nit", -1),
                 success=False,
                 message=optimization_result.message,
-                theta=self._theta,
+                theta=theta,
                 observables=self.observables,
                 calculated_values=self.calculated_values,
                 metadata={
@@ -536,7 +551,7 @@ class BME:
         *,
         theta: Optional[float] = None,
         auto_theta: bool = True,
-        theta_scan_kwargs: Optional[dict] = None,
+        theta_scan_kwargs: ThetaScanKwargs | None = None,
     ) -> BMEResult:
         # 1) choose effective theta
         if theta is not None:
@@ -553,7 +568,7 @@ class BME:
                     "[BME] Auto theta mode: running theta scan to select optimal θ..."
                 )
 
-            default_scan_kwargs = dict(
+            default_scan_kwargs: ThetaScanKwargs = dict(
                 theta_range=(0.01, 10.0),
                 n_points=15,
                 log_scale=True,

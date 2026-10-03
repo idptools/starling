@@ -226,8 +226,15 @@ class SequenceStore:
             shard     INTEGER,
             local_idx INTEGER,
             header    BLOB              -- 1 byte flag + payload (0=plain UTF-8, 1=zstd, NULL if missing)
-        )
+    )
     """
+
+    _live_path: str
+    _tmp_path: str | None
+    conn: sqlite3.Connection
+    _insert_stmt: sqlite3.Cursor | None
+    _insert_sql: str | None
+    _is_writer: bool
 
     # ---------- Constructors ----------
     @classmethod
@@ -400,6 +407,8 @@ class SequenceStore:
             raise RuntimeError("insert_rows() is only valid on a writer store")
         if not rows:
             return
+        if self._insert_sql is None:
+            raise RuntimeError("Writer insert statement is unavailable")
         cur = self.conn.cursor()
         cur.executemany(self._insert_sql, rows)
 

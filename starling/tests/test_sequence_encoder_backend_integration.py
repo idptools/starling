@@ -22,13 +22,16 @@ def test_sequence_encoder_backend_real_models():
     """
 
     if os.getenv("STARLING_RUN_INTEGRATION") != "1":
-        pytest.skip("STARLING_RUN_INTEGRATION env var not set to 1")
+        raise pytest.skip.Exception("Set STARLING_RUN_INTEGRATION=1 to run real-model embedding validation")
 
     enc_path = configs.DEFAULT_ENCODER_WEIGHTS_PATH
     ddpm_path = configs.DEFAULT_DDPM_WEIGHTS_PATH
 
-    if not (os.path.exists(enc_path) and os.path.exists(ddpm_path)):
-        pytest.skip("Model weight files not found; skipping integration test")
+    try:
+        enc_path = configs.resolve_weights_path(enc_path, enc_path)
+        ddpm_path = configs.resolve_weights_path(ddpm_path, ddpm_path)
+    except FileNotFoundError as error:
+        raise pytest.skip.Exception(f"Local model weights unavailable: {error}")
 
     mm = ModelManager()
     # Use tiny set of short sequences to minimize load + inference time
@@ -46,6 +49,7 @@ def test_sequence_encoder_backend_real_models():
         model_manager=mm,
         encoder_path=enc_path,
         ddpm_path=ddpm_path,
+        aggregate=False,
     )
 
     assert set(out.keys()) == set(sequences.keys())

@@ -69,6 +69,7 @@ search-gpu = [
 ]
 test = [
   "pytest>=6.1.2",
+  "tomli>=2; python_version < '3.11'",
 ]
 # Dependencies for the model-training entry points (starling-vae-train,
 # starling-ddpm-train). These are not needed to generate ensembles, so they are
@@ -118,3 +119,10 @@ default-tag = "1.0.0"
 
 [tool.versioningit.write]
 file = "starling/_version.py"
+
+[tool.ruff]
+line-length = 119
+
+[tool.ty.src]
+include = ["starling", "devtools", "hubconf.py"]
+exclude = ["**/*.ipynb"]

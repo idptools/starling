@@ -27,6 +27,8 @@ from starling.data.tokenizer import StarlingTokenizer
 
 def tokenize_fasta(path: str, tokenizer: StarlingTokenizer) -> List[dict]:
     records = read_fasta(path)
+    if not isinstance(records, dict):
+        raise ValueError(f"Expected FASTA records in a mapping: {path}")
     out: List[dict] = []
     for header, seq in records.items():
         seq_up = seq.strip().upper()

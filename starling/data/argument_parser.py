@@ -1,7 +1,7 @@
 import yaml
 
 
-def get_params(config_file: str = None) -> dict:
+def get_params(config_file: str | None = None) -> dict:
     """
     A function that reads the default configuration file
     and merges it with the user configuration file.
@@ -16,6 +16,8 @@ def get_params(config_file: str = None) -> dict:
     dict
         A dictionary containing the configuration parameters
     """
+    if config_file is None:
+        raise ValueError("config_file is required")
     with open(config_file, "r") as stream:
         user_config = yaml.safe_load(stream)
 

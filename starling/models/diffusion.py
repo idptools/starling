@@ -1,5 +1,6 @@
 import math
-from typing import List, Union
+from os import PathLike
+from typing import TypedDict, cast
 
 import pytorch_lightning as pl
 import torch
@@ -28,7 +29,7 @@ torch.set_float32_matmul_precision("high")
 
 # Helper function
 def extract(
-    constants: torch.Tensor, timestamps: torch.Tensor, shape: int
+    constants: torch.Tensor, timestamps: torch.Tensor, shape: torch.Size
 ) -> torch.Tensor:
     """
     Extract values from a tensor based on given timestamps.
@@ -52,6 +53,13 @@ def extract(
     return out.reshape(batch_size, *((1,) * (len(shape) - 1))).to(timestamps.device)
 
 
+class DiffusionBatch(TypedDict):
+    data: torch.Tensor
+    sequence: torch.Tensor
+    attention_mask: torch.Tensor
+    ionic_strengths: torch.Tensor
+
+
 class DiffusionModel(pl.LightningModule):
     """
     Denoising diffusion probabilistic model for latent space generation.
@@ -67,12 +75,20 @@ class DiffusionModel(pl.LightningModule):
         "cosine": cosine_beta_schedule,
         "sigmoid": sigmoid_beta_schedule,
     }
+    latent_space_scaling_factor: torch.Tensor
+    betas: torch.Tensor
+    alphas_cumprod: torch.Tensor
+    alphas_cumprod_prev: torch.Tensor
+    sqrt_recip_alphas: torch.Tensor
+    sqrt_alphas_cumprod: torch.Tensor
+    sqrt_one_minus_alphas_cumprod: torch.Tensor
+    posterior_variance: torch.Tensor
 
     def __init__(
         self,
         model: nn.Module,
         sequence_encoder: nn.Module,
-        distance_map_encoder: nn.Module,
+        distance_map_encoder: str | PathLike[str] | None,
         beta_scheduler: str = "cosine",
         timesteps: int = 1000,
         set_lr: float = 1e-4,
@@ -136,9 +152,11 @@ class DiffusionModel(pl.LightningModule):
         self.sequence_encoder = sequence_encoder
 
         if distance_map_encoder is not None:
-            self.distance_map_encoder = VAE.load_from_checkpoint(distance_map_encoder)
+            self.distance_map_encoder = VAE.load_from_checkpoint(
+                str(distance_map_encoder)
+            )
 
-            self.__freeze_distance_map_encoder()
+            self.__freeze_distance_map_encoder(self.distance_map_encoder)
         else:
             self.distance_map_encoder = None
 
@@ -186,15 +204,15 @@ class DiffusionModel(pl.LightningModule):
         self.num_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
 
-    def __freeze_distance_map_encoder(self):
-        self.distance_map_encoder.eval()
-        for param in self.distance_map_encoder.parameters():
+    def __freeze_distance_map_encoder(self, encoder: VAE) -> None:
+        encoder.eval()
+        for param in encoder.parameters():
             param.requires_grad = False
 
     # Remove mixed precision from this function, I've experienced numerical instability here
     @autocast(device_type="cuda", enabled=False)
     def q_sample(
-        self, x_start: torch.Tensor, t: int, noise: torch.Tensor = None
+        self, x_start: torch.Tensor, t: torch.Tensor, noise: torch.Tensor | None = None
     ) -> torch.Tensor:
         """
         Add the noise to x_start tensor based on the timestamp t
@@ -226,7 +244,10 @@ class DiffusionModel(pl.LightningModule):
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
     def sequence2labels(
-        self, sequences: List, sequence_mask, ionic_strength
+        self,
+        sequences: torch.Tensor,
+        sequence_mask: torch.Tensor,
+        ionic_strength: torch.Tensor,
     ) -> torch.Tensor:
         """
         Converts sequences to labels based on user defined models,
@@ -253,11 +274,11 @@ class DiffusionModel(pl.LightningModule):
     def p_loss(
         self,
         x_start: torch.Tensor,
-        t: int,
+        t: torch.Tensor,
         labels: torch.Tensor,
         mask: torch.Tensor,
         ionic_strengths: torch.Tensor,
-        noise: torch.Tensor = None,
+        noise: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         A function that runs the model and calculates the loss based on the
@@ -326,7 +347,11 @@ class DiffusionModel(pl.LightningModule):
         return loss
 
     def forward(
-        self, x: torch.Tensor, labels: torch.Tensor, mask, ionic_strengths
+        self,
+        x: torch.Tensor,
+        labels: torch.Tensor,
+        mask: torch.Tensor,
+        ionic_strengths: torch.Tensor,
     ) -> torch.Tensor:
         """
         Forward pass of the model, calculates the loss based on the
@@ -367,7 +392,7 @@ class DiffusionModel(pl.LightningModule):
 
         # Gather from all processes and compute global mean and standard deviation
         # gathered_mean = self.all_gather(local_mean)
-        gathered_std = self.all_gather(local_std)
+        gathered_std = cast(torch.Tensor, self.all_gather(local_std))
 
         # mean_mean = gathered_mean.mean()
         mean_std = 1 / gathered_std.mean()
@@ -376,7 +401,7 @@ class DiffusionModel(pl.LightningModule):
         # self.latent_space_mean = mean_mean.float().to(self.device)
         self.latent_space_scaling_factor = mean_std.float().to(self.device)
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: DiffusionBatch, batch_idx: int) -> torch.Tensor:
         """Training step that computes diffusion loss on a batch."""
         latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
             batch["data"],
@@ -411,7 +436,7 @@ class DiffusionModel(pl.LightningModule):
 
         return loss
 
-    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: DiffusionBatch, batch_idx: int) -> torch.Tensor:
         """Validation step that evaluates diffusion loss on a batch."""
         latent_encoding, sequences, sequence_attention_mask, ionic_strengths = (
             batch["data"],
@@ -447,7 +472,7 @@ class DiffusionModel(pl.LightningModule):
 
         return loss
 
-    def compute_snr(self, timesteps):
+    def compute_snr(self, timesteps: torch.Tensor) -> torch.Tensor:
         """
         Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
         """
@@ -504,7 +529,7 @@ class DiffusionModel(pl.LightningModule):
                 "scheduler": OneCycleLR(
                     optimizer,
                     max_lr=0.01,
-                    total_steps=self.trainer.estimated_stepping_batches,
+                    total_steps=int(self.trainer.estimated_stepping_batches),
                 ),
                 "monitor": self.monitor,
                 "interval": "step",
@@ -512,6 +537,8 @@ class DiffusionModel(pl.LightningModule):
 
         elif self.config_scheduler == "CosineAnnealingLR":
             num_epochs = self.trainer.max_epochs
+            if num_epochs is None:
+                raise RuntimeError("max_epochs must be set for this scheduler")
             lr_scheduler = {
                 "scheduler": CosineAnnealingLR(
                     optimizer,
@@ -523,7 +550,9 @@ class DiffusionModel(pl.LightningModule):
             }
         elif self.config_scheduler == "LinearWarmupCosineAnnealingLR":
             num_epochs = self.trainer.max_epochs
-            total_steps = self.trainer.estimated_stepping_batches
+            if num_epochs is None:
+                raise RuntimeError("max_epochs must be set for this scheduler")
+            total_steps = int(self.trainer.estimated_stepping_batches)
             steps_per_epoch = total_steps // num_epochs
             # Warmup for 5% of the total steps
             warmup_steps = steps_per_epoch * int(num_epochs * 0.01)

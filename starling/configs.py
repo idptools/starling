@@ -1,5 +1,6 @@
 import importlib.util
 import os
+from typing import TypedDict
 
 from starling.utilities import fix_ref_to_home
 
@@ -23,7 +24,19 @@ DEFAULT_IONIC_STRENGTH = 150  # default ionic strength in mM
 DEFAULT_SAMPLER = "ddim"  # default sampler for diffusion model
 
 # Model compilation settings
-TORCH_COMPILATION = {
+class TorchCompilationOptions(TypedDict):
+    mode: str
+    fullgraph: bool
+    backend: str
+    dynamic: bool | None
+
+
+class TorchCompilationConfig(TypedDict):
+    enabled: bool
+    options: TorchCompilationOptions
+
+
+TORCH_COMPILATION: TorchCompilationConfig = {
     "enabled": False,
     "options": {
         "mode": "default",  # Options: "default", "reduce-overhead", "max-autotune"
@@ -54,6 +67,8 @@ def load_user_config():
     """Load user configuration if the file exists and override default values."""
     if os.path.exists(USER_CONFIG_PATH):
         spec = importlib.util.spec_from_file_location("user_config", USER_CONFIG_PATH)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load STARLING configuration from {USER_CONFIG_PATH}")
         user_config = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(user_config)
 

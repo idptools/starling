@@ -2,7 +2,7 @@ import io
 import os
 from collections import defaultdict
 from glob import glob
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -42,7 +42,7 @@ def save_statistics(loss_by_length, max_loss_by_length, output_file=STATS_FILE):
 
 def calc_loss(
     reconstructed: torch.Tensor, original: torch.Tensor, sequences
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Calculate the loss between the reconstructed and original distance maps.
 
     Args:
@@ -125,7 +125,9 @@ def process_sample(sample: Dict) -> Dict:
     return {"key": sample_key, "data": distance_map, "sequence": sequence}
 
 
-def collate_fn(batch: List[Dict]) -> Optional[Tuple[torch.Tensor, List[str]]]:
+def collate_fn(
+    batch: List[Dict],
+) -> Optional[Tuple[torch.Tensor, torch.Tensor, List[str]]]:
     """Collate individual samples into a batch for model processing.
 
     Args:

@@ -297,15 +297,17 @@ def write_starling_ensemble(
         "sequence": ensemble_object.sequence,
         "distance_maps": ensemble_object._Ensemble__distance_maps,
         "traj": ensemble_object._Ensemble__trajectory,
-        "DEFAULT_ENCODER_WEIGHTS_PATH": ensemble_object._Ensemble__metadata[
+        "DEFAULT_ENCODER_WEIGHTS_PATH": ensemble_object.metadata[
             "DEFAULT_ENCODER_WEIGHTS_PATH"
         ],
-        "DEFAULT_DDPM_WEIGHTS_PATH": ensemble_object._Ensemble__metadata[
+        "DEFAULT_DDPM_WEIGHTS_PATH": ensemble_object.metadata[
             "DEFAULT_DDPM_WEIGHTS_PATH"
         ],
-        "VERSION": ensemble_object._Ensemble__metadata["VERSION"],
-        "DATE": ensemble_object._Ensemble__metadata["DATE"],
+        "VERSION": ensemble_object.metadata["VERSION"],
+        "DATE": ensemble_object.metadata["DATE"],
     }
+    if ensemble_object.ionic_strength is not None:
+        save_dict["IONIC_STRENGTH"] = ensemble_object.ionic_strength
 
     # if we wish to reduce the precision of the distance map to a single decimal point
     if reduce_precision:

@@ -1,3 +1,6 @@
+from collections.abc import Callable
+from typing import cast
+
 import torch
 import torch.nn.functional as F
 from einops import rearrange
@@ -68,11 +71,11 @@ class ResizeConv2d(nn.Module):
         in_channels: int,
         out_channels: int,
         kernel_size: int,
-        norm: torch.nn.Module,
-        activation: str,
+        norm: Callable[..., torch.nn.Module] | None,
+        activation: str | None,
         padding: int,
-        size: int = None,
-        scale_factor: int = None,
+        size: int | None = None,
+        scale_factor: int | None = None,
         mode: str = "nearest",
     ):
         """
@@ -137,7 +140,7 @@ class ResBlockEncBasic(nn.Module):
         out_channels: int,
         stride: int,
         norm: str,
-        timestep: int = None,
+        timestep: int | None = None,
         kernel_size: int = 3,
     ) -> None:
         """
@@ -169,13 +172,13 @@ class ResBlockEncBasic(nn.Module):
         kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
 
-        normalization = {
+        normalization = cast(dict[str, Callable[..., nn.Module]], {
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
             "rms": RMSNorm,
             "group": nn.GroupNorm,
-        }
+        })
 
         self.conv1 = nn.Conv2d(
             in_channels=in_channels,
@@ -265,8 +268,8 @@ class ResBlockDecBasic(nn.Module):
         out_channels: int,
         stride: int,
         norm: str,
-        last_layer=None,
-        kernel_size: int = None,
+        last_layer: bool | None = None,
+        kernel_size: int | None = None,
     ) -> None:
         """
         A basic residual block commonly used in ResNet architectures like ResNet18 and ResNet34.
@@ -293,12 +296,12 @@ class ResBlockDecBasic(nn.Module):
         kernel_size = 3 if kernel_size is None else kernel_size
         padding = 2 if kernel_size == 5 else (3 if kernel_size == 7 else 1)
 
-        normalization = {
+        normalization = cast(dict[str, Callable[..., nn.Module]], {
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
             "group": nn.GroupNorm,
-        }
+        })
 
         # First convolution which doesn't change the shape of the tensor
         # (b, c, h, w) -> (b, c, h, w) stride = 1

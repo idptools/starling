@@ -1,4 +1,3 @@
-import argparse
 import glob
 import os
 
@@ -6,17 +5,16 @@ import hydra
 import pytorch_lightning as pl
 import wandb
 import yaml
+from typing import Any, cast
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
-from starling.data.argument_parser import get_params
 from starling.data.ddpm_loader_tar import DDPMDataLoader
 from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
-from starling.models.vae import VAE
 from starling.models.vit import ViT
 
 
@@ -84,13 +82,16 @@ def setup_models(config):
 
     diffusion_models = {"discrete": DiffusionModel}
 
-    seq_encoder_dict = OmegaConf.to_container(config.sequence_encoder, resolve=True)
+    seq_encoder_dict = cast(
+        dict[str, Any], OmegaConf.to_container(config.sequence_encoder, resolve=True)
+    )
     vit = ViT(12, 512, 8, 512)
     sequence_encoder = SequenceEncoder(**seq_encoder_dict)
 
     if config.diffusion.type == "discrete":
-        diffusion_config_dict = OmegaConf.to_container(
-            config.diffusion.discrete, resolve=True
+        diffusion_config_dict = cast(
+            dict[str, Any],
+            OmegaConf.to_container(config.diffusion.discrete, resolve=True),
         )
     else:
         raise ValueError(f"Unsupported diffusion type: {config.diffusion.type}")
@@ -98,13 +99,13 @@ def setup_models(config):
     if config.trainer.fine_tune:
         diffusion_model = diffusion_models[config.diffusion.type].load_from_checkpoint(
             model_path,
-            unet_model=vit,
+            model=vit,
             sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )
     else:
         diffusion_model = diffusion_models[config.diffusion.type](
-            unet_model=vit,
+            model=vit,
             sequence_encoder=sequence_encoder,
             **diffusion_config_dict,
         )

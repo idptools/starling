@@ -32,7 +32,7 @@ from soursop.sstrajectory import SSTrajectory
 
 from starling import configs, utilities
 from starling._version import __version__
-from starling.structure.bme import BME
+from starling.structure.bme import BME, ThetaScanKwargs
 from starling.structure.coordinates import (
     create_ca_topology_from_coords,
     generate_3d_coordinates_from_distances,
@@ -56,6 +56,8 @@ class Ensemble:
     ssprot_ensemble : soursop.ssprotein.SSProtein, optional
         Existing SOURSOP trajectory to attach (used when coordinates already
         exist on disk).
+    ionic_strength : float, optional
+        Ionic strength in mM used to generate the ensemble, if known.
 
     Attributes
     ----------
@@ -74,7 +76,13 @@ class Ensemble:
     3D coordinates on demand.
     """
 
-    def __init__(self, distance_maps, sequence, ssprot_ensemble=None):
+    def __init__(
+        self,
+        distance_maps,
+        sequence,
+        ssprot_ensemble=None,
+        ionic_strength: float | None = None,
+    ):
         """
         Initialize the ensemble with a list of distance maps and the sequence
         of the protein chain.
@@ -91,6 +99,9 @@ class Ensemble:
         ssprot_ensemble : soursop.ssprotein.SSProtein
             SOURSOP SSProtein object. If provided, the ensemble will be initialized
             using this.
+
+        ionic_strength : float, optional
+            Ionic strength in mM used to generate the ensemble, if known.
 
         """
 
@@ -120,13 +131,26 @@ class Ensemble:
                 "ssprot_ensemble must be a soursop.ssprotein.SSProtein object"
             )
 
-        self.__metadata = {}
+        self.__metadata: dict[str, str | float] = {}
         self.__metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = (
             configs.DEFAULT_ENCODER_WEIGHTS_PATH
         )
         self.__metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = configs.DEFAULT_DDPM_WEIGHTS_PATH
         self.__metadata["VERSION"] = __version__
         self.__metadata["DATE"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if ionic_strength is not None:
+            self.__metadata["IONIC_STRENGTH"] = float(ionic_strength)
+
+    @property
+    def ionic_strength(self) -> float | None:
+        """Ionic strength in mM used to generate the ensemble, if known."""
+        value = self.__metadata.get("IONIC_STRENGTH")
+        return value if isinstance(value, float) else None
+
+    @property
+    def metadata(self) -> dict[str, str | float]:
+        """Metadata recorded for this ensemble."""
+        return self.__metadata
 
     def __sanity_check_init(self, distance_maps, sequence, ssprot_ensemble):
         """
@@ -523,6 +547,7 @@ class Ensemble:
 
         """
         if len(self.__rg_vals) == 0 or force_recompute:
+            self.__rg_vals = []
             for d in self.__distance_maps:
                 distances = np.sum(np.square(d))
                 rg_val = np.sqrt(distances / (2 * np.power(self.sequence_length, 2)))
@@ -1118,7 +1143,7 @@ class Ensemble:
                 print("")
 
             # Configure how the internal theta scan should run
-            theta_scan_kwargs = dict(
+            theta_scan_kwargs: ThetaScanKwargs = dict(
                 theta_range=theta_range,
                 n_points=theta_n_points,
                 log_scale=True,
@@ -1306,6 +1331,7 @@ class Ensemble:
                     "BME weights requested but BME reweighting has not been performed. "
                     "Call reweight_bme() first."
                 )
+            assert self.__bme_result is not None
             return self.__bme_result.weights
         else:
             return np.ones(self.number_of_conformations) / self.number_of_conformations
@@ -1353,16 +1379,21 @@ def load_ensemble(filename, ignore_structures=False):
         )
 
     try:
-        E = Ensemble(distance_maps, sequence, traj)
+        E = Ensemble(
+            distance_maps,
+            sequence,
+            traj,
+            ionic_strength=return_dict.get("IONIC_STRENGTH"),
+        )
     except Exception as e:
         raise Exception(
             f"Error initializing STARLING ensemble: {filename} [error 3]; error {e}"
         )
 
     # finally we over-write the metadata
-    E._Ensemble__metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = DEFAULT_ENCODER_WEIGHTS_PATH
-    E._Ensemble__metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = DEFAULT_DDPM_WEIGHTS_PATH
-    E._Ensemble__metadata["VERSION"] = VERSION
-    E._Ensemble__metadata["DATE"] = DATE
+    E.metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = DEFAULT_ENCODER_WEIGHTS_PATH
+    E.metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = DEFAULT_DDPM_WEIGHTS_PATH
+    E.metadata["VERSION"] = VERSION
+    E.metadata["DATE"] = DATE
 
     return E

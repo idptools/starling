@@ -8,6 +8,8 @@ reference implementation and its own autograd gradient, and that relaxation
 repairs local geometry while leaving global dimensions alone.
 """
 
+from typing import Any
+
 import numpy as np
 import pytest
 import torch
@@ -66,10 +68,7 @@ def _random_chain(n, seed, bond=BOND_LENGTH, min_distance=6.5):
         step = rng.normal(size=3)
         candidate = xyz[-1] + bond * step / np.linalg.norm(step)
         if len(xyz) >= 2:
-            if (
-                np.min(np.linalg.norm(np.array(xyz[:-1]) - candidate, axis=1))
-                < min_distance
-            ):
+            if np.min(np.linalg.norm(np.array(xyz[:-1]) - candidate, axis=1)) < min_distance:
                 continue
         xyz.append(candidate)
     return np.array(xyz)
@@ -133,9 +132,7 @@ def test_pair_table_matches_finches():
         for j, b in enumerate(MPIPI_GG_RESIDUES):
             assert table.sigma[i, j] == model.SIGMA_ALL[a][b]
             # FINCHES stores epsilon in kcal/mol
-            assert table.epsilon[i, j] == pytest.approx(
-                model.EPSILON_ALL[a][b] * KCAL_TO_KJ, rel=1e-12
-            )
+            assert table.epsilon[i, j] == pytest.approx(model.EPSILON_ALL[a][b] * KCAL_TO_KJ, rel=1e-12)
             assert table.mu[i, j] == model.MU_ALL[a][b]
             assert table.nu[i, j] == model.NU_ALL[a][b]
         assert MPIPI_GG_CHARGES[a] == model.CHARGE_ALL[a]
@@ -147,9 +144,7 @@ def test_charges():
     assert MPIPI_GG_CHARGES["D"] == MPIPI_GG_CHARGES["E"] == -0.75
     assert MPIPI_GG_CHARGES["H"] == 0.375
     charged = {"K", "R", "D", "E", "H"}
-    assert all(
-        MPIPI_GG_CHARGES[r] == 0.0 for r in MPIPI_GG_RESIDUES if r not in charged
-    )
+    assert all(MPIPI_GG_CHARGES[r] == 0.0 for r in MPIPI_GG_RESIDUES if r not in charged)
 
 
 def test_debye_length():
@@ -215,9 +210,7 @@ def test_torch_energy_matches_numpy_reference():
 def test_forces_match_autograd():
     truth, noisy = _noisy_ensemble(n_frames=3)
     ff = MpipiGG(SEQ, device="cpu")
-    restraints = DistanceRestraints(
-        _distance_maps(truth), sigma=ff.parameters.sigma, tolerance=0.2
-    )
+    restraints = DistanceRestraints(_distance_maps(truth), sigma=ff.parameters.sigma, tolerance=0.2)
     index = torch.arange(noisy.shape[0])
 
     x = torch.as_tensor(noisy).requires_grad_(True)
@@ -255,9 +248,7 @@ def test_restraints_are_flat_bottomed_and_skip_local_pairs():
     n = 10
     chain = _random_chain(n, seed=3)[None]
     reference = _distance_maps(chain)
-    restraints = DistanceRestraints(
-        reference, min_separation=4, tolerance=0.5, force_constant=10.0
-    )
+    restraints = DistanceRestraints(reference, min_separation=4, tolerance=0.5, force_constant=10.0)
     index = torch.zeros(1, dtype=torch.long)
 
     # inside the tolerance there is no energy and no force
@@ -281,9 +272,7 @@ def test_restraints_are_flat_bottomed_and_skip_local_pairs():
 def test_restraint_reference_floor():
     reference = np.full((1, 6, 6), 2.0)
     sigma = np.full((6, 6), 5.0)
-    restraints = DistanceRestraints(
-        reference, sigma=sigma, min_separation=2, tolerance=0.0, reference_floor=1.0
-    )
+    restraints = DistanceRestraints(reference, sigma=sigma, min_separation=2, tolerance=0.0, reference_floor=1.0)
     index = torch.zeros(1, dtype=torch.long)
 
     # a pair sitting exactly at sigma is at the (floored) reference
@@ -304,9 +293,7 @@ def test_fire_restores_bond_lengths():
     x0[0, :, 0] = 3.0 * torch.arange(n, dtype=torch.float64)
     ff = MpipiGG("G" * n, device="cpu")
 
-    result = fire_minimize(
-        x0, lambda x, index: ff.evaluate(x).forces, force_tolerance=0.01
-    )
+    result = fire_minimize(x0, lambda x, index: ff.evaluate(x).forces, force_tolerance=0.01)
     assert bool(result.converged[0])
 
     bonds = torch.linalg.vector_norm(torch.diff(result.coordinates[0], dim=0), dim=-1)
@@ -345,9 +332,7 @@ def test_relaxation_repairs_local_geometry_and_keeps_global_shape():
 
 def test_relaxation_without_a_reference_map():
     _, noisy = _noisy_ensemble(n_frames=2, seed=10)
-    result = relax_conformations(
-        noisy, SEQ, device="cpu", progress_bar=False, thermalization_steps=0
-    )
+    result = relax_conformations(noisy, SEQ, device="cpu", progress_bar=False, thermalization_steps=0)
 
     assert result.reference == "coordinates"
     assert np.all(result.before.long_range_rmsd == 0.0)
@@ -358,7 +343,7 @@ def test_relaxation_without_a_reference_map():
 def test_relaxation_is_independent_of_batching():
     # minimization only: thermalization noise depends on how frames are batched
     _, noisy = _noisy_ensemble(n_frames=5, seed=20)
-    kwargs = dict(device="cpu", progress_bar=False, thermalization_steps=0)
+    kwargs: dict[str, Any] = dict(device="cpu", progress_bar=False, thermalization_steps=0)
     together = relax_conformations(noisy, SEQ, **kwargs)
     apart = relax_conformations(noisy, SEQ, batch_size=2, **kwargs)
     assert np.allclose(together.coordinates, apart.coordinates, atol=1e-8)
@@ -380,7 +365,11 @@ def test_relax_result_summary_and_trajectory():
     assert np.allclose(traj.xyz * 10.0, result.coordinates, atol=1e-4)
 
 
-def test_relax_ensemble_returns_a_new_ensemble():
+@pytest.mark.parametrize(
+    "recorded, override, expected",
+    [(300, None, 300), (300, 50, 50), (300, 0, 0), (0, None, 0), (None, None, 150)],
+)
+def test_relax_ensemble_returns_a_new_ensemble(recorded, override, expected):
     from soursop.sstrajectory import SSTrajectory
 
     from starling.structure.coordinates import create_ca_topology_from_coords
@@ -388,19 +377,18 @@ def test_relax_ensemble_returns_a_new_ensemble():
 
     truth, noisy = _noisy_ensemble(n_frames=3, seed=40)
     maps = _distance_maps(truth)
-    protein = SSTrajectory(
-        TRJ=create_ca_topology_from_coords(SEQ, noisy / 10.0)
-    ).proteinTrajectoryList[0]
-    ensemble = Ensemble(maps, SEQ, ssprot_ensemble=protein)
+    protein = SSTrajectory(TRJ=create_ca_topology_from_coords(SEQ, noisy / 10.0)).proteinTrajectoryList[0]
+    ensemble = Ensemble(maps, SEQ, ssprot_ensemble=protein, ionic_strength=recorded)
 
-    relaxed, result = relax_ensemble(ensemble, device="cpu", progress_bar=False)
+    relaxed, result = relax_ensemble(ensemble, ionic_strength=override, device="cpu", progress_bar=False, seed=0)
 
     assert relaxed is not ensemble
     assert relaxed.has_structures
     assert np.array_equal(relaxed.distance_maps(), maps)
-    assert np.allclose(
-        relaxed.trajectory.traj.xyz * 10.0, result.coordinates, atol=1e-4
-    )
+    assert np.allclose(relaxed.trajectory.traj.xyz * 10.0, result.coordinates, atol=1e-4)
+    assert result.settings["ionic_strength"] == expected
+    assert relaxed.ionic_strength == expected
+    assert ensemble.ionic_strength == recorded
     # the original ensemble keeps its unrelaxed structures
     assert np.allclose(ensemble.trajectory.traj.xyz * 10.0, noisy, atol=1e-4)
     assert result.reference == "distance_map"
@@ -426,24 +414,18 @@ def test_relax_conformations_rejects_bad_input():
         )
 
 
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="MPS is not available"
-)
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS is not available")
 def test_mps_matches_cpu():
     truth, noisy = _noisy_ensemble(n_frames=3, seed=60)
     maps = _distance_maps(truth)
     # minimization only: CPU and MPS draw different thermalization noise
-    kwargs = dict(reference_distances=maps, progress_bar=False, thermalization_steps=0)
+    kwargs: dict[str, Any] = dict(reference_distances=maps, progress_bar=False, thermalization_steps=0)
     cpu = relax_conformations(noisy, SEQ, device="cpu", **kwargs)
     mps = relax_conformations(noisy, SEQ, device="mps", **kwargs)
 
     assert mps.converged.all()
-    assert np.allclose(
-        mps.after.radius_of_gyration, cpu.after.radius_of_gyration, atol=0.05
-    )
-    assert np.allclose(
-        mps.after.mean_bond_length, cpu.after.mean_bond_length, atol=0.01
-    )
+    assert np.allclose(mps.after.radius_of_gyration, cpu.after.radius_of_gyration, atol=0.05)
+    assert np.allclose(mps.after.mean_bond_length, cpu.after.mean_bond_length, atol=0.01)
 
 
 # ------------------------------------------------------------------------------
@@ -503,9 +485,7 @@ def test_langevin_rejects_bad_settings_and_handles_zero_steps():
 
 def test_thermalization_restores_thermal_bond_spread():
     truth, noisy = _noisy_ensemble(n_frames=20, seed=70)
-    kwargs = dict(
-        reference_distances=_distance_maps(truth), device="cpu", progress_bar=False
-    )
+    kwargs: dict[str, Any] = dict(reference_distances=_distance_maps(truth), device="cpu", progress_bar=False)
     minimized = relax_conformations(noisy, SEQ, thermalization_steps=0, **kwargs)
     thermalized = relax_conformations(noisy, SEQ, seed=0, **kwargs)
 
@@ -521,12 +501,12 @@ def test_thermalization_restores_thermal_bond_spread():
     centred = truth - truth.mean(axis=1, keepdims=True)
     rg_truth = np.sqrt((centred**2).sum(axis=-1).mean(axis=-1))
     assert np.all(np.abs(thermalized.after.radius_of_gyration / rg_truth - 1) < 0.03)
-    assert thermalized.settings["thermalization_steps"] > 0
+    assert thermalized.settings["thermalization_steps"] == 250
 
 
 def test_thermalization_is_reproducible_with_a_seed():
     _, noisy = _noisy_ensemble(n_frames=2, seed=80)
-    kwargs = dict(device="cpu", progress_bar=False, thermalization_steps=50)
+    kwargs: dict[str, Any] = dict(device="cpu", progress_bar=False, thermalization_steps=50)
     first = relax_conformations(noisy, SEQ, seed=1, **kwargs)
     again = relax_conformations(noisy, SEQ, seed=1, **kwargs)
     other = relax_conformations(noisy, SEQ, seed=2, **kwargs)
@@ -558,6 +538,82 @@ def test_generate_relaxes_by_default():
     assert inspect.signature(generate).parameters["relax"].default is True
 
 
+@pytest.mark.parametrize("sampler", ["ddpm", "ddim", "dpmpp", "plms"])
+@pytest.mark.parametrize("salt", [0, 300])
+@pytest.mark.parametrize("return_data", [False, True])
+def test_generate_records_and_conditions_on_ionic_strength(monkeypatch, tmp_path, sampler, salt, return_data):
+    from types import SimpleNamespace
+
+    from starling.inference import generation
+    from starling.data.schedulers import cosine_beta_schedule
+    from starling import generate, load_ensemble
+
+    sequence = "ACDE"
+    map_ = np.array(
+        [
+            [
+                [0.0, 3.8, 7.6, 11.4],
+                [3.8, 0.0, 3.8, 7.6],
+                [7.6, 3.8, 0.0, 3.8],
+                [11.4, 7.6, 3.8, 0.0],
+            ]
+        ],
+        dtype=np.float32,
+    )
+    conditions = []
+
+    def sequence2labels(tokens, mask, ionic_strength):
+        conditions.append(ionic_strength.clone())
+        return tokens
+
+    betas = cosine_beta_schedule(1000)
+    alpha_bar = torch.cumprod(1 - betas, dim=0)
+    previous = torch.cat([torch.ones(1), alpha_bar[:-1]])
+    diffusion = SimpleNamespace(
+        device=torch.device("cpu"),
+        num_timesteps=1000,
+        betas=betas,
+        alphas_cumprod=alpha_bar,
+        alphas_cumprod_prev=previous,
+        sqrt_recip_alphas=(1 - betas).rsqrt(),
+        sqrt_one_minus_alphas_cumprod=(1 - alpha_bar).sqrt(),
+        posterior_variance=betas * (1 - previous) / (1 - alpha_bar),
+        latent_space_scaling_factor=1.0,
+        sequence2labels=sequence2labels,
+        model=lambda x, t, context, mask: torch.zeros_like(x),
+    )
+    decoder = SimpleNamespace(decode=lambda x: torch.from_numpy(map_)[:, None].repeat(len(x), 1, 1, 1))
+    monkeypatch.setattr(generation.model_manager, "get_models", lambda **kwargs: (decoder, diffusion))
+
+    ensembles = generate(
+        {"test": sequence},
+        conformations=1,
+        device=torch.device("cpu"),
+        steps=12,
+        sampler=sampler,
+        return_structures=False,
+        batch_size=1,
+        output_directory=str(tmp_path),
+        return_data=return_data,
+        verbose=False,
+        show_progress_bar=False,
+        show_per_step_progress_bar=False,
+        pdb_trajectory=False,
+        ionic_strength=salt,
+    )
+
+    if return_data:
+        assert ensembles["test"].ionic_strength == salt
+    else:
+        assert ensembles is None
+    saved = load_ensemble(str(tmp_path / "test.starling"))
+    assert saved.ionic_strength == salt
+    assert conditions, "The real sampler must condition the network"
+    for condition in conditions:
+        torch.testing.assert_close(condition, torch.tensor([[salt]]))
+    np.testing.assert_array_equal(saved.distance_maps(), map_)
+
+
 def _run_cli(*cli_args):
     """Run the starling CLI in a subprocess and return the CompletedProcess."""
     import subprocess
@@ -568,8 +624,7 @@ def _run_cli(*cli_args):
         [
             sys.executable,
             "-c",
-            f"import sys; sys.argv={argv!r}; "
-            "from starling.scripts.starling_main_cli import main; main()",
+            f"import sys; sys.argv={argv!r}; from starling.scripts.starling_main_cli import main; main()",
         ],
         capture_output=True,
         text=True,
@@ -577,7 +632,9 @@ def _run_cli(*cli_args):
 
 
 def test_cli_exposes_relax_flag():
-    assert "--relax" in _run_cli("--help").stdout
+    result = _run_cli("--help")
+    assert result.returncode == 0, result.stderr
+    assert "--relax" in result.stdout
 
 
 def test_cli_relax_requires_return_structures(tmp_path):
@@ -712,9 +769,7 @@ def test_relaxation_repairs_unweighted_smacof_structures():
         show_per_step_progress_bar=False,
     ).distance_maps()
 
-    raw, _ = distance_matrix_to_3d_structure_torch_mds(
-        distance_maps, device="cpu", progress_bar=False, weights=None
-    )
+    raw, _ = distance_matrix_to_3d_structure_torch_mds(distance_maps, device="cpu", progress_bar=False, weights=None)
     result = relax_conformations(
         raw,
         SEQ,
@@ -733,8 +788,6 @@ def test_relaxation_repairs_unweighted_smacof_structures():
 
     # ...without changing global dimensions much. Thermal motion moves Rg a
     # little: on 4000 natural-IDR conformations mean |dRg| was 0.3%, max 3.3%
-    rg_change = np.abs(
-        result.after.radius_of_gyration / result.before.radius_of_gyration - 1
-    )
+    rg_change = np.abs(result.after.radius_of_gyration / result.before.radius_of_gyration - 1)
     assert rg_change.mean() < 0.01
     assert np.all(rg_change < 0.05)

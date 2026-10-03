@@ -7,9 +7,7 @@ from starling import configs, utilities
 from starling.inference import generation
 
 
-def handle_input(
-    user_input, invalid_sequence_action="convert", output_name=None, seq_index_start=1
-):
+def handle_input(user_input, invalid_sequence_action="convert", output_name=None, seq_index_start=1):
     """
     Dynamically handle the input from the user.
     This returns a dictionary with either the names from
@@ -85,9 +83,7 @@ def handle_input(
             if user_input.endswith((".fasta", ".FASTA")):
                 # this will throw an error if we have duplicate sequence names, so
                 # don't need to worry about that here.
-                sequence_dict = protfasta.read_fasta(
-                    user_input, invalid_sequence_action=invalid_sequence_action
-                )
+                sequence_dict = protfasta.read_fasta(user_input, invalid_sequence_action=invalid_sequence_action)
             elif user_input.endswith((".tsv", ".in")):
                 # this doesn't have a check for duplicate sequences names,
                 # so we should do that here. This should be the only instance
@@ -113,10 +109,8 @@ def handle_input(
             else:
                 try:
                     output_name = str(output_name)
-                except Exception as e:
-                    raise ValueError(
-                        "output_name must be a string our castable to a string."
-                    )
+                except Exception:
+                    raise ValueError("output_name must be a string our castable to a string.")
                 return {output_name: clean_sequence(user_input)}
 
     # if input is a list
@@ -133,9 +127,7 @@ def handle_input(
             sequence_dict[name] = clean_sequence(seq)
         return sequence_dict
     else:
-        raise ValueError(
-            f"Invalid input type: {type(user_input)}. Must be str, list, or dict."
-        )
+        raise ValueError(f"Invalid input type: {type(user_input)}. Must be str, list, or dict.")
 
 
 def check_positive_int(val):
@@ -285,9 +277,7 @@ def generate(
     # we do this specific sanity check EARLY so we don't silently fix what would
     # otherwise be a faulty input
     if return_single_ensemble and len(_sequence_dict) > 1:
-        raise ValueError(
-            f"Error: requested single ensemble yet provided input of {len(_sequence_dict)} sequences."
-        )
+        raise ValueError(f"Error: requested single ensemble yet provided input of {len(_sequence_dict)} sequences.")
 
     # filter out sequences that are too long (rather than erroring out)
     sequence_dict = {}
@@ -317,9 +307,7 @@ def generate(
         if len(sequence_dict) == 1:
             print(f"[STATUS]: Generating distance maps for 1 sequence{bonus_message}.")
         else:
-            print(
-                f"[STATUS]: Generating distance maps for {len(sequence_dict)} sequences{bonus_message}."
-            )
+            print(f"[STATUS]: Generating distance maps for {len(sequence_dict)} sequences{bonus_message}.")
 
     # check various other things so we fail early. Don't
     # want to go about the entire process and then have it fail at the end.
@@ -343,17 +331,13 @@ def generate(
     # check output_directory is a directory that exists.
     if output_directory is not None:
         if not os.path.exists(output_directory):
-            raise FileNotFoundError(
-                f"Error: Directory {output_directory} does not exist."
-            )
+            raise FileNotFoundError(f"Error: Directory {output_directory} does not exist.")
 
     # check sampler is a string
     if not isinstance(sampler, str):
         raise ValueError("Error: sampler must be a string.")
     if sampler.lower() not in ("ddim", "ddpm", "dpmpp", "plms"):
-        raise ValueError(
-            "Error: sampler must be one of 'ddim', 'ddpm', 'dpmpp', or 'plms'."
-        )
+        raise ValueError("Error: sampler must be one of 'ddim', 'ddpm', 'dpmpp', or 'plms'.")
     if sampler.lower() == "dpmpp" and constraint is not None:
         raise ValueError("DPM++ does not support constraints; use DDIM or DDPM")
 
@@ -383,9 +367,7 @@ def generate(
 
     # we do this specific sanity check to make the logic later in this function easier
     if return_single_ensemble and return_data is False:
-        raise ValueError(
-            "Error: requested single ensemble yet also did not request data to be returned."
-        )
+        raise ValueError("Error: requested single ensemble yet also did not request data to be returned.")
 
     if return_data is False and output_directory is None:
         raise ValueError(
@@ -418,6 +400,9 @@ def generate(
         remove_errors=remove_errors,
         relax=relax,
     )
+
+    if not return_data:
+        return None
 
     # if this is true we KNOW there is only one Ensemble in the return dict because
     # we previously checked for this.

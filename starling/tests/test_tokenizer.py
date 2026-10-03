@@ -7,6 +7,8 @@ def test_tokenizer_roundtrip_simple():
     tok = StarlingTokenizer()
     seq = "ACDEFGHIKLMNPQRSTVWY"  # 20 standard (as defined in mapping)
     encoded = tok.encode(seq)
+    # Vocabulary IDs are part of pretrained-checkpoint compatibility.
+    assert encoded == list(range(1, 21))
     assert isinstance(encoded, list)
     assert all(isinstance(i, int) for i in encoded)
     assert len(encoded) == len(seq)

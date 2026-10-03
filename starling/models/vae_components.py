@@ -1,4 +1,5 @@
-from typing import List
+from collections.abc import Callable
+from typing import List, cast
 
 from torch import nn
 
@@ -23,12 +24,12 @@ class ResNet_Encoder(nn.Module):
 
         self.block_type = block_type
         self.norm = norm
-        normalization = {
+        normalization = cast(dict[str, Callable[..., nn.Module]], {
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
             "group": nn.GroupNorm,
-        }
+        })
 
         # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
         # with kernel=7 and stride=2 AvgPool2d reduces spatial dimensions by / 2
@@ -201,17 +202,6 @@ class ResNet_Decoder(nn.Module):
 
         data = self.output_layer(data)
         return data
-
-
-class ConditionalSequential(nn.Sequential):
-    def forward(self, x, condition=None):
-        if condition is None:
-            for module in self._modules.values():
-                x = module(x)
-        else:
-            for module in self._modules.values():
-                x = module(x, condition)
-        return x
 
 
 # Current implementations of ResNets

@@ -6,6 +6,7 @@ import pytest
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "fit_weighted_stress.py"
 SPEC = importlib.util.spec_from_file_location("fit_weighted_stress", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
 FIT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FIT)
 fit_error_model = FIT.fit_error_model

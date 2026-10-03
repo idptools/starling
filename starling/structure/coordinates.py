@@ -162,6 +162,7 @@ def distance_matrix_to_3d_structure_torch_mds(
             if weights is None:
                 X_new = B_X / n_points
             else:
+                assert laplacian_pinv is not None
                 X_new = torch.matmul(laplacian_pinv, B_X)
 
             X = torch.where(converged.unsqueeze(1).unsqueeze(2), X, X_new)

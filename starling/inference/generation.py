@@ -147,6 +147,7 @@ def sequence_encoder_backend(
             else:
                 tokens = list(seq)
         else:
+            assert tokenizer is not None
             tokens = tokenizer.encode(seq)
         prepared.append((name, tokens))
 
@@ -216,11 +217,12 @@ def sequence_encoder_backend(
                 emb = batch_embeddings[i, :length_i]
 
                 if aggregate:
-                    emb = emb.mean(axis=0)
+                    emb = emb.mean(dim=0)
 
                 if output_directory is not None:
                     torch.save(emb, os.path.join(output_directory, f"{name}.pt"))
                 else:
+                    assert embedding_dict is not None
                     embedding_dict[name] = emb
 
             del batch_embeddings, sequence_tensor, attention_mask
@@ -952,7 +954,12 @@ def generate_backend(
         # return_data is False, but the verbose summary still needs the count
         n_conformers = len(final_distance_maps)
 
-        E = Ensemble(final_distance_maps, sequence, ssprot_ensemble=ssprotein)
+        E = Ensemble(
+            final_distance_maps,
+            sequence,
+            ssprot_ensemble=ssprotein,
+            ionic_strength=ionic_strength,
+        )
 
         # if we are saving things, save as we progress through so we generate
         # structures/DMs in situ
