@@ -181,9 +181,11 @@ def main():
         default=False,
         help=(
             "Relax the reconstructed 3D conformations with the Mpipi-GG force "
-            "field, restrained to their STARLING distance maps. This fixes the "
-            "compressed bonds and overlapping beads left by MDS reconstruction "
-            "while keeping global dimensions. Requires -r/--return_structures. "
+            "field, restrained to their STARLING distance maps, then thermalize "
+            "them briefly at 300 K. This fixes the compressed bonds and close "
+            "contacts left by MDS reconstruction, giving local geometry close "
+            "to Mpipi-GG simulations while keeping global dimensions. Requires "
+            "-r/--return_structures. "
             "With --remove-errors, relaxation runs before the 3D error screen "
             "(default: False)"
         ),

@@ -19,7 +19,13 @@ from starling.minimizer import (
     relax_ensemble,
 )
 from starling.minimizer.fire import fire_minimize
+from starling.minimizer.langevin import (
+    BOLTZMANN_KJ_PER_MOL_K,
+    DEFAULT_TEMPERATURE_K,
+    langevin_thermalize,
+)
 from starling.minimizer.parameters import (
+    BOND_FORCE_CONSTANT,
     BOND_LENGTH,
     COULOMB_CONSTANT,
     KCAL_TO_KJ,
@@ -309,12 +315,14 @@ def test_fire_restores_bond_lengths():
 
 def test_relaxation_repairs_local_geometry_and_keeps_global_shape():
     truth, noisy = _noisy_ensemble(n_frames=4)
+    # minimization only: thermalization deliberately spreads bonds back out
     result = relax_conformations(
         noisy,
         SEQ,
         reference_distances=_distance_maps(truth),
         device="cpu",
         progress_bar=False,
+        thermalization_steps=0,
     )
 
     assert result.reference == "distance_map"
@@ -337,7 +345,9 @@ def test_relaxation_repairs_local_geometry_and_keeps_global_shape():
 
 def test_relaxation_without_a_reference_map():
     _, noisy = _noisy_ensemble(n_frames=2, seed=10)
-    result = relax_conformations(noisy, SEQ, device="cpu", progress_bar=False)
+    result = relax_conformations(
+        noisy, SEQ, device="cpu", progress_bar=False, thermalization_steps=0
+    )
 
     assert result.reference == "coordinates"
     assert np.all(result.before.long_range_rmsd == 0.0)
@@ -346,11 +356,11 @@ def test_relaxation_without_a_reference_map():
 
 
 def test_relaxation_is_independent_of_batching():
+    # minimization only: thermalization noise depends on how frames are batched
     _, noisy = _noisy_ensemble(n_frames=5, seed=20)
-    together = relax_conformations(noisy, SEQ, device="cpu", progress_bar=False)
-    apart = relax_conformations(
-        noisy, SEQ, device="cpu", batch_size=2, progress_bar=False
-    )
+    kwargs = dict(device="cpu", progress_bar=False, thermalization_steps=0)
+    together = relax_conformations(noisy, SEQ, **kwargs)
+    apart = relax_conformations(noisy, SEQ, batch_size=2, **kwargs)
     assert np.allclose(together.coordinates, apart.coordinates, atol=1e-8)
     assert np.array_equal(together.n_steps, apart.n_steps)
 
@@ -422,7 +432,8 @@ def test_relax_conformations_rejects_bad_input():
 def test_mps_matches_cpu():
     truth, noisy = _noisy_ensemble(n_frames=3, seed=60)
     maps = _distance_maps(truth)
-    kwargs = dict(reference_distances=maps, progress_bar=False)
+    # minimization only: CPU and MPS draw different thermalization noise
+    kwargs = dict(reference_distances=maps, progress_bar=False, thermalization_steps=0)
     cpu = relax_conformations(noisy, SEQ, device="cpu", **kwargs)
     mps = relax_conformations(noisy, SEQ, device="mps", **kwargs)
 
@@ -433,6 +444,98 @@ def test_mps_matches_cpu():
     assert np.allclose(
         mps.after.mean_bond_length, cpu.after.mean_bond_length, atol=0.01
     )
+
+
+# ------------------------------------------------------------------------------
+# Thermalization
+# ------------------------------------------------------------------------------
+
+
+def _bond_lengths(xyz):
+    """Consecutive-bead distances (A) for conformations of shape (n_frames, n, 3) in A."""
+    return np.linalg.norm(np.diff(np.asarray(xyz), axis=1), axis=-1)
+
+
+def _thermal_bond_std(temperature_K=DEFAULT_TEMPERATURE_K):
+    """Equipartition spread sqrt(kT / k) of a harmonic Mpipi-GG bond, in A."""
+    return np.sqrt(BOLTZMANN_KJ_PER_MOL_K * temperature_K / BOND_FORCE_CONSTANT)
+
+
+# thermal fluctuations lengthen the mean bond beyond the 3.81 A minimum
+# (Mpipi-GG simulations of 200 natural IDRs at 300 K average 3.854 A)
+THERMAL_MEAN_BOND_RANGE = (3.80, 3.90)
+
+
+def _assert_thermal_bonds(bonds):
+    """Bonds (A) look like a 300 K Mpipi-GG chain: right mean, thermal spread."""
+    low, high = THERMAL_MEAN_BOND_RANGE
+    assert low < bonds.mean() < high
+    assert bonds.std() == pytest.approx(_thermal_bond_std(), rel=0.2)
+
+
+def test_langevin_samples_the_harmonic_boltzmann_distribution():
+    # independent 3D springs: each coordinate's variance must be kT / k
+    generator = torch.Generator().manual_seed(0)
+    x0 = torch.zeros(20000, 1, 3, dtype=torch.float64)
+    x = langevin_thermalize(
+        x0,
+        lambda x, index: -BOND_FORCE_CONSTANT * x,
+        n_steps=500,
+        generator=generator,
+    )
+    assert x.std().item() == pytest.approx(_thermal_bond_std(), rel=0.03)
+
+
+def test_langevin_rejects_bad_settings_and_handles_zero_steps():
+    x0 = torch.zeros(2, 4, 3, dtype=torch.float64)
+    force = lambda x, index: -x  # noqa: E731
+
+    unchanged = langevin_thermalize(x0, force, n_steps=0)
+    assert torch.equal(unchanged, x0) and unchanged is not x0
+
+    with pytest.raises(ValueError):
+        langevin_thermalize(x0, force, n_steps=-1)
+    with pytest.raises(ValueError):
+        langevin_thermalize(x0, force, n_steps=10, temperature_K=0.0)
+    with pytest.raises(ValueError):
+        langevin_thermalize(x0[0], force, n_steps=10)
+
+
+def test_thermalization_restores_thermal_bond_spread():
+    truth, noisy = _noisy_ensemble(n_frames=20, seed=70)
+    kwargs = dict(
+        reference_distances=_distance_maps(truth), device="cpu", progress_bar=False
+    )
+    minimized = relax_conformations(noisy, SEQ, thermalization_steps=0, **kwargs)
+    thermalized = relax_conformations(noisy, SEQ, seed=0, **kwargs)
+
+    minimized_bonds = _bond_lengths(minimized.coordinates)
+    thermal_bonds = _bond_lengths(thermalized.coordinates)
+
+    # minimization leaves bonds far narrower than a 300 K Mpipi-GG chain...
+    assert minimized_bonds.std() < 0.25 * _thermal_bond_std()
+    # ...and thermalization gives them the equipartition spread back
+    _assert_thermal_bonds(thermal_bonds)
+
+    # the restraints still hold the global shape of the reference structures
+    centred = truth - truth.mean(axis=1, keepdims=True)
+    rg_truth = np.sqrt((centred**2).sum(axis=-1).mean(axis=-1))
+    assert np.all(np.abs(thermalized.after.radius_of_gyration / rg_truth - 1) < 0.03)
+    assert thermalized.settings["thermalization_steps"] > 0
+
+
+def test_thermalization_is_reproducible_with_a_seed():
+    _, noisy = _noisy_ensemble(n_frames=2, seed=80)
+    kwargs = dict(device="cpu", progress_bar=False, thermalization_steps=50)
+    first = relax_conformations(noisy, SEQ, seed=1, **kwargs)
+    again = relax_conformations(noisy, SEQ, seed=1, **kwargs)
+    other = relax_conformations(noisy, SEQ, seed=2, **kwargs)
+
+    assert np.array_equal(first.coordinates, again.coordinates)
+    assert not np.allclose(first.coordinates, other.coordinates)
+
+    with pytest.raises(ValueError):
+        relax_conformations(noisy, SEQ, device="cpu", thermalization_steps=-1)
 
 
 # ------------------------------------------------------------------------------
@@ -500,8 +603,10 @@ def test_relax_coordinates_works_in_nanometres():
     )
 
     assert relaxed.shape == noisy.shape
+    # thermalization spreads individual bonds, so check the mean: a units slip
+    # would put it out by a factor of 10
     bonds = np.linalg.norm(np.diff(relaxed, axis=1), axis=-1)
-    assert np.allclose(bonds, BOND_LENGTH / 10.0, atol=0.025)
+    assert bonds.mean() == pytest.approx(BOND_LENGTH / 10.0, abs=0.02)
 
 
 def test_error_filter_screens_the_relaxed_structures(monkeypatch):
@@ -560,16 +665,6 @@ def test_error_filter_screens_the_relaxed_structures(monkeypatch):
     assert discarded == 0
 
 
-def _bond_lengths(xyz):
-    """Consecutive-bead distances (A) for conformations of shape (n_frames, n, 3) in A."""
-    return np.linalg.norm(np.diff(np.asarray(xyz), axis=1), axis=-1)
-
-
-def _bond_rms_deviation(xyz):
-    """RMS deviation (A) of every bond in every frame from the Mpipi-GG bond length."""
-    return np.sqrt(np.mean((_bond_lengths(xyz) - BOND_LENGTH) ** 2))
-
-
 @pytest.mark.slow
 def test_generate_relaxes_structures_end_to_end():
     from starling import generate
@@ -582,19 +677,14 @@ def test_generate_relaxes_structures_end_to_end():
         show_per_step_progress_bar=False,
     )
     relaxed = generate(SEQ, **kwargs)
-    raw = generate(SEQ, relax=False, **kwargs)
 
     # MDTraj stores coordinates in nm
-    relaxed_xyz = relaxed.trajectory.traj.xyz * 10.0
-    raw_xyz = raw.trajectory.traj.xyz * 10.0
+    bonds = _bond_lengths(relaxed.trajectory.traj.xyz * 10.0)
 
-    assert abs(_bond_lengths(relaxed_xyz).mean() - BOND_LENGTH) < 0.05
-
-    # Weighted SMACOF already gets raw bonds fairly close (~3.73 +/- 0.08 A for
-    # this sequence), so rather than requiring the raw bonds to be badly
-    # compressed we require relaxation to pull them in tightly around the
-    # Mpipi-GG bond length (measured ratio ~0.3)
-    assert _bond_rms_deviation(relaxed_xyz) < 0.5 * _bond_rms_deviation(raw_xyz)
+    # relaxed bonds sit at the Mpipi-GG length with the thermal spread of a
+    # 300 K simulation. Raw weighted SMACOF (~3.73 +/- 0.08 A for this
+    # sequence) and minimization alone (+/- ~0.03 A) both fail the spread check
+    _assert_thermal_bonds(bonds)
 
 
 @pytest.mark.slow
@@ -637,12 +727,14 @@ def test_relaxation_repairs_unweighted_smacof_structures():
     # this sequence), otherwise the checks below would show nothing
     assert _bond_lengths(raw).mean() < BOND_LENGTH - 0.25
 
-    # relaxation restores the bonds (measured RMS deviation ratio ~0.08) ...
-    assert abs(_bond_lengths(result.coordinates).mean() - BOND_LENGTH) < 0.05
-    assert _bond_rms_deviation(result.coordinates) < 0.25 * _bond_rms_deviation(raw)
+    # relaxation restores the bonds to the Mpipi-GG length with thermal spread...
+    relaxed_bonds = _bond_lengths(result.coordinates)
+    _assert_thermal_bonds(relaxed_bonds)
 
-    # ... without changing global dimensions (measured |dRg| at most ~0.8%)
+    # ...without changing global dimensions much. Thermal motion moves Rg a
+    # little: on 4000 natural-IDR conformations mean |dRg| was 0.3%, max 3.3%
     rg_change = np.abs(
         result.after.radius_of_gyration / result.before.radius_of_gyration - 1
     )
-    assert np.all(rg_change < 0.02)
+    assert rg_change.mean() < 0.01
+    assert np.all(rg_change < 0.05)

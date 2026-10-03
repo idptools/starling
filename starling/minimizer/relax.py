@@ -3,18 +3,23 @@ Relax STARLING conformations with the Mpipi-GG force field.
 
 STARLING predicts distance maps, and 3D structures are then reconstructed from
 those maps by multidimensional scaling (MDS). MDS reproduces the long-range
-structure of each map well, but because it fits every distance with equal
-weight in absolute terms, short distances come out comparatively poorly:
-bonds are typically compressed to ~3.1-3.2 A (against 3.81 A in Mpipi-GG)
-with a wide spread, beads overlap, and occasionally the chain is broken
-outright. The distance maps themselves do not have these problems.
+structure of each map well, but short distances come out comparatively
+poorly. Unweighted MDS compresses bonds to ~3.1-3.2 A (against 3.81 A in
+Mpipi-GG) with a wide spread, overlaps beads, and occasionally breaks the
+chain; the weighted reconstruction used since October 2026 is much better but
+still leaves bonds short (~3.6 A) and some beads too close. The distance maps
+themselves do not have these problems.
 
 relax_conformations() fixes this by minimizing the Mpipi-GG energy of each
 conformation while holding its global shape in place with flat-bottomed
 distance restraints on every pair of residues far apart in sequence (see
 starling.minimizer.restraints). The restraints hold the structure to the
 STARLING distance map where one is available, or to the input coordinates
-otherwise. Local geometry is left entirely to the force field.
+otherwise. Local geometry is left entirely to the force field. A short
+Langevin run at 300 K then puts back the thermal fluctuations that
+minimization removes (see starling.minimizer.langevin), so bond, angle and
+dihedral distributions match a 300 K Mpipi-GG simulation rather than its
+zero-temperature minimum.
 
 relax_ensemble() does the same for a STARLING Ensemble and hands back a new
 Ensemble carrying the relaxed structures.
@@ -35,6 +40,7 @@ from tqdm.auto import tqdm
 from starling import configs
 from starling.minimizer.fire import FIREParameters, fire_minimize
 from starling.minimizer.forcefield import ENERGY_TERMS, MpipiGG, pairwise_distances
+from starling.minimizer.langevin import DEFAULT_TEMPERATURE_K, langevin_thermalize
 from starling.minimizer.parameters import BOND_LENGTH
 from starling.minimizer.restraints import (
     DEFAULT_FORCE_CONSTANT,
@@ -53,6 +59,13 @@ if TYPE_CHECKING:
 # (kJ/mol/Angstrom; kT is ~2.5 kJ/mol at 300 K)
 DEFAULT_FORCE_TOLERANCE: Final[float] = 1.0
 DEFAULT_MAX_STEPS: Final[int] = 5000
+
+# Langevin steps (0.02 ps each) run after minimization to restore thermal
+# fluctuations. On 20 natural IDRs (200 conformations each) 250 steps already
+# gives bonds the Mpipi-GG simulation width (0.0175 vs 0.0177 nm) and brings
+# the angle and dihedral distributions 5x and 3x closer to the simulations;
+# 1000 or 2500 steps changed none of this and cost 4-10x more
+DEFAULT_THERMALIZATION_STEPS: Final[int] = 250
 
 # conformations minimized together; memory scales as batch_size * n^2
 DEFAULT_BATCH_SIZE: Final[int] = 100
@@ -127,7 +140,8 @@ class RelaxationResult:
         The amino acid sequence.
 
     coordinates : np.ndarray
-        Relaxed coordinates in Angstroms, shape (n_conformations, n, 3).
+        Relaxed (minimized, then thermalized unless thermalization_steps
+        was 0) coordinates in Angstroms, shape (n_conformations, n, 3).
 
     initial_coordinates : np.ndarray
         The coordinates that were passed in, in Angstroms.
@@ -139,7 +153,8 @@ class RelaxationResult:
         Number of minimization steps each conformation took.
 
     max_force : np.ndarray
-        Largest force on any bead after relaxation, in kJ/mol/Angstrom.
+        Largest force on any bead at the end of minimization (before any
+        thermalization), in kJ/mol/Angstrom.
 
     energy_before : dict of str to np.ndarray
         Energy of each term (see starling.minimizer.forcefield.ENERGY_TERMS)
@@ -398,6 +413,9 @@ def relax_conformations(
     fire_parameters: FIREParameters | None = None,
     clash_fraction: float = DEFAULT_CLASH_FRACTION,
     progress_bar: bool = True,
+    thermalization_steps: int = DEFAULT_THERMALIZATION_STEPS,
+    temperature_K: float = DEFAULT_TEMPERATURE_K,
+    seed: int | None = None,
 ) -> RelaxationResult:
     """
     Relax conformations with Mpipi-GG while holding their global shape.
@@ -410,6 +428,13 @@ def relax_conformations(
     restraints keep long-range distances within tolerance of their reference
     values, so global dimensions barely move, while bond lengths, local
     contacts and steric clashes relax to what the force field wants.
+
+    The minimized structures are then thermalized with a short run of
+    Langevin dynamics at temperature_K under the same energy (see
+    starling.minimizer.langevin). Minimization alone gives zero-temperature
+    structures whose bonds barely vary; thermalization restores the thermal
+    fluctuations a 300 K Mpipi-GG simulation has. Pass
+    thermalization_steps=0 to return the minimized structures.
 
     Parameters
     ----------
@@ -478,6 +503,19 @@ def relax_conformations(
     progress_bar : bool, optional
         If True (default), show a progress bar.
 
+    thermalization_steps : int, optional
+        Number of Langevin steps (0.02 ps each) run after minimization.
+        Default DEFAULT_THERMALIZATION_STEPS; 0 skips thermalization.
+
+    temperature_K : float, optional
+        Thermalization temperature in Kelvin. Default 300, the temperature
+        of the Mpipi-GG simulations STARLING was trained on.
+
+    seed : int, optional
+        Seed for the thermalization noise. If None (default), torch's global
+        generator is used, so torch.manual_seed() upstream still makes runs
+        reproducible.
+
     Returns
     -------
     RelaxationResult
@@ -517,6 +555,16 @@ def relax_conformations(
     }
     before_chunks: list[dict[str, torch.Tensor]] = []
     after_chunks: list[dict[str, torch.Tensor]] = []
+
+    if thermalization_steps < 0:
+        raise ValueError(
+            f"thermalization_steps must be >= 0, got {thermalization_steps}"
+        )
+
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device=device_t)
+        generator.manual_seed(seed)
 
     bar = tqdm(total=n_frames, disable=not progress_bar, desc="Relaxing")
 
@@ -560,14 +608,23 @@ def relax_conformations(
             parameters=fire_parameters,
         )
 
-        e_after = forcefield.energy(fire.coordinates, restraints, batch_index)
+        # put thermal fluctuations back into the zero-temperature minima
+        x_final = langevin_thermalize(
+            fire.coordinates,
+            force_function,
+            thermalization_steps,
+            temperature_K=temperature_K,
+            generator=generator,
+        )
+
+        e_after = forcefield.energy(x_final, restraints, batch_index)
         after_chunks.append(
             _geometry_diagnostics(
-                fire.coordinates, reference, sigma, min_separation, clash_fraction
+                x_final, reference, sigma, min_separation, clash_fraction
             )
         )
 
-        relaxed[start:stop] = fire.coordinates.cpu().numpy()
+        relaxed[start:stop] = x_final.cpu().numpy()
         converged[start:stop] = fire.converged.cpu().numpy()
         n_steps[start:stop] = fire.n_steps.cpu().numpy()
         max_force[start:stop] = fire.max_force.cpu().numpy()
@@ -604,6 +661,8 @@ def relax_conformations(
             "reference_floor": float(reference_floor),
             "force_tolerance": float(force_tolerance),
             "max_steps": int(max_steps),
+            "thermalization_steps": int(thermalization_steps),
+            "temperature_K": float(temperature_K),
             "device": str(device_t),
         },
     )

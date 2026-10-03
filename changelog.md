@@ -9,6 +9,11 @@ This file contains our changelog for STARLING
 - **DPM-Solver++(2M)** (`starling/samplers/dpmpp_sampler.py`).
   Added deterministic second-order sampling through `generate(..., sampler="dpmpp", steps=12)` and CLI `--sampler dpmpp`. Uses existing models and decoding; constraints are explicitly unsupported. DDIM-30 remains the default pending final validation of dpm++
 
+### Improvements
+
+- **Relaxation now thermalizes structures after minimizing them** (`starling/minimizer/langevin.py`, `starling/minimizer/relax.py`).
+  Energy minimization leaves every conformation at a zero-temperature minimum, so relaxed bonds were far narrower than in Mpipi-GG simulations (0.380 ± 0.003 nm against 0.386 ± 0.018 nm, pooled over 200 natural IDRs). `relax_conformations()` now follows minimization with 250 steps (5 ps) of BAOAB Langevin dynamics at 300 K under the same force field and restraints. On 20 natural IDRs this restores the thermal bond spread (0.0175 nm against 0.0177 nm in simulations) and brings the angle and dihedral distributions 5x and 3x closer to the simulations, at the cost of a slightly larger change in Rg (0.3% on average, at most ~3%). Longer runs (1000 or 2500 steps) changed none of this. Pass `thermalization_steps=0` for the previous minimized-only structures; `temperature_K` and `seed` control the run. This applies to `generate(relax=True)` and `--relax`.
+
 ### Bug Fixes
 
 - **Inference models were left in training mode** (`starling/inference/model_loading.py`).

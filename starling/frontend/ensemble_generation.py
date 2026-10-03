@@ -251,9 +251,11 @@ def generate(
         conformers reconstructed by MDS are relaxed with the Mpipi-GG force
         field while restrained to their STARLING distance maps (see
         :mod:`starling.minimizer`). MDS gets the global shape right but
-        compresses bonds and leaves beads overlapping; relaxation restores
-        ~3.81 A bonds and removes clashes while changing the radius of
-        gyration by ~0.1%. Relaxation runs before the trajectory-level error
+        compresses bonds and leaves beads too close; relaxation minimizes
+        each structure and then thermalizes it briefly at 300 K, giving
+        bond, angle and dihedral distributions close to those of Mpipi-GG
+        simulations while changing the radius of gyration by ~0.3% on
+        average. Relaxation runs before the trajectory-level error
         screen when ``remove_errors`` is ``True``, so MDS-broken conformers are
         repaired rather than discarded. Has no effect when
         ``return_structures`` is ``False``.
