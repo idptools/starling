@@ -1,123 +1,11 @@
-import os
-import time
-
 import mdtraj as md
 import numpy as np
 import torch
-import torch.optim as optim
 from scipy.spatial import distance_matrix
-from sklearn.manifold import MDS
 from tqdm.auto import tqdm
 
-from starling import configs, utilities
-
-
-def get_tensor_dtype(device):
-    """
-    Function which returns a tensor dtype based on
-    the device passed. This is to support the fact that
-    mps does not work with float64 tensors and will set
-    them to be cast to float32. This is an internal
-    function that really only ends up being relevant
-    for gradien descent reconstruction.
-
-    Parameters
-    ---------------
-    device : torch.device
-        Device being used
-
-    returns
-    --------------------
-    torch.dtype
-        Returns the type
-
-    """
-
-    # as of 2024-11 mps does not support float64
-    if str(device) == "mps":
-        tensor_dtype = torch.float32
-    else:
-        tensor_dtype = torch.float64
-
-    return tensor_dtype
-
-
-def compute_pairwise_distances(coords):
-    """Function to compute the pairwise distances in 3D space.
-
-    Parameters
-    ----------
-    coords : torch.Tensor
-        A tensor of shape (n, 3) containing the 3D coordinates of n points.
-
-    Returns
-    -------
-    torch.Tensor
-        A tensor of pairwise distances between the points in 3D space.
-    """
-    return torch.cdist(coords, coords)
-
-
-def loss_function(original_distance_matrix, coords):
-    """
-    Function to compute the loss between the original distance
-    matrix and the computed distance matrix.
-
-    Parameters
-    ----------
-    original_distance_matrix : torch.Tensor
-        A tensor of shape (n, n) containing the original pairwise
-        distances between n points.
-
-    coords : torch.Tensor
-        A tensor of shape (n, 3) containing the 3D coordinates
-        of n points.
-
-    Returns
-    -------
-    torch.Tensor
-        The mean squared error between the original and computed
-        distance matrices, considering only the upper triangle.
-
-    """
-    computed_distances = compute_pairwise_distances(coords)
-
-    # Create a mask for the upper triangle
-    upper_triangle_mask = torch.triu(
-        torch.ones_like(original_distance_matrix), diagonal=1
-    ).bool()
-
-    # Apply the mask to both the original and computed distance matrices
-    masked_original = original_distance_matrix[upper_triangle_mask]
-    masked_computed = computed_distances[upper_triangle_mask]
-
-    # Compute the mean squared error only for the masked elements
-    loss = torch.nn.functional.mse_loss(masked_computed, masked_original)
-
-    return loss
-
-
-def create_incremental_coordinates(n_points, distance, device):
-    """
-    TO DO: Add docstring
-    """
-
-    coordinates = torch.zeros(
-        (n_points, 3), dtype=get_tensor_dtype(device), device=device
-    )
-
-    # Start the first coordinate at (0, 0, 0)
-    for i in range(1, n_points):
-        # Generate a random direction vector
-        direction = torch.randn(3, dtype=get_tensor_dtype(device), device=device)
-        direction /= torch.norm(direction)  # Normalize to get a unit vector
-
-        # Calculate the new coordinate by adding the direction scaled by the distance
-        new_coordinate = coordinates[i - 1] + direction * distance
-
-        coordinates[i] = new_coordinate
-
-    return torch.nn.Parameter(coordinates)
+from starling import configs
+from starling.structure.weighted_stress import map_error_weights
 
 
 def distance_matrix_to_3d_structure_torch_mds(
@@ -127,21 +15,24 @@ def distance_matrix_to_3d_structure_torch_mds(
     tol=1e-4,
     device="cuda",
     progress_bar=True,
+    weights=None,
 ):
     """
     SMACOF implementation using PyTorch with support for batched processing.
 
     NB; as of Feb 2024 this is substantially slower for MPS than the other approach,
     because MPS seems to fail and fall back on CPU in this parallelized version. This
-    is 1.5-2x slower than the other approach. To keep this simple, there is a check in
-    the parent function generate_3d_coordinates_from_distances() that defaults to the
-    non-torch implementation if the device is MPS and we're on macOS <= 14. Hopefully
-    this is fixed in macOS15...
+    is 1.5-2x slower than the other approach.
+
+    This is the coordinate reconstruction path for CPU, CUDA, and MPS.
+    Classical MDS provides a deterministic three-dimensional initialization;
+    SMACOF then refines it against the requested weighted distance stress.
 
     Parameters:
     -----------
-    target_distances: pytorch.Tensor
+    target_distances: numpy.ndarray or torch.Tensor
         tensor of shape (total_samples, n_points, n_points)
+        containing distance maps in angstrom.
 
     batch_size: int
         size of each processing batch.
@@ -158,41 +49,81 @@ def distance_matrix_to_3d_structure_torch_mds(
     progress_bar: bool
         Whether to display a progress bar.
 
+    weights: torch.Tensor, optional
+        Symmetric per-pair weights for the SMACOF stress. ``None`` retains
+        ordinary unweighted stress.
+
     Returns:
     --------
     tuple
 
-        [0] pytorch.Tensor; A tensor of shape (total_samples, n_points, 3)
-        [1] pytorch.Tensor; A tensor of shape (total_samples, n_iter)
+        [0] numpy.ndarray; Coordinates in angstrom, shape (total_samples, n_points, 3).
+        [1] numpy.ndarray; Stress history, shape (total_samples, n_iter).
 
     """
-    # if we passed in a numpy array, convert it to a torch tensor
-    # on the correct device
-    if isinstance(target_distances, np.ndarray):
-        target_distances = torch.from_numpy(target_distances).to(device=device)
+    device = torch.device(device)
+
+    target_distances = torch.as_tensor(target_distances)
 
     total_samples = target_distances.shape[0]
     n_points = target_distances.shape[1]
     dim = 3
     eps = 1e-12
 
+    laplacian_pinv = None
+    if weights is not None:
+        weights = torch.as_tensor(weights, dtype=torch.float32, device=device)
+        if weights.shape != (n_points, n_points):
+            raise ValueError("weights must have shape (n_points, n_points)")
+        if (
+            not torch.isfinite(weights).all()
+            or torch.any(weights < 0)
+            or not torch.allclose(weights, weights.T)
+            or torch.any(weights.diagonal() != 0)
+        ):
+            raise ValueError(
+                "weights must be finite, symmetric, nonnegative, and hollow"
+            )
+        laplacian = torch.diag(weights.sum(dim=1)) - weights
+        # MPS does not support the SVD used by pinv reliably.
+        laplacian_pinv = torch.linalg.pinv(
+            laplacian.cpu() if device.type == "mps" else laplacian
+        ).to(device)
+
     X_results = []
     stress_results = []
 
-    # start the progress bar if requested
-    if progress_bar == True:
-        local_generator = tqdm(range(0, total_samples, batch_size))
-    else:
-        local_generator = range(0, total_samples, batch_size)
-
-    # for start in range(0, total_samples, batch_size):
-    for start in local_generator:
+    for start in tqdm(range(0, total_samples, batch_size), disable=not progress_bar):
         end = min(start + batch_size, total_samples)
-        batch_distances = target_distances[start:end].to(device)
+        batch_distances = target_distances[start:end].to(
+            device=device, dtype=torch.float32
+        )
 
-        # Initialize random coordinates for the current batch_size
-        X = torch.randn(end - start, n_points, dim, dtype=torch.float32, device=device)
+        # Double-center squared distances and retain the three positive modes.
+        # MPS lacks float64, so initialize on CPU there before returning to MPS.
+        initial_distances = (
+            batch_distances.cpu() if device.type == "mps" else batch_distances
+        )
+        squared = initial_distances.to(torch.float64).square()
+        gram = -0.5 * (
+            squared
+            - squared.mean(dim=1, keepdim=True)
+            - squared.mean(dim=2, keepdim=True)
+            + squared.mean(dim=(1, 2), keepdim=True)
+        )
+        values, vectors = torch.linalg.eigh(gram)
+        dimensions = min(dim, n_points)
+        X = (
+            vectors[:, :, -dimensions:]
+            * values[:, -dimensions:].clamp_min(0).sqrt()[:, None, :]
+        )
+        X = torch.nn.functional.pad(X, (0, dim - dimensions)).to(
+            device=device, dtype=torch.float32
+        )
         X = X - X.mean(dim=1, keepdim=True)
+        weighted_distances = (
+            batch_distances if weights is None else weights * batch_distances
+        )
 
         # Initialize stress tracking
         stress_history = torch.zeros(
@@ -207,30 +138,32 @@ def distance_matrix_to_3d_structure_torch_mds(
             diff = X.unsqueeze(2) - X.unsqueeze(1)
             D = torch.norm(diff, dim=3) + eps
 
-            stress = torch.sum((D - batch_distances) ** 2, dim=(1, 2))
+            residual = (D - batch_distances) ** 2
+            stress = torch.sum(
+                residual if weights is None else weights * residual, dim=(1, 2)
+            )
             stress_history[:, it] = stress
 
             converged = converged | (torch.abs(old_stress - stress) < tol)
             if torch.all(converged):
-                stress_history = stress_history[:, : it + 1]
+                # Keep the documented fixed width when batches stop independently.
+                stress_history[:, it + 1 :] = stress[:, None]
                 break
 
             B = torch.zeros_like(D)
             mask = D > eps
 
-            # This line is equivalent to
-            # B[mask] = -batch_distances[mask] / D[mask]
-            # but much faster and no issues across OS's [bugs on some macOS's (<= 14)]
-            B = torch.where(mask, -batch_distances / D, B)
+            B = torch.where(mask, -weighted_distances / D, B)
 
             row_sums = B.sum(dim=2)
             B.diagonal(dim1=1, dim2=2).copy_(-row_sums)
 
-            X_new = torch.bmm(B, X) / n_points
+            B_X = torch.bmm(B, X)
+            if weights is None:
+                X_new = B_X / n_points
+            else:
+                X_new = torch.matmul(laplacian_pinv, B_X)
 
-            # X[~converged] = X_new[~converged]
-            # X[~converged] = X[~converged] - X[~converged].mean(dim=1, keepdim=True)
-            # switching the above to the torch.where equivalents
             X = torch.where(converged.unsqueeze(1).unsqueeze(2), X, X_new)
             X = torch.where(
                 converged.unsqueeze(1).unsqueeze(2), X, X - X.mean(dim=1, keepdim=True)
@@ -241,143 +174,11 @@ def distance_matrix_to_3d_structure_torch_mds(
         X_results.append(X.cpu())
         stress_results.append(stress_history.cpu())
 
-    # close the progress bar if opened
-    if progress_bar == True:
-        local_generator.close()
-
     # Concatenate all chunk results
     X_final = torch.cat(X_results, dim=0)
     stress_final = torch.cat(stress_results, dim=0)
 
     return X_final.numpy(), stress_final.numpy()
-
-
-def distance_matrix_to_3d_structure_mds(distance_matrix, **kwargs):
-    """
-    Generate 3D coordinates from a distance matrix using
-    multidimensional scaling (MDS).
-
-    NB: by default the MDS object is initialized with
-    the following defaults, although these can be overridden
-    by passing them in the kwargs:
-
-    n_components = 3
-    dissimilarity = "precomputed"
-    n_init = configs.DEFAULT_MDS_NUM_INIT  (default setting)
-    n_jobs = configs.DEFAULT_CPU_COUNT_MDS (default setting)
-    normalized_stress = 'auto'
-
-    Parameters
-    ----------
-    distance_matrix : torch.Tensor
-        A 2D tensor representing the distance matrix.
-
-    kwargs : dict
-        Keyword arguments to pass to scikit-learn's MDS
-        algorithm.
-
-    Returns
-    -------
-    torch.Tensor
-        A 3D tensor representing the coordinates of the
-        atoms.
-
-    """
-    # Set the default values for n_init and n_jobs if not provided in kwargs
-    # this matches the default values in scikit-learn's MDS
-    n_init = kwargs.pop("n_init", configs.DEFAULT_MDS_NUM_INIT)
-    n_jobs = kwargs.pop("n_jobs", configs.DEFAULT_CPU_COUNT_MDS)
-
-    # Initialize MDS with 3 components (for 3D) and the specified parameters
-    # nb: normalized_stress = 'auto' explicitly as this is the default
-    # value in sci-kit learn >1.4 , but before that it was False, so this just
-    # ensures version-independent behavior in the MDS call
-    mds = MDS(
-        n_components=3,
-        dissimilarity="precomputed",
-        n_init=n_init,
-        n_jobs=n_jobs,
-        normalized_stress="auto",
-        **kwargs,
-    )
-
-    # Fit the MDS model to the distance matrix
-    coords = mds.fit_transform(distance_matrix)
-
-    return coords
-
-
-def distance_matrix_to_3d_structure_gd(
-    original_distance_matrix,
-    num_iterations=5000,
-    learning_rate=1e-3,
-    device="cuda:0",
-    verbose=True,
-):
-    """
-    Function to reconstruct a 3D structure from a
-    distance matrix using gradient descent.
-
-    Parameters
-    ----------
-    original_distance_matrix : torch.Tensor or numpy.ndarray
-        The original distance matrix.
-
-    num_iterations : int, optional
-        Number of iterations for gradient descent, by default 5000.
-
-    learning_rate : float, optional
-        Learning rate for the optimizer, by default 1e-3.
-
-    device : str, optional
-        Device to which tensors are moved, by default "cuda:0".
-
-    verbose : bool, optional
-        Whether to print progress, by default True.
-
-    Returns
-    -------
-    numpy.ndarray
-        The reconstructed 3D coordinates.
-
-    NB: As of Nov 2024, Apple MPS does not support float64 tensors, so we cast
-    tensors to float32 in the case of MPS being used. Note that this is actually
-    slower than using CPU, but we provide support for this in case someone wants
-    it and/or it gets faster in the future...
-
-    """
-
-    if isinstance(original_distance_matrix, torch.Tensor):
-        original_distance_matrix = original_distance_matrix.to(
-            device, dtype=get_tensor_dtype(device)
-        )
-
-    else:
-        original_distance_matrix = torch.tensor(
-            original_distance_matrix, dtype=get_tensor_dtype(device), device=device
-        )
-
-    coords = create_incremental_coordinates(
-        original_distance_matrix.shape[0], 3.6, device=device
-    )
-    # coords = torch.randn((original_distance_matrix.size(0), 3), requires_grad=True, device=device,dtype=torch.float64)
-
-    # optimizer = optim.SGD([coords], lr=learning_rate, momentum=0.99, nesterov=True)
-    optimizer = optim.Adam([coords], lr=learning_rate)
-
-    for i in range(num_iterations):
-        optimizer.zero_grad()
-
-        loss = loss_function(original_distance_matrix, coords)
-
-        loss.backward()
-
-        optimizer.step()
-
-        if i % 100 == 0 and verbose:
-            print(f"Iteration {i}, Loss: {loss.item()}")
-
-    return coords.detach().cpu().numpy()
 
 
 def compare_distance_matrices(original_distance_matrix, coords, return_abs_diff=True):
@@ -471,10 +272,6 @@ def create_ca_topology_from_coords(sequence, coords):
     if coords.ndim != 3:
         coords = coords[np.newaxis, :, :]
 
-    # commented out for now
-    # else:
-    #    print(coords.shape)
-
     # Create an MDTraj trajectory object with the topology and coordinates
     traj = md.Trajectory(coords, topology)
 
@@ -500,14 +297,13 @@ def save_trajectory(traj, filename):
 
 
 def generate_3d_coordinates_from_distances(
-    device, batch_size, num_cpus_mds, num_mds_init, distance_maps, progress_bar=True
+    device, batch_size, distance_maps, progress_bar=True
 ):
     """
     Function to generate 3D coordinates from distance maps.
 
-    This is the parent function which will then choose either
-    the fasts or most approriate method to use based on the
-    requested device and the actual OS.
+    This is the parent function which uses classical MDS initialization
+    followed by weighted Torch SMACOF on the requested device.
 
     This function is called in:
 
@@ -523,59 +319,25 @@ def generate_3d_coordinates_from_distances(
         The device to use for computation.
 
     batch_size : int
-        The batch size for processing the distance maps if
-        we use the torch implementation.
+        The batch size for processing the distance maps.
 
-    num_cpus_mds : int
-        The number of CPUs to use for MDS if we use the
-        SciPy implementation.
-
-    num_mds_init : int
-        The number of initializations to use for MDS if
-        we use the SciPy implementation.
-
-    distance_maps : list
+    distance_maps : numpy.ndarray or torch.Tensor
         Either an nd.array or a pytorch tensor of distance
-        maps.
+        maps. Distances are in angstrom.
+
+    Returns
+    -------
+    numpy.ndarray
+        Coordinates in nanometers, shape (total_samples, n_points, 3).
     """
 
-    # cast device to string for ffs
-    device = str(device)
-
-    # leaving this in case we have to revert
-    # note; macOS <= 14  gives a "MPS: nonzero op" error, so because of
-    # this we force 'cpu' here if on macOS
-    # macOS_version = utilities.get_macOS_version()
-
-    # if (macOS_version > 0 and macOS_version < 15) or device == "cpu":
-    if device == "cpu":
-        ## NB: It seemed like we needed to do this at one point, but
-        ## maybe not anymore? Leaving here in case we need it later
-        
-        # if we passed in a numpy array, convert it to a torch tensor
-        # on the correct device (note if we're here we're on CPU)
-        # if isinstance(distance_maps, np.ndarray):
-        #    distance_maps = torch.from_numpy(distance_maps).to('cpu')
-
-        # open a progress bar if requested        
-        dm_generator = tqdm(distance_maps, total=len(distance_maps)) if progress_bar else distance_maps
-
-        # loop over each distance map
-        coordinates = []
-        for dist_map in dm_generator:
-            coord = distance_matrix_to_3d_structure_mds(dist_map, n_jobs=num_cpus_mds, n_init=num_mds_init)            
-            coordinates.append(coord)
-
-        # cast to array and convert to nm
-        coordinates = np.array(coordinates) / configs.CONVERT_ANGSTROM_TO_NM
-    else:
-        # call the torch MDS implementation
-        coordinates, _ = distance_matrix_to_3d_structure_torch_mds(
-            distance_maps,
-            batch_size=batch_size,
-            device=device,
-            progress_bar=progress_bar,
-        )
-        coordinates /= configs.CONVERT_ANGSTROM_TO_NM
+    coordinates, _ = distance_matrix_to_3d_structure_torch_mds(
+        distance_maps,
+        batch_size=batch_size,
+        device=device,
+        progress_bar=progress_bar,
+        weights=map_error_weights(distance_maps.shape[-1], device=device),
+    )
+    coordinates /= configs.CONVERT_ANGSTROM_TO_NM
 
     return coordinates

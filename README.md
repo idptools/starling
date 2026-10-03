@@ -129,8 +129,6 @@ starling --info
 | `--outname` | str | auto | Override output filename prefix (single sequence only) |
 | `-r, --return_structures` | flag | off | Generate PDB + XTC 3D structures |
 | `--ionic_strength` | int | 150 | Solvent ionic strength in mM (20, 150, or 300) |
-| `--num-cpus` | int | auto | Max CPUs for MDS reconstruction |
-| `--num-mds-init` | int | 4 | Number of parallel MDS initializations |
 | `-v, --verbose` | flag | off | Enable verbose output |
 | `--disable_progress_bar` | flag | off | Hide progress bars |
 | `--info` | flag | — | Print STARLING configuration and exit |
@@ -483,8 +481,6 @@ E_dict = generate('proteins.fasta', conformations=500, return_structures=True, o
 | `sampler` | str | `'ddim'` | Sampler backend |
 | `return_structures` | bool | `False` | Generate 3D structures (PDB/XTC) |
 | `batch_size` | int | 100 | Batch size for sampling |
-| `num_cpus_mds` | int | auto | Max CPUs for MDS reconstruction |
-| `num_mds_init` | int | 4 | Number of parallel MDS initializations |
 | `output_directory` | str | `None` | Save directory (if set, writes `.starling` files to disk) |
 | `output_name` | str | `None` | Override filename prefix (single-sequence mode) |
 | `return_data` | bool | `True` | Return `Ensemble` objects (set `False` for fire-and-forget disk saves) |
@@ -681,14 +677,12 @@ Returns binary contact maps using a distance threshold. If `return_mean=True`, r
 ```python
 Ensemble.build_ensemble_trajectory(
     batch_size=100,
-    num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
-    num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
     device=None,
     force_recompute=False,
     progress_bar=True,
 )
 ```
-Reconstructs 3D coordinates from distance maps using multidimensional scaling (MDS). Returns an `SSProtein` trajectory object.
+Initializes 3D coordinates with classical MDS, then refines weighted distance stress using batched Torch SMACOF on CPU, CUDA, or MPS. Accurately predicted residue separations receive greater weight. Returns an `SSProtein` trajectory object. There are no random restarts or CPU-worker controls.
 
 ### Error checking
 

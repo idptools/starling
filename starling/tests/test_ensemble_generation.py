@@ -271,14 +271,6 @@ class TestGenerateValidation:
         with pytest.raises(ValueError, match="batch_size"):
             generate(SHORT_SEQ, conformations=10, batch_size=-1)
 
-    def test_invalid_num_cpus_mds(self):
-        with pytest.raises(ValueError, match="num_cpus_mds"):
-            generate(SHORT_SEQ, conformations=10, num_cpus_mds=0)
-
-    def test_invalid_num_mds_init(self):
-        with pytest.raises(ValueError, match="num_mds_init"):
-            generate(SHORT_SEQ, conformations=10, num_mds_init=0)
-
     def test_invalid_sampler_type(self):
         with pytest.raises(ValueError, match="sampler"):
             generate(SHORT_SEQ, conformations=10, sampler=123)
@@ -851,7 +843,6 @@ class TestConfigs:
         assert configs.DEFAULT_STEPS > 0
         assert configs.MAX_SEQUENCE_LENGTH > 0
         assert configs.DEFAULT_IONIC_STRENGTH > 0
-        assert configs.DEFAULT_MDS_NUM_INIT > 0
 
     def test_valid_aa_string(self):
         assert len(configs.VALID_AA) == 20

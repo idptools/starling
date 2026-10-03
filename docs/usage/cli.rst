@@ -30,7 +30,6 @@ Key options:
 * ``--ionic_strength`` - choose 20, 150, or 300 mM solvent environments
 * ``--steps`` - diffusion steps for the sampler (default 25)
 * ``--device`` - force CPU, CUDA (``cuda:0``), or Apple MPS
-* ``--num-cpus`` / ``--num-mds-init`` - control MDS reconstruction throughput
 * ``--outname`` - override the output prefix when providing a single sequence
 
 

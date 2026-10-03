@@ -27,7 +27,6 @@ dependencies = [
 	'cython>=3.0.0',
 	'matplotlib',
 	'pytorch-lightning',
-	'scikit-learn',
 	'einops',
 	'tqdm',
 	'PyYAML',

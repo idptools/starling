@@ -729,8 +729,6 @@ class Ensemble:
     def build_ensemble_trajectory(
         self,
         batch_size=100,
-        num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
-        num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
         device=None,
         force_recompute=False,
         progress_bar=True,
@@ -739,25 +737,14 @@ class Ensemble:
         Function that explicitly reconstructs a 3D ensemble of conformations
         using the distance maps. This happens automatically if the trajectory
         property is called, but this function allows for more control over the
-        process. Specifically it allows you to specify the method used to generate
-        the 3D structures, the number of CPUs to use, and the device to use for
+        process. Specifically it allows you to specify the device to use for
+        generating the 3D structures.
         predictions. Note that if the 3D ensemble has already been reconstructed this
         function will NOT reconstructed the 3D ensemble unless force_recompute is set
         to True.
 
         Parameters
         ----------
-
-        num_cpus_mds : int
-            The number of CPUs to use for MDS. Default is 4 (set by
-            configs.DEFAULT_CPU_COUNT_MDS)
-
-        num_mds_init : int
-            Number of independent MDS jobs to execute. NB: if this is
-            increased this in principle means there are more chances
-            of finding a good solution, but there is a performance hit
-            unless num_cpus_mds >= num_mds_init. Default is
-            4 (set by configs.DEFAULT_MDS_NUM_INIT).
 
         device : str
             The device to use for predictions. Default is None. If None, the
@@ -793,8 +780,6 @@ class Ensemble:
             coordinates = generate_3d_coordinates_from_distances(
                 device,
                 batch_size,
-                num_cpus_mds,
-                num_mds_init,
                 self.__distance_maps,
                 progress_bar=progress_bar,
             )

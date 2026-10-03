@@ -156,7 +156,6 @@ Balance throughput and memory use by adjusting hardware-related options:
         conformations=100,
         device="cuda:0",         # Pin generation to a specific accelerator
         batch_size=64,           # Increase to improve GPU utilisation
-        num_cpus_mds=8,          # Allocate more CPUs for 3D reconstruction
         show_progress_bar=True,
         verbose=False,
     )

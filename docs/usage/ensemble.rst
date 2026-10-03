@@ -93,8 +93,7 @@ STARLING can generate 3D structures from distance maps:
     
     # Explicitly build structures with custom parameters
     ensemble.build_ensemble_trajectory(
-        num_cpus_mds=4,       # Number of CPUs for structure generation
-        num_mds_init=4,       # Number of MDS initializations
+        batch_size=100,       # Number of maps reconstructed per batch
         device="cuda",        # Use GPU acceleration if available
         force_recompute=True  # Rebuild structures even if they exist
     )

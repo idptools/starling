@@ -118,7 +118,6 @@ docker run --rm --gpus all \
 | `--ionic_strength` | 150 | Solvent ionic strength: 20, 150, or 300 mM |
 | `-o, --output_directory` | `.` | Output directory |
 | `--outname` | auto | Override output filename prefix (single-sequence mode) |
-| `--num-cpus` | auto | Max CPUs for MDS reconstruction |
 | `-v, --verbose` | off | Verbose output |
 
 ---

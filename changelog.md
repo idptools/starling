@@ -2,6 +2,33 @@
 
 This file contains our changelog for STARLING
 
+## October 2nd 2026
+
+### Improvements
+
+- **Weighted coordinate reconstruction** (`starling/structure/coordinates.py`, `starling/structure/weighted_stress.py`).
+  Reconstruction now refines distance maps with inverse squared empirical map-error weights, giving accurately predicted short-range distances greater influence. Classical MDS supplies a deterministic initial structure before batched Torch SMACOF refinement. CPU, CUDA, and MPS use the same reconstruction path; diffusion samplers and model weights are unchanged.
+  Production reconstruction coefficients use the reproducible posterior-sample fit on 192 sequences, with 48 additional validation sequences. This good-faith calibration serves as a first-attempt solution to address an issue identified by Davide Mercadante (thanks!).
+
+### Bug Fixes
+
+- **Reconstruction failed when batches converged at different iterations** (`starling/structure/coordinates.py`).
+  Stress histories now retain their documented width, allowing independently converged batches to concatenate correctly.
+
+- **Float64 distance maps crashed during reconstruction** (`starling/structure/coordinates.py`).
+  NumPy and Torch inputs are converted to the solver's float32 dtype per batch, avoiding mixed-dtype matrix multiplication failures.
+
+### Removed
+
+- **Legacy sklearn and Adam reconstruction routes**, their unused helpers, the MDS comparison benchmark, and obsolete API pages.
+  Removed the scikit-learn runtime dependency and unused CPU-worker/random-restart configuration. Reconstruction uses one Torch implementation rather than separate device-specific algorithms.
+
+### Documentation
+
+- Added the calibration runner, family-separated validation, frozen selection manifest, raw-input/source provenance, and per-sequence results. Removed exploratory weighting implementations and ensemble-mean-bias fitting; unrelated devtools are unchanged.
+
+- Updated README, API, usage, and Docker guides to describe classical initialization and weighted Torch SMACOF, removing obsolete CPU-worker and restart options. Added calibration methods in `devtools/scripts/weighted_reconstruction.md`. MDS is coordinate reconstruction, not a change to diffusion sampling.
+
 ## August 21st 2026
 
 ### Bug Fixes

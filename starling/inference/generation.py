@@ -309,8 +309,6 @@ def generate_backend(
     sampler,
     return_structures,
     batch_size,
-    num_cpus_mds,
-    num_mds_init,
     output_directory,
     return_data,
     verbose,
@@ -354,11 +352,6 @@ def generate_backend(
 
     batch_size : int
         The batch size to use for sampling.
-
-    num_cpus_mds : int
-        The number of CPUs to use for MDS. There
-        is no point specifying more than the default
-        number of MDS runs performed (defined in configs)
 
     output_directory : str or None
         If None, no output is saved.
@@ -540,8 +533,6 @@ def generate_backend(
             coordinates = generate_3d_coordinates_from_distances(
                 device,
                 batch_size,
-                num_cpus_mds,
-                num_mds_init,
                 sym_distance_maps,
                 progress_bar=show_progress_bar,
             )

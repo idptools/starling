@@ -63,8 +63,6 @@ def print_info():
     print("  Default # of confs :", configs.DEFAULT_NUMBER_CONFS)
     print("  Default batch size :", configs.DEFAULT_BATCH_SIZE)
     print("  Default steps      :", configs.DEFAULT_STEPS)
-    print("  Default # of CPUs  :", configs.DEFAULT_CPU_COUNT_MDS)
-    print("  Default # MDS jobs :", configs.DEFAULT_MDS_NUM_INIT)
     print(f"  Default device     : {check_device(None)}")
     print("-------------------------------------------------------")
     print(
@@ -142,20 +140,6 @@ def main():
         help="Enable verbose output (default: False)",
     )
     parser.add_argument(
-        "--num-cpus",
-        dest="num_cpus",
-        type=int,
-        default=configs.DEFAULT_CPU_COUNT_MDS,
-        help=f"Sets the max number of CPUs to use. Default: {configs.DEFAULT_CPU_COUNT_MDS}.",
-    )
-    parser.add_argument(
-        "--num-mds-init",
-        dest="num_mds_init",
-        type=int,
-        default=configs.DEFAULT_MDS_NUM_INIT,
-        help=f"Sets the number of MDS jobs to be run in parallel. More may give better reconstruction but requires 1:1 with #CPUs to avoid performance penalty. Default: {configs.DEFAULT_MDS_NUM_INIT}.",
-    )
-    parser.add_argument(
         "--ionic_strength",
         dest="ionic_strength",
         type=int,
@@ -222,8 +206,6 @@ def main():
         steps=args.steps,
         return_structures=args.return_structures,
         batch_size=args.batch_size,
-        num_cpus_mds=args.num_cpus,
-        num_mds_init=args.num_mds_init,
         output_directory=args.output_directory,
         output_name=args.outname,
         return_data=False,

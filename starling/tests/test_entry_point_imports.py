@@ -22,7 +22,6 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 # Distributions whose import name differs from the name on PyPI.
 DIST_TO_IMPORT = {
     "pyyaml": "yaml",
-    "scikit-learn": "sklearn",
     "faiss-cpu": "faiss",
     "faiss-gpu": "faiss",
     "hydra-core": "hydra",

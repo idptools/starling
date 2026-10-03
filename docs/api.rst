@@ -18,6 +18,9 @@ High-level functions
 Structure & Ensembles
 ---------------------
 
+Coordinate reconstruction uses classical MDS initialization followed by
+weighted Torch SMACOF on CPU, CUDA, or MPS.
+
 .. autosummary::
    :toctree: autosummary
    :recursive:
@@ -49,7 +52,6 @@ Inference
    inference.constraints
    inference.model_loading
    inference.evaluate_vae
-   inference.benchmark_mds
 
 Models
 ------

@@ -166,8 +166,6 @@ def generate(
     sampler=configs.DEFAULT_SAMPLER,
     return_structures=False,
     batch_size=configs.DEFAULT_BATCH_SIZE,
-    num_cpus_mds=configs.DEFAULT_CPU_COUNT_MDS,
-    num_mds_init=configs.DEFAULT_MDS_NUM_INIT,
     output_directory=None,
     output_name=None,
     return_data=True,
@@ -213,10 +211,6 @@ def generate(
         When ``True`` include 3D coordinate ensembles in the results.
     batch_size : int, default=configs.DEFAULT_BATCH_SIZE
         Batch size used for sampling iterations.
-    num_cpus_mds : int, default=configs.DEFAULT_CPU_COUNT_MDS
-        Number of CPU workers allocated to the MDS refinement stage.
-    num_mds_init : int, default=configs.DEFAULT_MDS_NUM_INIT
-        Number of independent MDS initializations to run per sequence.
     output_directory : str or os.PathLike or None, default=None
         Directory where generated outputs are written. When ``None`` nothing is saved.
     output_name : str or None, default=None
@@ -314,14 +308,6 @@ def generate(
     if not check_positive_int(batch_size):
         raise ValueError("Error: batch_size must be an integer greater than 0.")
 
-    # check number of cpus
-    if not check_positive_int(num_cpus_mds):
-        raise ValueError("Error: num_cpus_mds must be an integer greater than 0.")
-
-    # check number of independent runs of MDS
-    if not check_positive_int(num_mds_init):
-        raise ValueError("Error: num_mds_init must be an integer greater than 0.")
-
     # make sure batch_size is not smaller than conformations.
     # if it is, make batch_size = conformations.
     if batch_size > conformations:
@@ -377,8 +363,6 @@ def generate(
         sampler,
         return_structures,
         batch_size,
-        num_cpus_mds,
-        num_mds_init,
         output_directory,
         return_data,
         verbose,
