@@ -85,7 +85,8 @@ to observables not directly supported by STARLING.
 """
 
 from datetime import datetime
-from typing import Callable, List, Optional, Tuple, TypedDict, Union
+import math
+from typing import Callable, Optional, Tuple, TypedDict, Union
 
 import numpy as np
 from scipy.optimize import minimize
@@ -96,8 +97,6 @@ from starling.structure.bme_utils import (
     DEFAULT_OPTIMIZER,
     DEFAULT_THETA,
     LAMBDA_INIT_SCALE,
-    MIN_WEIGHT_THRESHOLD,
-    VALID_CONSTRAINTS,
     BMEResult,
     ExperimentalObservable,
     ThetaScanResult,
@@ -170,8 +169,8 @@ class BME:
         # Results storage
         self._result: Optional[BMEResult] = None
         self._theta_scan_result: Optional["ThetaScanResult"] = None
-        if theta is not None and theta <= 0:
-            raise ValueError(f"theta must be positive, got {theta}")
+        if theta is not None and (not math.isfinite(theta) or theta <= 0):
+            raise ValueError(f"theta must be finite and positive, got {theta}")
         self._constructor_theta: Optional[float] = (
             float(theta) if theta is not None else None
         )
@@ -563,8 +562,8 @@ class BME:
     ) -> BMEResult:
         # 1) choose effective theta
         if theta is not None:
-            if theta <= 0:
-                raise ValueError(f"theta must be positive, got {theta}")
+            if not math.isfinite(theta) or theta <= 0:
+                raise ValueError(f"theta must be finite and positive, got {theta}")
             self._theta = float(theta)
             self._theta_scan_result = None
             if verbose:
