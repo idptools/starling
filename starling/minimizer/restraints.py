@@ -25,6 +25,7 @@ independent of chain length, rather than growing with n.
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Final
 
 import numpy as np
@@ -124,7 +125,11 @@ class DistanceRestraints:
             If the reference maps are not square, sigma does not match them,
             or any setting is out of range.
         """
-        if min_separation < 1:
+        if (
+            isinstance(min_separation, bool)
+            or not isinstance(min_separation, Integral)
+            or min_separation < 1
+        ):
             raise ValueError(f"min_separation must be >= 1, got {min_separation}")
         if tolerance < 0:
             raise ValueError(f"tolerance must be >= 0, got {tolerance}")
@@ -138,8 +143,7 @@ class DistanceRestraints:
             reference = reference.unsqueeze(0)
         if reference.ndim != 3 or reference.shape[1] != reference.shape[2]:
             raise ValueError(
-                "reference_distances must have shape (n_frames, n, n) or (n, n), "
-                f"got {tuple(reference.shape)}"
+                f"reference_distances must have shape (n_frames, n, n) or (n, n), got {tuple(reference.shape)}"
             )
 
         n = reference.shape[1]
@@ -149,8 +153,7 @@ class DistanceRestraints:
             sigma_t = torch.as_tensor(sigma, dtype=dtype, device=device)
             if sigma_t.shape != (n, n):
                 raise ValueError(
-                    f"sigma must have shape ({n}, {n}) to match the reference maps, "
-                    f"got {tuple(sigma_t.shape)}"
+                    f"sigma must have shape ({n}, {n}) to match the reference maps, got {tuple(sigma_t.shape)}"
                 )
             reference = torch.maximum(reference, reference_floor * sigma_t)
 
@@ -162,9 +165,7 @@ class DistanceRestraints:
         self.min_separation: int = int(min_separation)
         self.tolerance: float = float(tolerance)
         self.force_constant: float = float(force_constant)
-        self.pair_force_constant: float = (
-            self.force_constant / mean_partners if mean_partners > 0 else 0.0
-        )
+        self.pair_force_constant: float = self.force_constant / mean_partners if mean_partners > 0 else 0.0
         self.n_restrained_pairs: int = int(mask.sum()) // 2
 
         self._reference = reference
@@ -186,12 +187,13 @@ class DistanceRestraints:
     #
     def _reference_for(self, frame_index: torch.Tensor) -> torch.Tensor:
         """Reference maps for the given frames, reusing the last gather if possible."""
+        # Compiled indexing fuses into the force calculation. The eager cache's
+        # torch.equal would synchronize and break a full force graph.
+        compiler = getattr(torch, "compiler", None)
+        if compiler is not None and compiler.is_compiling():
+            return self._reference.index_select(0, frame_index)
         cached = self._cached_index
-        if (
-            cached is None
-            or cached.shape != frame_index.shape
-            or not torch.equal(cached, frame_index)
-        ):
+        if cached is None or cached.shape != frame_index.shape or not torch.equal(cached, frame_index):
             self._cached_index = frame_index.clone()
             self._cached_reference = self._reference.index_select(0, frame_index)
 
@@ -228,10 +230,11 @@ class DistanceRestraints:
             [1] torch.Tensor or None: energy in kJ/mol, shape (batch,).
         """
         deviation = distances - self._reference_for(frame_index)
-        excess = torch.clamp_min(deviation.abs() - self.tolerance, 0.0)
-        excess = torch.where(self._mask, excess, torch.zeros_like(excess))
+        # Signed excess outside the flat bottom; zero inside.
+        excess = deviation - deviation.clamp(-self.tolerance, self.tolerance)
+        excess = torch.where(self._mask, excess, 0.0)
 
-        dudr = self.pair_force_constant * excess * torch.sign(deviation)
+        dudr = self.pair_force_constant * excess
 
         energy = None
         if compute_energy:

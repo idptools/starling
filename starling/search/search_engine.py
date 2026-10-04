@@ -888,7 +888,7 @@ class SearchEngine:
             )
 
         # Prepare queries
-        q_np = queries.detach().cpu().float().numpy()
+        q_np = queries.detach().cpu().float().numpy().copy()
         if self.metric == "cosine":
             faiss.normalize_L2(q_np)
 
@@ -909,7 +909,7 @@ class SearchEngine:
         any_filters = (
             len(base_filters) > 1 or exclude_exact or sequence_identity_max is not None
         )
-        fetch_k = self._compute_fetch_k(k, overfetch, any_filters)
+        fetch_k = self._compute_fetch_k(k, overfetch, any_filters or rerank)
         self._log(
             f"[SEARCH] k={k} fetch_k={fetch_k} nprobe={nprobe} queries={q_np.shape[0]}"
         )
@@ -927,7 +927,7 @@ class SearchEngine:
         preliminary, rerank_gid_set = self._filter_candidates(
             D=D,
             idxs=idxs,
-            k=k,
+            k=fetch_k if rerank else k,
             converter=converter,
             query_sequences=query_sequences,
             exclude_exact_sequence=exclude_exact,

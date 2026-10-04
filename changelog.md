@@ -2,6 +2,13 @@
 
 This file contains our changelog for STARLING
 
+## October 4th 2026
+
+### Bug Fixes
+
+- **Corrected generation and search edge cases.** Invalid maps and stale ensemble state are handled safely; constraint guidance and encoder batching preserve their intended axes. Search aligns features with token records, keeps a larger rerank candidate pool, and reports consistent L2 scores.
+- **Fixed training and utility behavior.** The sigmoid schedule and min-SNR weighting are valid, BME honors an explicit theta, repeated search hits export correctly, and CLI flags match their names. Converter output paths, VAE evaluation batching/mode, training dependencies, and external-ensemble weight provenance are also corrected.
+
 ## October 3rd 2026
 
 ### New
@@ -11,10 +18,32 @@ This file contains our changelog for STARLING
 
 ### Improvements
 
+- **Shared tensor distance-map symmetrization** (`starling/utilities.py`).
+  Generation, constraints, and VAE training use one differentiable operation that reflects the upper triangle and zeros the diagonal without modifying inputs. Device and dtype are preserved; generation retains its CPU output contract. Restraint reference normalization is owned by `DistanceRestraints` rather than repeated by relaxation.
+
+- **Reconstruction and physical relaxation use float32** (`starling/structure/coordinates.py`, `starling/minimizer/relax.py`, `starling/minimizer/fused_forces.py`).
+  The eager CUDA force reduction avoids TF32 matrix multiplication, regardless of model inference precision settings.
+  MDS initialization, FIRE, and thermalization compute in float32 on every device. FIRE rescales norms and power calculations to avoid overflow from clash forces. MPS eigensolver and pseudoinverse fallbacks run in float32 on CPU; iterative reconstruction and relaxation use native device tensors. CUDA FIRE and thermalization share a fixed-tile force kernel reused across sequence lengths without per-sequence specialization; unavailable fusion warns and falls back to eager float32 before drawing noise. GPU MDS checks batch completion every eight iterations while freezing converged maps immediately. Force-field parameters, convergence tolerance, and the 250-step default are unchanged. Seeded results remain reproducible but differ from earlier float64 reconstruction and relaxation.
+
+- **Eager physical relaxation avoids redundant pair-matrix operations** (`starling/minimizer/forcefield.py`, `starling/minimizer/restraints.py`).
+  Wang-Frenkel coefficients and charged-pair indices are cached per sequence. Integer powers use squares, force derivatives are algebraically factored, and restraints use signed clamps. CUDA distances use direct coordinate differences; CPU and MPS retain `torch.cdist`. Force-field parameters and cutoffs are unchanged.
+
+- **Optional whole-force fusion for CUDA thermalization** (`compile_forces=True`, CLI `--compile-forces`).
+  PyTorch compiles the native float32 force calculation instead of using the reusable Triton kernel; FIRE stays eager. The force field and 250-step default are unchanged. Compilation adds startup time and is intended for sustained throughput. Failures warn and fall back before thermalization draws noise; relaxation results record the number of compiled batches.
+
+- **Reconstruction-to-relaxation avoids intermediate CPU transfers** (`starling/structure/coordinates.py`, `starling/inference/generation.py`, `starling/minimizer/relax.py`).
+  Coordinates stay in Angstroms on-device between MDS and relaxation, with one conversion to nanometres at the generation boundary. Sampling uses batched symmetrization and one loop for full and partial batches. FIRE uses tensor masks for uphill steps and failed forces; Langevin checks accumulated non-finite-force flags at the output boundary. Public return types, convergence criteria, and reconstruction weights are unchanged.
+
 - **Relaxation now thermalizes structures after minimizing them** (`starling/minimizer/langevin.py`, `starling/minimizer/relax.py`).
   Energy minimization leaves every conformation at a zero-temperature minimum, so relaxed bonds were far narrower than in Mpipi-GG simulations (0.380 ± 0.003 nm against 0.386 ± 0.018 nm, pooled over 200 natural IDRs). `relax_conformations()` now follows minimization with 250 steps (5 ps) of BAOAB Langevin dynamics at 300 K under the same force field and restraints. On 20 natural IDRs this restores the thermal bond spread (0.0175 nm against 0.0177 nm in simulations) and brings the angle and dihedral distributions 5x and 3x closer to the simulations, at the cost of a slightly larger change in Rg (0.3% on average, at most ~3%). Longer runs (1000 or 2500 steps) changed none of this. Pass `thermalization_steps=0` for the previous minimized-only structures; `temperature_K` and `seed` control the run. This applies to `generate(relax=True)` and `--relax`.
 
 ### Bug Fixes
+
+- **Model caching respects checkpoint paths and device** (`starling/inference/model_loading.py`).
+  Requests for different checkpoints or devices reload the single cached model pair instead of silently reusing incompatible models.
+
+- **Relaxation preserves result dtypes and rejects invalid controls** (`starling/minimizer`).
+  Energies retain the documented NumPy float64 output type while device calculations stay float32. Non-finite controls and invalid step counts are rejected before force evaluation.
 
 - **CLI startup no longer loads the model-training stack** (`starling/inference/model_loading.py`, `starling/samplers`).
   Lightning model imports are deferred until checkpoint loading. CLI help and ensemble utilities no longer import optional text-metric dependencies or require `psutil` at startup; checkpoint loading and sampler equations are unchanged.

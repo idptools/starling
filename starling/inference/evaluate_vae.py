@@ -1,6 +1,5 @@
 import io
 import lzma
-import multiprocessing as mp
 from argparse import ArgumentParser
 from collections import OrderedDict
 from pathlib import Path
@@ -167,13 +166,9 @@ def main():
     parser.add_argument("--outfile", type=str, default="summary_stats_vae.csv")
     args = parser.parse_args()
 
-    # Get the number of cores
-    num_cores = mp.cpu_count()
-    # Create a pool of workers
-    pool = mp.Pool(num_cores)
-
     # Load the VAE model
     vae = VAE.load_from_checkpoint(args.vae, map_location=args.device)
+    vae.eval()
 
     # Read the input file
     paths = read_input_file(args.input)
@@ -212,7 +207,7 @@ def main():
                 reconstruct(
                     vae,
                     ground_truth_dm[
-                        (batch + 1) * args.batch : (batch + 1) * args.batch
+                        num_batches * args.batch : num_batches * args.batch
                         + remaining_samples
                     ].to(args.device),
                 )

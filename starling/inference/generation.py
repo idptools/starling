@@ -17,10 +17,13 @@ from starling.samplers.ddpm_sampler import DDPMSampler
 from starling.samplers.dpmpp_sampler import DPMppSampler
 from starling.samplers.plms_sampler import PLMSSampler
 from starling.structure.coordinates import (
+    _mds_coordinates,
     create_ca_topology_from_coords,
     generate_3d_coordinates_from_distances,
 )
+from starling.structure.weighted_stress import map_error_weights
 from starling.structure.ensemble import Ensemble
+from starling.utilities import symmetrize_tensor_distance_maps
 
 # initialize model_manager singleton. This happens when this module
 # is imported to ensemble_generation, so we can use the
@@ -47,20 +50,7 @@ def symmetrize_distance_map(dist_map):
     # Ensure the distance map is 2D
     dist_map = dist_map.squeeze(0) if dist_map.dim() == 3 else dist_map
 
-    # Create a copy of the distance map to modify
-    sym_dist_map = dist_map.clone()
-
-    # Replace the lower triangle with the upper triangle values
-    mask_upper_triangle = torch.triu(torch.ones_like(dist_map), diagonal=1).bool()
-    mask_lower_triangle = ~mask_upper_triangle
-
-    # Set lower triangle values to be the same as the upper triangle
-    sym_dist_map[mask_lower_triangle] = dist_map.T[mask_lower_triangle]
-
-    # Set diagonal values to zero
-    sym_dist_map.fill_diagonal_(0)
-
-    return sym_dist_map.cpu()
+    return symmetrize_tensor_distance_maps(dist_map).cpu()
 
 
 def sequence_encoder_backend(
@@ -123,9 +113,7 @@ def sequence_encoder_backend(
         Otherwise returns None (embeddings written to disk as <name>.pt).
     """
     tokenizer = None if pretokenized else StarlingTokenizer()
-    _, diffusion = model_manager.get_models(
-        device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
-    )
+    _, diffusion = model_manager.get_models(device=device, encoder_path=encoder_path, ddpm_path=ddpm_path)
 
     ionic_strength = torch.tensor([ionic_strength], device=device).unsqueeze(0)
 
@@ -172,9 +160,7 @@ def sequence_encoder_backend(
     total = len(seqs)
     lengths = [len(t) for t in seqs]
 
-    _inference_ctx = (
-        torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
-    )
+    _inference_ctx = torch.inference_mode if hasattr(torch, "inference_mode") else torch.no_grad
 
     with _inference_ctx():
         for start in range(0, total, batch_size):
@@ -187,19 +173,11 @@ def sequence_encoder_backend(
             max_length = batch_lengths[0]
 
             # Build tensors (only CPU→GPU transfer)
-            sequence_tensor = torch.zeros(
-                (current_bs, max_length), dtype=torch.long, device=device
-            )
-            attention_mask = torch.zeros(
-                (current_bs, max_length), dtype=torch.bool, device=device
-            )
+            sequence_tensor = torch.zeros((current_bs, max_length), dtype=torch.long, device=device)
+            attention_mask = torch.zeros((current_bs, max_length), dtype=torch.bool, device=device)
 
-            for i, (seq_tokens, length_i) in enumerate(
-                zip(batch_sequences, batch_lengths)
-            ):
-                sequence_tensor[i, :length_i] = torch.as_tensor(
-                    seq_tokens, dtype=torch.long, device=device
-                )
+            for i, (seq_tokens, length_i) in enumerate(zip(batch_sequences, batch_lengths)):
+                sequence_tensor[i, :length_i] = torch.as_tensor(seq_tokens, dtype=torch.long, device=device)
                 attention_mask[i, :length_i] = True
 
             batch_embeddings = diffusion.sequence2labels(
@@ -229,7 +207,7 @@ def sequence_encoder_backend(
             if (
                 free_cuda_cache
                 and torch.cuda.is_available()
-                and device.startswith("cuda")
+                and torch.device(device).type == "cuda"
             ):
                 torch.cuda.empty_cache()
 
@@ -245,9 +223,7 @@ def ensemble_encoder_backend(
     encoder_path=None,
     ddpm_path=None,
 ):
-    encoder_model, diffusion = model_manager.get_models(
-        device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
-    )
+    encoder_model, diffusion = model_manager.get_models(device=device, encoder_path=encoder_path, ddpm_path=ddpm_path)
 
     assert isinstance(ensemble, np.ndarray), (
         "ensemble must be a numpy array. If you have a torch tensor, convert it to numpy first."
@@ -269,40 +245,18 @@ def ensemble_encoder_backend(
             constant_values=0,
         )
 
-    # get num_batches and remaining samples
-    num_batches = ensemble.shape[0] // batch_size
-    remaining_samples = ensemble.shape[0] % batch_size
-
-    latent_spaces = []
-
-    # real_batch_count no longer needed (legacy from previous implementation)
-
     ensemble = torch.from_numpy(ensemble)
     ensemble = ensemble.unsqueeze(1)  # Add a channel dimension
-
-    for batch in range(num_batches):
-        start_idx = batch * batch_size
-        end_idx = (batch + 1) * batch_size
-
-        batch_ensemble = ensemble[start_idx:end_idx]
-
-        latent_space = encoder_model.encode(
-            batch_ensemble.to(device),
-        ).mode()
-
-        latent_spaces.append(latent_space.detach().squeeze().cpu().numpy())
-
-    if remaining_samples > 0:
-        start_idx = num_batches * batch_size
-        batch_ensemble = ensemble[start_idx:]
-
-        latent_space = encoder_model.encode(
-            batch_ensemble.to(device),
-        ).mode()
-
-        latent_spaces.append(latent_space.detach().squeeze().cpu().numpy())
-
-    return np.concatenate(latent_spaces)
+    latent_spaces = [
+        encoder_model.encode(ensemble[start : start + batch_size].to(device))
+        .mode()
+        .detach()
+        .squeeze(1)
+        .cpu()
+        .numpy()
+        for start in range(0, len(ensemble), batch_size)
+    ]
+    return np.concatenate(latent_spaces, axis=0)
 
 
 # Maximum number of sample-and-filter rounds attempted when remove_errors is
@@ -353,49 +307,20 @@ def _sample_distance_maps(
         Tensor of shape ``(conformations, L, L)`` holding the symmetrized
         distance maps, where ``L`` is the sequence length.
     """
-    num_batches = conformations // batch_size
-    remaining_samples = conformations % batch_size
-
-    if remaining_samples > 0:
-        real_batch_count = num_batches + 1
-    else:
-        real_batch_count = num_batches
-
+    real_batch_count = (conformations + batch_size - 1) // batch_size
     starling_dm = []
-
-    for batch in range(num_batches):
+    for batch, start in enumerate(range(0, conformations, batch_size), start=1):
         distance_maps = sampler.sample(
-            batch_size,
+            min(batch_size, conformations - start),
             labels=sequence,
             show_per_step_progress_bar=show_per_step_progress_bar,
-            batch_count=batch + 1,
+            batch_count=batch,
             max_batch_count=real_batch_count,
             constraint=constraint,
         )
-        starling_dm.append(
-            [
-                symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                for dm in distance_maps
-            ]
-        )
-
-    if remaining_samples > 0:
-        distance_maps = sampler.sample(
-            remaining_samples,
-            labels=sequence,
-            show_per_step_progress_bar=show_per_step_progress_bar,
-            batch_count=real_batch_count,
-            max_batch_count=real_batch_count,
-            constraint=constraint,
-        )
-        starling_dm.append(
-            [
-                symmetrize_distance_map(dm[:, : len(sequence), : len(sequence)])
-                for dm in distance_maps
-            ]
-        )
-
-    return torch.cat([torch.stack(batch) for batch in starling_dm], dim=0)
+        maps = distance_maps[:, 0, : len(sequence), : len(sequence)]
+        starling_dm.append(symmetrize_tensor_distance_maps(maps).cpu())
+    return torch.cat(starling_dm, dim=0)
 
 
 def _relax_coordinates(
@@ -407,12 +332,13 @@ def _relax_coordinates(
     batch_size,
     show_progress_bar,
     verbose=False,
+    compile_forces=False,
 ):
     """
     Relax MDS-reconstructed conformers with Mpipi-GG.
 
     Thin wrapper around :func:`starling.minimizer.relax_conformations` that
-    works in the nanometre coordinates used throughout this module. Each
+    accepts the Angstrom coordinates returned by MDS. Each
     conformer is restrained to the STARLING distance map it was built from, so
     local geometry (bond lengths, overlapping beads) is repaired while the
     global shape is kept.
@@ -422,10 +348,10 @@ def _relax_coordinates(
     sequence : str
         The amino acid sequence.
 
-    coordinates : np.ndarray
-        MDS coordinates in nanometres, shape ``(n_conformers, L, 3)``.
+    coordinates : np.ndarray or torch.Tensor
+        MDS coordinates in Angstroms, shape ``(n_conformers, L, 3)``.
 
-    distance_maps : np.ndarray
+    distance_maps : np.ndarray or torch.Tensor
         The STARLING distance maps (Angstroms) the coordinates were built
         from, shape ``(n_conformers, L, L)``.
 
@@ -449,20 +375,59 @@ def _relax_coordinates(
     np.ndarray
         Relaxed coordinates in nanometres, shape ``(n_conformers, L, 3)``.
     """
+    if not isinstance(coordinates, torch.Tensor):
+        coordinates = np.asarray(coordinates)
     result = relax_conformations(
-        np.asarray(coordinates) * configs.CONVERT_ANGSTROM_TO_NM,
+        coordinates,
         sequence,
         reference_distances=distance_maps,
         ionic_strength=ionic_strength,
         batch_size=batch_size,
         device=device,
         progress_bar=show_progress_bar,
+        compile_forces=compile_forces,
     )
 
     if verbose:
         print(result.summary())
 
     return result.coordinates / configs.CONVERT_ANGSTROM_TO_NM
+
+
+def _reconstruct_coordinates(
+    sequence,
+    distance_maps,
+    ionic_strength,
+    device,
+    batch_size,
+    show_progress_bar,
+    relax,
+    verbose,
+    compile_forces=False,
+):
+    """Reconstruct and optionally relax without an intermediate CPU round trip."""
+    if not relax:
+        return generate_3d_coordinates_from_distances(
+            device, batch_size, distance_maps, progress_bar=show_progress_bar
+        )
+    coordinates, _ = _mds_coordinates(
+        distance_maps,
+        batch_size=batch_size,
+        device=device,
+        progress_bar=show_progress_bar,
+        weights=map_error_weights(distance_maps.shape[-1], device=device),
+    )
+    return _relax_coordinates(
+        sequence,
+        coordinates,
+        distance_maps,
+        ionic_strength,
+        device,
+        batch_size,
+        show_progress_bar,
+        verbose,
+        compile_forces=compile_forces,
+    )
 
 
 def _generate_error_filtered_conformers(
@@ -479,6 +444,7 @@ def _generate_error_filtered_conformers(
     max_rounds=DEFAULT_MAX_ERROR_FILTER_ROUNDS,
     relax=False,
     ionic_strength=configs.DEFAULT_IONIC_STRENGTH,
+    compile_forces=False,
 ):
     """
     Generate exactly ``conformations`` conformers that pass the error checks.
@@ -606,28 +572,21 @@ def _generate_error_filtered_conformers(
 
         # --- stage 2: screen the reconstructed 3D conformers
         if return_structures:
-            coordinates = generate_3d_coordinates_from_distances(
+            coordinates = _reconstruct_coordinates(
+                sequence,
+                candidate_maps,
+                ionic_strength,
                 device,
                 batch_size,
-                candidate_maps,
-                progress_bar=show_progress_bar,
+                show_progress_bar,
+                relax,
+                verbose,
+                compile_forces=compile_forces,
             )
 
-            if relax:
-                coordinates = _relax_coordinates(
-                    sequence,
-                    coordinates,
-                    candidate_maps,
-                    ionic_strength,
-                    device,
-                    batch_size,
-                    show_progress_bar,
-                    verbose=verbose,
-                )
-
-            ssprotein = SSTrajectory(
-                TRJ=create_ca_topology_from_coords(sequence, coordinates)
-            ).proteinTrajectoryList[0]
+            ssprotein = SSTrajectory(TRJ=create_ca_topology_from_coords(sequence, coordinates)).proteinTrajectoryList[
+                0
+            ]
 
             staging = Ensemble(candidate_maps, sequence, ssprot_ensemble=ssprotein)
             staging.check_for_errors_trajectory(remove_errors=True, verbose=False)
@@ -688,6 +647,7 @@ def generate_backend(
     remove_errors=False,
     max_error_filter_rounds=DEFAULT_MAX_ERROR_FILTER_ROUNDS,
     relax=False,
+    compile_forces=False,
 ):
     """
     Backend function for generating the distance maps using STARLING.
@@ -789,9 +749,7 @@ def generate_backend(
 
     # get models. This will only load once even if we call this
     # function multiple times.
-    encoder_model, diffusion = model_manager.get_models(
-        device=device, encoder_path=encoder_path, ddpm_path=ddpm_path
-    )
+    encoder_model, diffusion = model_manager.get_models(device=device, encoder_path=encoder_path, ddpm_path=ddpm_path)
 
     # Construct a sampler
     if sampler.lower() == "plms":
@@ -826,9 +784,7 @@ def generate_backend(
             ionic_strength=ionic_strength,
         )
     else:
-        raise ValueError(
-            f"Error: sampler must be one of 'plms', 'ddim', 'ddpm', or 'dpmpp'. Got {sampler}."
-        )
+        raise ValueError(f"Error: sampler must be one of 'plms', 'ddim', 'ddpm', or 'dpmpp'. Got {sampler}.")
 
     # dictionary to hold distance maps and structures if applicable.
     output_dict = {}
@@ -874,6 +830,7 @@ def generate_backend(
                 max_rounds=max_error_filter_rounds,
                 relax=relax,
                 ionic_strength=ionic_strength,
+                compile_forces=compile_forces,
             )
 
             end_time_prediction = time.time()
@@ -915,26 +872,17 @@ def generate_backend(
 
             # do ensemble reconstruction if requested
             if return_structures:
-                coordinates = generate_3d_coordinates_from_distances(
+                coordinates = _reconstruct_coordinates(
+                    sequence,
+                    sym_distance_maps,
+                    ionic_strength,
                     device,
                     batch_size,
-                    sym_distance_maps,
-                    progress_bar=show_progress_bar,
+                    show_progress_bar,
+                    relax,
+                    verbose,
+                    compile_forces=compile_forces,
                 )
-
-                # repair MDS artefacts in local geometry, holding each structure
-                # to the distance map it was built from
-                if relax:
-                    coordinates = _relax_coordinates(
-                        sequence,
-                        coordinates,
-                        sym_distance_maps.detach().cpu().numpy(),
-                        ionic_strength,
-                        device,
-                        batch_size,
-                        show_progress_bar,
-                        verbose=verbose,
-                    )
 
                 # make traj as an sstrajectory object and extract out the ssprotein object
                 ssprotein = SSTrajectory(
@@ -960,6 +908,12 @@ def generate_backend(
             ssprot_ensemble=ssprotein,
             ionic_strength=ionic_strength,
         )
+        E.metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = (
+            os.fspath(encoder_path or configs.DEFAULT_ENCODER_WEIGHTS_PATH)
+        )
+        E.metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = (
+            os.fspath(ddpm_path or configs.DEFAULT_DDPM_WEIGHTS_PATH)
+        )
 
         # if we are saving things, save as we progress through so we generate
         # structures/DMs in situ
@@ -972,9 +926,7 @@ def generate_backend(
             if return_structures:
                 # this saves both a topology (PDB) and a trajectory (XTC) file
                 E.save_trajectory(
-                    filename_prefix=os.path.join(
-                        output_directory, seq_name + "_STARLING"
-                    ),
+                    filename_prefix=os.path.join(output_directory, seq_name + "_STARLING"),
                     pdb_trajectory=pdb_trajectory,
                 )
 
@@ -999,15 +951,11 @@ def generate_backend(
             pbar.update(1)
 
         if verbose:
-            elapsed_time_structure_generation = (
-                end_time_structure_generation - start_time_structure_generation
-            )
+            elapsed_time_structure_generation = end_time_structure_generation - start_time_structure_generation
             elapsed_time_prediction = end_time_prediction - start_time_prediction
             total_time = elapsed_time_structure_generation + elapsed_time_prediction
 
-            print(
-                f"\n\n##### SUMMARY OF SEQUENCE PREDICTION ({num + 1}/{len(sequence_dict)}) #####"
-            )
+            print(f"\n\n##### SUMMARY OF SEQUENCE PREDICTION ({num + 1}/{len(sequence_dict)}) #####")
             print(f"Sequence name                       : {seq_name}")
             print(f"Sequence length                     : {len(sequence)}")
             print(f"Number of conformers                : {n_conformers}")
@@ -1037,9 +985,7 @@ def generate_backend(
         print("-------------------------------------------------------")
         print(f"Summary of all predictions ({len(sequence_dict)} sequences)")
         print("-------------------------------------------------------")
-        print(
-            f"\nTotal time (all sequences, all I/O) : {total_hours} hrs {total_minutes} mins {total_seconds} secs"
-        )
+        print(f"\nTotal time (all sequences, all I/O) : {total_hours} hrs {total_minutes} mins {total_seconds} secs")
 
         current_datetime = datetime.now()
         formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")

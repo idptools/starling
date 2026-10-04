@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import (
 
 from starling.data.distributions import DiagonalGaussianDistribution
 from starling.models import vae_components
+from starling.utilities import symmetrize_tensor_distance_maps
 
 torch.set_float32_matmul_precision("high")
 
@@ -725,17 +726,7 @@ class VAE(pl.LightningModule):
         torch.Tensor
             Symmetric version of the reconstructed data
         """
-        # Get the upper triangular part of each tensor in the batch
-        upper_triangles = torch.triu(data_reconstructed)
-
-        # Symmetrize each tensor in the batch individually
-        symmetrized_arrays = upper_triangles + torch.transpose(upper_triangles, -1, -2)
-
-        # Fill diagonal elements with zeros for each tensor individually
-        diag_values = torch.diagonal(symmetrized_arrays, dim1=-2, dim2=-1)
-        symmetrized_arrays = symmetrized_arrays - torch.diag_embed(diag_values)
-
-        return symmetrized_arrays
+        return symmetrize_tensor_distance_maps(data_reconstructed)
 
     def on_train_start(self) -> None:
         # Calculate correct training steps (not including validation)

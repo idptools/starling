@@ -10,20 +10,27 @@ from starling.structure.coordinates import distance_matrix_to_3d_structure_torch
 def test_weights_match_recorded_posterior_sample_calibration():
     from starling.structure.weighted_stress import map_error_weights
 
-    record = json.loads((Path(__file__).parents[2] / "devtools/scripts/weighted_stress_expanded_study.json").read_text())
+    record = json.loads(
+        (Path(__file__).parents[2] / "devtools/scripts/weighted_stress_expanded_study.json").read_text()
+    )
     model = record["fits"]["sample"]["model"]
     errors = np.array(model["short_separation_error"])
     for n in (61, 151, 327):
         plateau = model["plateau_intercept"] + model["plateau_slope"] * n
         weights = map_error_weights(n).numpy()
-        np.testing.assert_allclose(
-            weights[0, 1:7], 1 / np.minimum(errors, plateau) ** 2, rtol=1e-6
-        )
+        np.testing.assert_allclose(weights[0, 1:7], 1 / np.minimum(errors, plateau) ** 2, rtol=1e-6)
         np.testing.assert_allclose(weights[0, 7:], 1 / plateau**2, rtol=1e-6)
 
 
 @pytest.mark.parametrize("as_tensor", [False, True])
-def test_smacof_accepts_float64_distance_maps(as_tensor):
+def test_smacof_accepts_float64_distance_maps_without_double_precision(as_tensor, monkeypatch):
+    eigensolve = torch.linalg.eigh
+
+    def float32_eigh(matrix):
+        assert matrix.dtype == torch.float32
+        return eigensolve(matrix)
+
+    monkeypatch.setattr(torch.linalg, "eigh", float32_eigh)
     xyz = np.array([[0, 0, 0], [3, 0, 0], [0, 4, 0]], dtype=np.float64)
     target = np.linalg.norm(xyz[:, None] - xyz[None, :], axis=-1)[None]
     coords, _ = distance_matrix_to_3d_structure_torch_mds(
@@ -60,9 +67,7 @@ def test_smacof_starts_with_exact_three_dimensional_geometry(n_points):
 
 
 def test_smacof_is_seed_independent_and_preserves_rng_state():
-    xyz = torch.tensor(
-        [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 5.0]]
-    )
+    xyz = torch.tensor([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 5.0]])
     target = torch.cdist(xyz, xyz)[None]
     torch.manual_seed(11)
     rng_before = torch.random.get_rng_state().clone()
@@ -109,18 +114,14 @@ def test_weighted_smacof_preserves_bonds_on_inconsistent_maps():
     weights.fill_diagonal_(0)
 
     torch.manual_seed(11)
-    unweighted, _ = distance_matrix_to_3d_structure_torch_mds(
-        target[None], device="cpu", progress_bar=False
-    )
+    unweighted, _ = distance_matrix_to_3d_structure_torch_mds(target[None], device="cpu", progress_bar=False)
     torch.manual_seed(11)
     weighted, _ = distance_matrix_to_3d_structure_torch_mds(
         target[None], device="cpu", progress_bar=False, weights=weights
     )
 
     def bond_rmse(result):
-        bond_lengths = torch.linalg.vector_norm(
-            torch.diff(torch.as_tensor(result), dim=1), dim=-1
-        )
+        bond_lengths = torch.linalg.vector_norm(torch.diff(torch.as_tensor(result), dim=1), dim=-1)
         return torch.sqrt(torch.mean((bond_lengths - 3.81) ** 2))
 
     assert bond_rmse(weighted) < bond_rmse(unweighted)
@@ -131,3 +132,23 @@ def test_weighted_smacof_preserves_bonds_on_inconsistent_maps():
     assert torch.equal(calibrated, calibrated.T)
     assert torch.count_nonzero(calibrated.diagonal()) == 0
     assert calibrated[0, 1] > calibrated[0, 8] > 0
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda", "mps"])
+def test_device_resident_mds_matches_public_numpy_output(device):
+    from starling.structure.coordinates import _mds_coordinates
+
+    if device == "cuda" and not torch.cuda.is_available():
+        raise pytest.skip.Exception("CUDA is not available")
+    if device == "mps" and not torch.backends.mps.is_available():
+        raise pytest.skip.Exception("MPS is not available")
+    xyz = torch.tensor([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 5.0]])
+    maps = torch.cdist(xyz, xyz)[None].repeat(3, 1, 1).to(device)
+    coordinates, history = _mds_coordinates(maps, batch_size=2, n_iter=5, device=device, progress_bar=False)
+    assert coordinates.device.type == device
+    assert history.device.type == device
+    expected_coordinates, expected_history = distance_matrix_to_3d_structure_torch_mds(
+        maps, batch_size=2, n_iter=5, device=device, progress_bar=False
+    )
+    np.testing.assert_array_equal(coordinates.cpu().numpy(), expected_coordinates)
+    np.testing.assert_array_equal(history.cpu().numpy(), expected_history)

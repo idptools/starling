@@ -629,6 +629,8 @@ def _find_knee_curvature(x_values: np.ndarray, y_values: np.ndarray) -> int:
     y_norm = (y_values - y_values.min()) / (y_values.max() - y_values.min() + 1e-10)
 
     n_points = len(x_norm)
+    if n_points < 2:
+        raise ValueError("curvature selection requires at least two theta values")
     curvature = np.zeros(n_points)
 
     for i in range(1, n_points - 1):

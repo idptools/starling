@@ -30,7 +30,10 @@ Units are Angstroms, kJ/mol and kJ/mol/Angstrom throughout.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
+from numbers import Integral
 from typing import TYPE_CHECKING, Any, Final
+import warnings
 
 import numpy as np
 import numpy.typing as npt
@@ -38,7 +41,7 @@ import torch
 from tqdm.auto import tqdm
 
 from starling import configs
-from starling.minimizer.fire import FIREParameters, fire_minimize
+from starling.minimizer.fire import FIREParameters, ForceFunction, fire_minimize
 from starling.minimizer.forcefield import ENERGY_TERMS, MpipiGG, pairwise_distances
 from starling.minimizer.langevin import DEFAULT_TEMPERATURE_K, langevin_thermalize
 from starling.minimizer.parameters import BOND_LENGTH
@@ -224,8 +227,7 @@ class RelaxationResult:
             f"{a.mean_bond_length.mean():6.2f}   (Mpipi-GG {BOND_LENGTH})",
             f"  max |bond - 3.81| (A)      : {b.max_bond_deviation.mean():6.2f} -> "
             f"{a.max_bond_deviation.mean():6.2f}   (mean over conformations)",
-            f"  clashes per conformation   : {b.n_clashes.mean():6.1f} -> "
-            f"{a.n_clashes.mean():6.1f}",
+            f"  clashes per conformation   : {b.n_clashes.mean():6.1f} -> {a.n_clashes.mean():6.1f}",
             f"  min r/sigma                : {b.min_contact_ratio.mean():6.2f} -> "
             f"{a.min_contact_ratio.mean():6.2f}   (mean over conformations)",
             f"  radius of gyration (A)     : {b.radius_of_gyration.mean():6.2f} -> "
@@ -236,8 +238,7 @@ class RelaxationResult:
             f"{a.end_to_end_distance.mean():6.2f}   "
             f"(mean per-conformation change "
             f"{rel_change(b.end_to_end_distance, a.end_to_end_distance):.1f}%)",
-            f"  long-range RMSD to ref (A) : {b.long_range_rmsd.mean():6.2f} -> "
-            f"{a.long_range_rmsd.mean():6.2f}",
+            f"  long-range RMSD to ref (A) : {b.long_range_rmsd.mean():6.2f} -> {a.long_range_rmsd.mean():6.2f}",
         ]
         return "\n".join(lines)
 
@@ -254,9 +255,7 @@ class RelaxationResult:
         """
         from starling.structure.coordinates import create_ca_topology_from_coords
 
-        return create_ca_topology_from_coords(
-            self.sequence, self.coordinates / configs.CONVERT_ANGSTROM_TO_NM
-        )
+        return create_ca_topology_from_coords(self.sequence, self.coordinates / configs.CONVERT_ANGSTROM_TO_NM)
 
 
 # ------------------------------------------------------------------------------
@@ -265,38 +264,46 @@ class RelaxationResult:
 
 
 def _as_coordinate_array(
-    coordinates: npt.ArrayLike, n_residues: int
-) -> npt.NDArray[np.float64]:
-    """Validate coordinates and return them as a (n_frames, n, 3) float64 array."""
-    xyz = np.asarray(coordinates, dtype=np.float64)
+    coordinates: npt.ArrayLike | torch.Tensor, n_residues: int
+) -> npt.NDArray[np.float64] | torch.Tensor:
+    """Validate coordinates without moving device-resident tensors to the CPU."""
+    xyz = coordinates.detach() if isinstance(coordinates, torch.Tensor) else np.asarray(coordinates, dtype=np.float64)
+    original_shape = tuple(xyz.shape)
     if xyz.ndim == 2:
         xyz = xyz[np.newaxis]
 
     if xyz.ndim != 3 or xyz.shape[1:] != (n_residues, 3):
         raise ValueError(
             f"coordinates must have shape (n_conformations, {n_residues}, 3) or "
-            f"({n_residues}, 3) to match the sequence, got {np.shape(coordinates)}"
+            f"({n_residues}, 3) to match the sequence, got {original_shape}"
         )
-    if not np.all(np.isfinite(xyz)):
+    finite = torch.isfinite(xyz).all() if isinstance(xyz, torch.Tensor) else np.all(np.isfinite(xyz))
+    if not finite:
         raise ValueError("coordinates contain NaN or infinite values")
 
     return xyz
 
 
 def _as_reference_array(
-    reference_distances: npt.ArrayLike, n_frames: int, n_residues: int
-) -> npt.NDArray[np.float64]:
-    """Validate reference maps and return them as a (n_frames, n, n) array."""
-    ref = np.asarray(reference_distances, dtype=np.float64)
+    reference_distances: npt.ArrayLike | torch.Tensor, n_frames: int, n_residues: int
+) -> npt.NDArray[np.float64] | torch.Tensor:
+    """Validate reference maps without moving device-resident tensors to the CPU."""
+    ref = (
+        reference_distances.detach()
+        if isinstance(reference_distances, torch.Tensor)
+        else np.asarray(reference_distances, dtype=np.float64)
+    )
+    original_shape = tuple(ref.shape)
     if ref.ndim == 2:
         ref = ref[np.newaxis]
 
     if ref.shape != (n_frames, n_residues, n_residues):
         raise ValueError(
             f"reference_distances must have shape ({n_frames}, {n_residues}, "
-            f"{n_residues}) to match the coordinates, got {np.shape(reference_distances)}"
+            f"{n_residues}) to match the coordinates, got {original_shape}"
         )
-    if not np.all(np.isfinite(ref)):
+    finite = torch.isfinite(ref).all() if isinstance(ref, torch.Tensor) else np.all(np.isfinite(ref))
+    if not finite:
         raise ValueError("reference_distances contain NaN or infinite values")
 
     return ref
@@ -344,9 +351,7 @@ def _geometry_diagnostics(
     separation = (sequence_index[:, None] - sequence_index[None, :]).abs()
     upper_nonbonded = separation >= 2
     upper_nonbonded = upper_nonbonded & (sequence_index[:, None] < sequence_index)
-    long_range = (separation >= min_separation) & (
-        sequence_index[:, None] < sequence_index
-    )
+    long_range = (separation >= min_separation) & (sequence_index[:, None] < sequence_index)
 
     ratio = r / sigma
     inf = torch.full_like(ratio, float("inf"))
@@ -385,11 +390,7 @@ def _to_diagnostics(chunks: list[dict[str, torch.Tensor]]) -> GeometryDiagnostic
     values: dict[str, np.ndarray] = {}
     for name in _DIAGNOSTIC_FIELDS:
         joined = torch.cat([chunk[name] for chunk in chunks]).cpu().numpy()
-        values[name] = (
-            joined.astype(np.int64)
-            if name == "n_clashes"
-            else joined.astype(np.float64)
-        )
+        values[name] = joined.astype(np.int64) if name == "n_clashes" else joined.astype(np.float64)
     return GeometryDiagnostics(**values)
 
 
@@ -398,10 +399,29 @@ def _to_diagnostics(chunks: list[dict[str, torch.Tensor]]) -> GeometryDiagnostic
 # ------------------------------------------------------------------------------
 
 
+def _try_fused_forces(
+    forcefield: MpipiGG, restraints: DistanceRestraints, coordinates: torch.Tensor, index: torch.Tensor
+) -> ForceFunction | None:
+    """Warm the CUDA kernel before noise is drawn; otherwise use eager forces."""
+    try:
+        from starling.minimizer.fused_forces import fused_forces
+
+        force = fused_forces(forcefield, restraints)
+        force(coordinates, index)
+        return force
+    except Exception as error:
+        warnings.warn(
+            f"CUDA force fusion unavailable; using eager float32 relaxation: {type(error).__name__}: {error}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
+
+
 def relax_conformations(
-    coordinates: npt.ArrayLike,
+    coordinates: npt.ArrayLike | torch.Tensor,
     sequence: str,
-    reference_distances: npt.ArrayLike | None = None,
+    reference_distances: npt.ArrayLike | torch.Tensor | None = None,
     ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
     min_separation: int = DEFAULT_MIN_SEPARATION,
     tolerance: float = DEFAULT_TOLERANCE,
@@ -417,6 +437,7 @@ def relax_conformations(
     thermalization_steps: int = DEFAULT_THERMALIZATION_STEPS,
     temperature_K: float = DEFAULT_TEMPERATURE_K,
     seed: int | None = None,
+    compile_forces: bool = False,
 ) -> RelaxationResult:
     """
     Relax conformations with Mpipi-GG while holding their global shape.
@@ -437,9 +458,14 @@ def relax_conformations(
     fluctuations a 300 K Mpipi-GG simulation has. Pass
     thermalization_steps=0 to return the minimized structures.
 
+    Minimization and thermalization use float32 forces, accumulation, and
+    state on every device. CUDA FIRE and thermalization share one reusable Triton kernel
+    when available, otherwise eager float32 forces. Seeded runs remain
+    reproducible but differ from the earlier float64 thermalization.
+
     Parameters
     ----------
-    coordinates : array-like
+    coordinates : array-like or torch.Tensor
         Conformations in Angstroms, shape (n_conformations, n, 3) or (n, 3).
         Note that MDTraj and SOURSOP store coordinates in nm, so multiply
         those by 10 first.
@@ -447,7 +473,7 @@ def relax_conformations(
     sequence : str
         Amino acid sequence (20 standard amino acids only).
 
-    reference_distances : array-like, optional
+    reference_distances : array-like or torch.Tensor, optional
         Distance maps in Angstroms to restrain each conformation to, shape
         (n_conformations, n, n), typically the STARLING distance maps the
         conformations were built from. If None (default), each conformation
@@ -517,6 +543,12 @@ def relax_conformations(
         generator is used, so torch.manual_seed() upstream still makes runs
         reproducible.
 
+    compile_forces : bool, optional
+        Fuse the complete thermalization force calculation with torch.compile
+        on CUDA instead of the reusable kernel. Default False. Adds compilation startup time, amortized over
+        repeated batches; FIRE remains eager. Compilation failures warn and
+        fall back to eager thermalization before consuming random draws.
+
     Returns
     -------
     RelaxationResult
@@ -529,25 +561,36 @@ def relax_conformations(
         If the coordinates or reference maps do not match the sequence, or
         contain non-finite values, or a setting is out of range.
     """
-    if batch_size < 1:
+    if isinstance(batch_size, bool) or not isinstance(batch_size, Integral) or batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    for name, value in (("max_steps", max_steps), ("thermalization_steps", thermalization_steps)):
+        if isinstance(value, bool) or not isinstance(value, Integral) or value < 0:
+            raise ValueError(f"{name} must be a nonnegative integer, got {value}")
+    for name, value in (("force_tolerance", force_tolerance), ("temperature_K", temperature_K)):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive, got {value}")
 
-    forcefield = MpipiGG(sequence, ionic_strength=ionic_strength, device=device)
+    forcefield = MpipiGG(sequence, ionic_strength=ionic_strength, device=device, dtype=torch.float32)
     n = forcefield.n_residues
 
     xyz = _as_coordinate_array(coordinates, n)
     n_frames = xyz.shape[0]
 
-    ref_array = (
-        None
-        if reference_distances is None
-        else _as_reference_array(reference_distances, n_frames, n)
-    )
+    ref_array = None if reference_distances is None else _as_reference_array(reference_distances, n_frames, n)
 
     device_t, dtype = forcefield.device, forcefield.dtype
+    if not isinstance(compile_forces, bool):
+        raise TypeError("compile_forces must be a bool")
+    if compile_forces and device_t.type != "cuda":
+        raise ValueError("compile_forces requires a CUDA device")
+    compilation_available = compile_forces
+    compiled_batches = 0
+    fusion_available = device_t.type == "cuda" and not compile_forces
+    fused_batches = 0
+    fused_fire_batches = 0
     sigma = torch.as_tensor(forcefield.parameters.sigma, dtype=dtype, device=device_t)
 
-    relaxed = np.empty_like(xyz)
+    relaxed = np.empty(xyz.shape, dtype=np.float64)
     converged = np.zeros(n_frames, dtype=bool)
     n_steps = np.zeros(n_frames, dtype=np.int64)
     max_force = np.zeros(n_frames, dtype=np.float64)
@@ -556,11 +599,6 @@ def relax_conformations(
     }
     before_chunks: list[dict[str, torch.Tensor]] = []
     after_chunks: list[dict[str, torch.Tensor]] = []
-
-    if thermalization_steps < 0:
-        raise ValueError(
-            f"thermalization_steps must be >= 0, got {thermalization_steps}"
-        )
 
     generator = None
     if seed is not None:
@@ -576,10 +614,7 @@ def relax_conformations(
         if ref_array is None:
             reference = pairwise_distances(x0)
         else:
-            reference = torch.as_tensor(
-                ref_array[start:stop], dtype=dtype, device=device_t
-            )
-            reference = 0.5 * (reference + reference.transpose(1, 2))
+            reference = torch.as_tensor(ref_array[start:stop], dtype=dtype, device=device_t)
 
         restraints = DistanceRestraints(
             reference,
@@ -597,33 +632,55 @@ def relax_conformations(
             return forcefield.evaluate(x, restraints, index).forces
 
         e_before = forcefield.energy(x0, restraints, batch_index)
-        before_chunks.append(
-            _geometry_diagnostics(x0, reference, sigma, min_separation, clash_fraction)
-        )
+        before_chunks.append(_geometry_diagnostics(x0, reference, sigma, min_separation, clash_fraction))
 
+        fire_force_function: ForceFunction = force_function
+        if fusion_available:
+            fused_force = _try_fused_forces(forcefield, restraints, x0, batch_index)
+            if fused_force is None:
+                fusion_available = False
+            else:
+                fire_force_function = fused_force
+                fused_fire_batches += 1
         fire = fire_minimize(
             x0,
-            force_function,
+            fire_force_function,
             force_tolerance=force_tolerance,
             max_steps=max_steps,
             parameters=fire_parameters,
         )
 
+        thermal_force_function: ForceFunction = fire_force_function
+        thermal_coordinates = fire.coordinates
+        if fire_force_function is not force_function and thermalization_steps > 0:
+            fused_batches += 1
+        if compilation_available and thermalization_steps > 0:
+            try:
+                compiled_force = torch.compile(thermal_force_function, fullgraph=True, dynamic=True)
+                # Compile before the stochastic loop, so fallback cannot repeat
+                # or discard random draws. FIRE's changing batch stays eager.
+                compiled_force(thermal_coordinates, batch_index)
+                thermal_force_function = compiled_force
+                compiled_batches += 1
+            except Exception as error:
+                warnings.warn(
+                    f"Whole-force compilation failed; using eager thermalization: {type(error).__name__}: {error}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                compilation_available = False
+
         # put thermal fluctuations back into the zero-temperature minima
         x_final = langevin_thermalize(
-            fire.coordinates,
-            force_function,
+            thermal_coordinates,
+            thermal_force_function,
             thermalization_steps,
             temperature_K=temperature_K,
             generator=generator,
         )
 
         e_after = forcefield.energy(x_final, restraints, batch_index)
-        after_chunks.append(
-            _geometry_diagnostics(
-                x_final, reference, sigma, min_separation, clash_fraction
-            )
-        )
+        after_chunks.append(_geometry_diagnostics(x_final, reference, sigma, min_separation, clash_fraction))
 
         relaxed[start:stop] = x_final.cpu().numpy()
         converged[start:stop] = fire.converged.cpu().numpy()
@@ -640,16 +697,12 @@ def relax_conformations(
     return RelaxationResult(
         sequence=forcefield.sequence,
         coordinates=relaxed,
-        initial_coordinates=xyz,
+        initial_coordinates=(xyz.cpu().numpy().astype(np.float64) if isinstance(xyz, torch.Tensor) else xyz),
         converged=converged,
         n_steps=n_steps,
         max_force=max_force,
-        energy_before={
-            t: np.concatenate(energy_chunks[f"before_{t}"]) for t in ENERGY_TERMS
-        },
-        energy_after={
-            t: np.concatenate(energy_chunks[f"after_{t}"]) for t in ENERGY_TERMS
-        },
+        energy_before={t: np.concatenate(energy_chunks[f"before_{t}"]).astype(np.float64) for t in ENERGY_TERMS},
+        energy_after={t: np.concatenate(energy_chunks[f"after_{t}"]).astype(np.float64) for t in ENERGY_TERMS},
         before=_to_diagnostics(before_chunks),
         after=_to_diagnostics(after_chunks),
         reference="coordinates" if ref_array is None else "distance_map",
@@ -665,6 +718,12 @@ def relax_conformations(
             "thermalization_steps": int(thermalization_steps),
             "temperature_K": float(temperature_K),
             "device": str(device_t),
+            "compile_forces": compile_forces,
+            "compiled_thermalization_batches": compiled_batches,
+            "fused_thermalization_batches": fused_batches,
+            "fused_minimization_batches": fused_fire_batches,
+            "thermalization_dtype": "float32" if thermalization_steps > 0 else "not_run",
+            "minimization_dtype": str(dtype).removeprefix("torch."),
         },
     )
 
@@ -720,16 +779,12 @@ def relax_ensemble(
 
     if ionic_strength is None:
         ionic_strength = (
-            ensemble.ionic_strength
-            if ensemble.ionic_strength is not None
-            else configs.DEFAULT_IONIC_STRENGTH
+            ensemble.ionic_strength if ensemble.ionic_strength is not None else configs.DEFAULT_IONIC_STRENGTH
         )
 
     # SOURSOP/MDTraj coordinates are in nm
     trajectory = ensemble.build_ensemble_trajectory(progress_bar=progress_bar)
-    coordinates = (
-        trajectory.traj.xyz.astype(np.float64) * configs.CONVERT_ANGSTROM_TO_NM
-    )
+    coordinates = trajectory.traj.xyz.astype(np.float64) * configs.CONVERT_ANGSTROM_TO_NM
     distance_maps = ensemble.distance_maps()
 
     result = relax_conformations(

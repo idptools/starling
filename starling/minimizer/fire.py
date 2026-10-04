@@ -38,6 +38,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import math
+from numbers import Integral
 
 import torch
 from tqdm.auto import tqdm
@@ -131,9 +133,17 @@ class FIREResult:
     max_force: torch.Tensor
 
 
+def _vector_norm(values: torch.Tensor, dim: int | tuple[int, ...]) -> torch.Tensor:
+    """Compute norms without squaring large float32 clash forces directly."""
+    if values.dtype != torch.float32:
+        return torch.linalg.vector_norm(values, dim=dim)
+    scale = values.abs().amax(dim=dim, keepdim=True).clamp_min(1e-30)
+    return (torch.linalg.vector_norm(values / scale, dim=dim, keepdim=True) * scale).squeeze(dim)
+
+
 def _max_bead_force(forces: torch.Tensor) -> torch.Tensor:
     """Largest per-bead force magnitude in each conformation, shape (batch,)."""
-    per_bead: torch.Tensor = torch.linalg.vector_norm(forces, dim=-1)
+    per_bead: torch.Tensor = _vector_norm(forces, dim=-1)
     return per_bead.amax(dim=-1)
 
 
@@ -186,13 +196,11 @@ def fire_minimize(
         limit are not positive.
     """
     if coordinates.ndim != 3 or coordinates.shape[-1] != 3:
-        raise ValueError(
-            f"coordinates must have shape (batch, n, 3), got {tuple(coordinates.shape)}"
-        )
-    if force_tolerance <= 0:
+        raise ValueError(f"coordinates must have shape (batch, n, 3), got {tuple(coordinates.shape)}")
+    if not math.isfinite(force_tolerance) or force_tolerance <= 0:
         raise ValueError(f"force_tolerance must be positive, got {force_tolerance}")
-    if max_steps < 0:
-        raise ValueError(f"max_steps must be >= 0, got {max_steps}")
+    if isinstance(max_steps, bool) or not isinstance(max_steps, Integral) or max_steps < 0:
+        raise ValueError(f"max_steps must be a nonnegative integer, got {max_steps}")
 
     p = parameters if parameters is not None else FIREParameters()
 
@@ -234,7 +242,8 @@ def fire_minimize(
             converged_out[finished] = converged[done]
             steps_out[finished] = step
             fmax_out[finished] = fmax[done]
-            bar.update(int(done.sum()))
+            if progress_bar:
+                bar.update(int(done.sum()))
 
             keep = ~done
             if not keep.any():
@@ -251,7 +260,13 @@ def fire_minimize(
             dt, alpha, n_positive = dt[keep], alpha[keep], n_positive[keep]
 
         # FIRE 2.0 time step and mixing control, per conformation
-        power = (forces * v).sum(dim=(1, 2))
+        if dtype == torch.float32:
+            # Only the sign matters; rescale before multiplication to avoid overflow.
+            f_scale = forces.abs().amax(dim=(1, 2), keepdim=True).clamp_min(1e-30)
+            v_scale = v.abs().amax(dim=(1, 2), keepdim=True).clamp_min(1e-30)
+            power = ((forces / f_scale) * (v / v_scale)).sum(dim=(1, 2))
+        else:
+            power = (forces * v).sum(dim=(1, 2))
         downhill = power > 0
 
         n_positive = torch.where(downhill, n_positive + 1, torch.zeros_like(n_positive))
@@ -260,23 +275,23 @@ def fire_minimize(
         alpha = torch.where(grow, alpha * p.f_alpha, alpha)
 
         uphill = ~downhill
-        if uphill.any():
-            # no time step cut during the initial delay (FIRE 2.0)
-            shrink = uphill & (step >= p.n_delay)
-            dt = torch.where(shrink, torch.clamp(dt * p.f_dec, min=p.dt_min), dt)
-            alpha = torch.where(uphill, torch.full_like(alpha, p.alpha_start), alpha)
+        # no time step cut during the initial delay (FIRE 2.0). Tensor masks
+        # handle an empty uphill set without synchronizing with the host.
+        shrink = uphill & (step >= p.n_delay)
+        dt = torch.where(shrink, torch.clamp(dt * p.f_dec, min=p.dt_min), dt)
+        alpha = torch.where(uphill, torch.full_like(alpha, p.alpha_start), alpha)
 
-            # step back half a step and stop dead
-            uphill_3d = uphill[:, None, None]
-            x = torch.where(uphill_3d, x - 0.5 * dt[:, None, None] * v, x)
-            v = torch.where(uphill_3d, torch.zeros_like(v), v)
+        # step back half a step and stop dead
+        uphill_3d = uphill[:, None, None]
+        x = torch.where(uphill_3d, x - 0.5 * dt[:, None, None] * v, x)
+        v = torch.where(uphill_3d, torch.zeros_like(v), v)
 
         # semi-implicit Euler velocity update, then mix towards the force
         dt_3d = dt[:, None, None]
         v = v + dt_3d * forces
 
-        v_norm = torch.linalg.vector_norm(v, dim=(1, 2))
-        f_norm = torch.linalg.vector_norm(forces, dim=(1, 2))
+        v_norm = _vector_norm(v, dim=(1, 2))
+        f_norm = _vector_norm(forces, dim=(1, 2))
         ratio = torch.where(f_norm > 0, v_norm / f_norm, torch.zeros_like(f_norm))
         a_3d = alpha[:, None, None]
         v = (1.0 - a_3d) * v + a_3d * ratio[:, None, None] * forces
@@ -284,7 +299,7 @@ def fire_minimize(
         # cap the step so no bead moves more than max_step; the velocity is
         # scaled with it so that it reflects how far the beads actually moved
         dx = dt_3d * v
-        largest = torch.linalg.vector_norm(dx, dim=-1).amax(dim=-1)
+        largest = _vector_norm(dx, dim=-1).amax(dim=-1)
         scale = torch.clamp(p.max_step / largest.clamp_min(1e-30), max=1.0)
         scale_3d = scale[:, None, None]
         x_previous = x
@@ -298,9 +313,8 @@ def fire_minimize(
         # coordinates and is retired as not converged on the next pass,
         # rather than poisoning the output
         bad = ~torch.isfinite(fmax)
-        if bad.any():
-            x = torch.where(bad[:, None, None], x_previous, x)
-            failed = failed | bad
+        x = torch.where(bad[:, None, None], x_previous, x)
+        failed = failed | bad
 
         step += 1
 

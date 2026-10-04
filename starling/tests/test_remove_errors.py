@@ -12,6 +12,7 @@ import pytest
 import torch
 
 from starling.inference import generation
+from starling.utilities import check_distance_map_for_error
 
 SEQ = "MKTAYIAKQRQ"
 L = len(SEQ)
@@ -41,6 +42,19 @@ def test_good_map_passes_and_bad_map_fails_the_underlying_check():
 
     assert check_distance_map_for_error(_distance_map(GOOD_SPACING)) is False
     assert check_distance_map_for_error(_distance_map(BAD_SPACING)) is True
+
+
+def test_error_screening_rejects_nonfinite_and_negative_distance_values():
+    valid = np.zeros((3, 3))
+    assert not check_distance_map_for_error(valid)
+
+    nonfinite = valid.copy()
+    nonfinite[0, 1] = np.nan
+    assert check_distance_map_for_error(nonfinite)
+
+    negative = valid.copy()
+    negative[0, 1] = -1.0
+    assert check_distance_map_for_error(negative)
 
 
 class StubSampler:

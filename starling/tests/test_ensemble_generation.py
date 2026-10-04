@@ -232,8 +232,54 @@ class TestHandleInput:
 # ===========================================================================
 
 
+@pytest.mark.parametrize("structures", [False, True])
+def test_cli_compile_forces_requires_and_forwards_relaxation(monkeypatch, tmp_path, structures):
+    import sys
+    from starling.scripts import starling_main_cli as cli
+
+    seen = {}
+    monkeypatch.setattr(cli, "generate", lambda **kwargs: seen.update(kwargs))
+    arguments = ["starling", SHORT_SEQ, "--compile-forces", "--relax", "-o", str(tmp_path)]
+    if structures:
+        arguments.append("-r")
+    monkeypatch.setattr(sys, "argv", arguments)
+    if structures:
+        cli.main()
+        assert seen["compile_forces"] is True
+        assert seen["relax"] is True
+        assert seen["return_structures"] is True
+    else:
+        with pytest.raises(SystemExit) as error:
+            cli.main()
+        assert error.value.code == 2
+        assert not seen
+
+
 class TestGenerateValidation:
     """Test parameter validation without actually running the model."""
+
+    @pytest.mark.parametrize("structures,relax", [(False, True), (True, False)])
+    def test_compile_forces_requires_relaxed_structures(self, structures, relax):
+        with pytest.raises(ValueError, match="requires relax=True and return_structures=True"):
+            generate(SHORT_SEQ, compile_forces=True, return_structures=structures, relax=relax)
+
+    def test_compile_forces_rejects_cpu(self):
+        with pytest.raises(ValueError, match="requires a CUDA"):
+            generate(SHORT_SEQ, compile_forces=True, return_structures=True, device="cpu")
+
+    def test_compile_forces_is_forwarded(self, monkeypatch):
+        from starling.frontend import ensemble_generation as frontend
+
+        seen = {}
+
+        def backend(*args, **kwargs):
+            seen.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(frontend.utilities, "check_device", lambda device: torch.device("cuda"))
+        monkeypatch.setattr(frontend.generation, "generate_backend", backend)
+        generate(SHORT_SEQ, compile_forces=True, return_structures=True, device="cuda")
+        assert seen["compile_forces"] is True
 
     def test_return_data_false_no_output_dir_raises(self):
         with pytest.raises(ValueError, match="no return data"):
@@ -412,15 +458,14 @@ class TestEnsembleProperties:
         re_mean = synthetic_ensemble.end_to_end_distance(return_mean=True)
         assert isinstance(re_mean, (float, np.floating))
 
-    def test_radius_of_gyration(self, synthetic_ensemble):
-        rg = synthetic_ensemble.radius_of_gyration()
-        assert len(rg) == 10
-        assert all(v > 0 for v in rg)
-
-    def test_radius_of_gyration_mean(self, synthetic_ensemble):
-        rg_mean = synthetic_ensemble.radius_of_gyration(return_mean=True)
-        assert isinstance(rg_mean, (float, np.floating))
-        assert rg_mean > 0
+    def test_radius_of_gyration(self):
+        square = np.array([[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]], dtype=float)
+        xyz = np.stack([square, 3 * square])
+        maps = np.linalg.norm(xyz[:, :, None] - xyz[:, None, :], axis=-1)
+        ensemble = Ensemble(maps, "ACDE")
+        expected = np.sqrt([2.0, 18.0])
+        np.testing.assert_allclose(ensemble.radius_of_gyration(), expected)
+        assert ensemble.radius_of_gyration(return_mean=True) == pytest.approx(expected.mean())
 
     def test_radius_of_gyration_caching(self, synthetic_ensemble):
         rg1 = synthetic_ensemble.radius_of_gyration()
@@ -464,11 +509,16 @@ class TestEnsembleProperties:
         with pytest.raises(ValueError, match="must be either 'kr' or 'nygaard'"):
             synthetic_ensemble.hydrodynamic_radius(mode="invalid")
 
-    def test_hydrodynamic_radius_caching_and_mode_switch(self, synthetic_ensemble):
-        rh_ny = synthetic_ensemble.hydrodynamic_radius(mode="nygaard")
-        rh_kr = synthetic_ensemble.hydrodynamic_radius(mode="kr")
-        # switching mode should recompute; values generally differ
-        assert rh_ny is not rh_kr
+    def test_hydrodynamic_radius_caching_and_mode_switch(self):
+        n, spacing = 20, 3.81
+        separations = np.abs(np.arange(n)[:, None] - np.arange(n)[None, :])
+        ensemble = Ensemble((spacing * separations)[None], "ACDEFGHIKLMNPQRSTVWY")
+        rg = spacing * np.sqrt((n**2 - 1) / 12)
+        nygaard = rg / (0.216 * (rg - 4.06 * n**0.33) / (n**0.60 - n**0.33) + 0.821)
+        kirkwood = (n * (n - 1) / 2) / sum((n - s) / (spacing * s) for s in range(1, n))
+        for mode, expected in [("nygaard", nygaard), ("kr", kirkwood), ("nygaard", nygaard)]:
+            np.testing.assert_allclose(ensemble.hydrodynamic_radius(mode=mode), [expected])
+            assert ensemble.hydrodynamic_radius(mode=mode, return_mean=True) == pytest.approx(expected)
 
     def test_contact_map(self, synthetic_ensemble):
         cm = synthetic_ensemble.contact_map()
@@ -598,36 +648,39 @@ class TestEnsembleErrorChecking:
 # ===========================================================================
 
 
+@pytest.mark.parametrize("conformations", [1, 4, 5])
+def test_sampling_batches_preserve_order_crop_symmetry_and_cpu_output(conformations):
+    from starling.inference.generation import _sample_distance_maps
+
+    source = torch.arange(conformations * 25, dtype=torch.float32).reshape(conformations, 1, 5, 5)
+    calls = []
+    constraint = object()
+
+    class Sampler:
+        def sample(self, count, **kwargs):
+            assert kwargs["constraint"] is constraint
+            start = sum(calls)
+            calls.append(count)
+            return source[start : start + count]
+
+    actual = _sample_distance_maps(Sampler(), "AAA", conformations, 2, False, constraint)
+    expected = torch.stack([symmetrize_distance_map(frame[0, :3, :3]) for frame in source])
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert actual.device.type == "cpu"
+    assert calls == [min(2, conformations - start) for start in range(0, conformations, 2)]
+
+
 class TestSymmetrizeDistanceMap:
-    def test_basic_symmetrization(self):
-        dm = torch.zeros(5, 5)
-        dm[0, 1] = 10.0
-        dm[1, 0] = 5.0  # will be overwritten
-        dm[2, 3] = 7.0
+    @pytest.mark.parametrize("leading_batch", [False, True])
+    def test_single_map_wrapper_preserves_values_and_returns_a_cpu_matrix(self, leading_batch):
+        dm = torch.tensor([[9.0, 10.0], [5.0, 3.0]])
+        if leading_batch:
+            dm = dm.unsqueeze(0)
+        original = dm.clone()
         result = symmetrize_distance_map(dm)
-        assert result[0, 1] == result[1, 0] == 10.0
-        assert result[2, 3] == result[3, 2] == 7.0
-
-    def test_diagonal_is_zero(self):
-        dm = torch.ones(5, 5) * 3.0
-        result = symmetrize_distance_map(dm)
-        for i in range(5):
-            assert result[i, i] == 0.0
-
-    def test_shape_preserved(self):
-        dm = torch.randn(10, 10)
-        result = symmetrize_distance_map(dm)
-        assert result.shape == (10, 10)
-
-    def test_3d_input_squeezed(self):
-        dm = torch.randn(1, 8, 8)
-        result = symmetrize_distance_map(dm)
-        assert result.shape == (8, 8)
-
-    def test_result_is_symmetric(self):
-        dm = torch.randn(12, 12)
-        result = symmetrize_distance_map(dm)
-        assert torch.allclose(result, result.T)
+        torch.testing.assert_close(result, torch.tensor([[0.0, 10.0], [10.0, 0.0]]))
+        torch.testing.assert_close(dm, original)
+        assert result.device.type == "cpu"
 
 
 # ===========================================================================
@@ -740,6 +793,19 @@ class TestBondConstraint:
         per_batch, mean = c.compute_loss(dm)
         assert torch.allclose(mean, torch.tensor(0.0), atol=1e-6)
 
+    @pytest.mark.parametrize("batch_size", [1, 3])
+    def test_compute_loss_preserves_singleton_and_regular_batch_axes(self, batch_size):
+        constraint = BondConstraint()
+        constraint.sequence_length = 4
+        maps = torch.zeros(batch_size, 1, 4, 4)
+        for residue in range(3):
+            maps[:, 0, residue, residue + 1] = constraint.bond_length
+
+        losses, mean = constraint.compute_loss(maps)
+        assert losses.shape == (batch_size,)
+        torch.testing.assert_close(losses, torch.zeros(batch_size))
+        torch.testing.assert_close(mean, torch.tensor(0.0))
+
 
 class TestStericClashConstraint:
     def test_default_params(self):
@@ -818,6 +884,22 @@ class TestReConstraint:
         assert c.tolerance == 0.0
         assert c.force_constant == 2.0
 
+    def test_compute_loss_uses_last_real_residue_and_preserves_batch_axis(self):
+        constraint = ReConstraint(target=6.0, force_constant=2.0)
+        constraint.sequence_length = 3
+        maps = torch.zeros(1, 1, 4, 4)
+        maps[0, 0, 0, 2] = 6.0  # residue 2 is real; residue 3 is padding
+
+        per_batch, mean = constraint.compute_loss(maps)
+        assert per_batch.shape == (1,)
+        torch.testing.assert_close(per_batch, torch.zeros(1))
+        torch.testing.assert_close(mean, torch.tensor(0.0))
+
+        maps[0, 0, 0, 2] = 2.0
+        per_batch, mean = constraint.compute_loss(maps)
+        torch.testing.assert_close(per_batch, torch.tensor([16.0]))
+        torch.testing.assert_close(mean, torch.tensor(16.0))
+
 
 class TestHelicityConstraint:
     def test_construction(self):
@@ -861,6 +943,27 @@ class TestMultiConstraint:
         assert mc.guidance_starts == [0.1, 0.2]
         assert mc.guidance_ends == [0.8, 0.9]
 
+    def test_guidance_respects_child_windows_and_no_active_window_is_noop(self):
+        active = DistanceConstraint(0, 1, target=0.0, guidance_start=0.4, guidance_end=0.6)
+        inactive = DistanceConstraint(0, 1, target=10.0, guidance_start=0.8, guidance_end=0.9)
+        combined = MultiConstraint([active, inactive], verbose=False)
+        maps = torch.zeros(2, 1, 4, 4)
+        maps[:, 0, 0, 1] = 2.0
+
+        class IdentityDecoder:
+            device = torch.device("cpu")
+
+            @staticmethod
+            def decode(latents):
+                return latents
+
+        combined.initialize(IdentityDecoder(), torch.tensor(1.0), 100, 4)
+        guided = combined.apply(maps, timestep=50)  # active child only
+        assert torch.all(guided[:, 0, 0, 1] < maps[:, 0, 0, 1])
+
+        unchanged = combined.apply(maps, timestep=0)  # neither child is active
+        torch.testing.assert_close(unchanged, maps)
+
 
 # ===========================================================================
 # 7. Config sanity checks
@@ -890,6 +993,7 @@ class TestConfigs:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 class TestIntegrationGenerate:
     """
     Integration tests that run the full generation pipeline.
@@ -1155,64 +1259,9 @@ class TestIntegrationGenerate:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 class TestIntegrationConstraints:
-    """Integration tests for constrained generation."""
-
-    def test_generate_with_rg_constraint(self):
-        constraint = RgConstraint(target=20.0, force_constant=0.1)
-        E = generate(
-            MEDIUM_SEQ,
-            conformations=10,
-            verbose=False,
-            show_progress_bar=False,
-            return_data=True,
-            return_structures=False,
-            return_single_ensemble=True,
-            constraint=constraint,
-        )
-        assert len(E) == 10
-
-    def test_generate_with_bond_constraint(self):
-        constraint = BondConstraint()
-        E = generate(
-            MEDIUM_SEQ,
-            conformations=10,
-            verbose=False,
-            show_progress_bar=False,
-            return_data=True,
-            return_structures=False,
-            return_single_ensemble=True,
-            constraint=constraint,
-        )
-        assert len(E) == 10
-
-    def test_generate_with_distance_constraint(self):
-        constraint = DistanceConstraint(resid1=5, resid2=50, target=30.0)
-        E = generate(
-            MEDIUM_SEQ,
-            conformations=10,
-            verbose=False,
-            show_progress_bar=False,
-            return_data=True,
-            return_structures=False,
-            return_single_ensemble=True,
-            constraint=constraint,
-        )
-        assert len(E) == 10
-
-    def test_generate_with_steric_clash_constraint(self):
-        constraint = StericClashConstraint()
-        E = generate(
-            MEDIUM_SEQ,
-            conformations=10,
-            verbose=False,
-            show_progress_bar=False,
-            return_data=True,
-            return_structures=False,
-            return_single_ensemble=True,
-            constraint=constraint,
-        )
-        assert len(E) == 10
+    """One real-model smoke test; guidance effects are tested with fixed noise."""
 
     def test_generate_with_multi_constraint(self):
         c1 = BondConstraint(constraint_weight=0.5)
@@ -1232,6 +1281,7 @@ class TestIntegrationConstraints:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 class TestIntegrationEnsembleTrajectory:
     """Integration tests for trajectory building and analysis."""
 

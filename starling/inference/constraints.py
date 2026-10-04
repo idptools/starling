@@ -9,38 +9,10 @@ from einops import rearrange, reduce
 from tqdm.auto import tqdm
 
 from starling.utilities import helix_dm
+from starling.utilities import symmetrize_tensor_distance_maps as symmetrize_distance_maps
 
 if TYPE_CHECKING:
     from starling.models.vae import VAE
-
-
-def symmetrize_distance_maps(dist_maps: torch.Tensor) -> torch.Tensor:
-    """
-    Symmetrize a batch of distance maps in PyTorch.
-
-    Parameters
-    ----------
-    dist_maps : torch.Tensor
-        Tensor of shape (B, N, N) representing pairwise distances.
-
-    Returns
-    -------
-    torch.Tensor
-        Symmetrized distance maps with zero diagonal.
-    """
-    B, C, N, _ = dist_maps.shape
-
-    # Clone to avoid modifying input tensor in-place
-    dist_maps = dist_maps.clone()
-
-    # Reflect upper triangle onto lower triangle
-    i, j = torch.triu_indices(N, N, offset=1)
-    dist_maps[:, :, j, i] = dist_maps[:, :, i, j]
-
-    # Set diagonal to zero
-    dist_maps[:, :, torch.arange(N), torch.arange(N)] = 0.0
-
-    return dist_maps
 
 
 class Constraint(ABC):
@@ -210,6 +182,11 @@ class Constraint(ABC):
         """
         raise NotImplementedError("Subclasses should implement compute_loss")
 
+    def _loss_for_guidance(
+        self, distance_maps: torch.Tensor, timestep: int, total_steps: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.compute_loss(distance_maps)
+
     def apply(self, latents: torch.Tensor, timestep: int, logger=None) -> torch.Tensor:
         """Apply the constraint to the given latents."""
 
@@ -228,7 +205,9 @@ class Constraint(ABC):
             distance_maps = symmetrize_distance_maps(distance_maps)
 
             # Get per-sample losses and total loss
-            per_batch_loss, loss = self.compute_loss(distance_maps)
+            per_batch_loss, loss = self._loss_for_guidance(
+                distance_maps, timestep, n_steps
+            )
 
             # Compute gradients
             base_grad = torch.autograd.grad(loss, latents_copy)[0]
@@ -320,7 +299,7 @@ class BondConstraint(Constraint):
             Per-batch loss and mean loss
         """
 
-        distance_maps = distance_maps[:, :, : self.sequence_length, : self.sequence_length].squeeze()
+        distance_maps = distance_maps[:, 0, : self.sequence_length, : self.sequence_length]
 
         # Take the one off diagonal
         bonds = torch.diagonal(distance_maps, offset=1, dim1=1, dim2=2)
@@ -543,7 +522,7 @@ class ReConstraint(Constraint):
         self.force_constant = force_constant
 
     def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        distances = distance_maps[:, :, 0, self.sequence_length]
+        distances = distance_maps[:, 0, 0, self.sequence_length - 1]
 
         # Calculate deviation from target
         deviation = torch.abs(distances - self.target)
@@ -553,8 +532,6 @@ class ReConstraint(Constraint):
 
         # Calculate harmonic potential for the excess deviation
         per_batch_loss = 0.5 * self.force_constant * excess**2
-
-        per_batch_loss = rearrange(per_batch_loss, "b 1 -> b")
 
         return per_batch_loss, per_batch_loss.mean()
 
@@ -619,6 +596,20 @@ class MultiConstraint(Constraint):
             total_loss += weighted_loss
 
         return total_per_batch_loss, total_loss
+
+    def _loss_for_guidance(
+        self, distance_maps: torch.Tensor, timestep: int, total_steps: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        losses = [
+            constraint.compute_loss(distance_maps)[0] * weight
+            for constraint, weight in zip(self.constraints, self.constraint_weights)
+            if constraint.should_apply_guidance(timestep, total_steps)
+        ]
+        if not losses:
+            per_batch = distance_maps.flatten(start_dim=1).sum(dim=1) * 0
+            return per_batch, per_batch.mean()
+        per_batch = torch.stack(losses).sum(dim=0)
+        return per_batch, per_batch.mean()
 
 
 class ConstraintLogger:

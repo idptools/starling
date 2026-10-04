@@ -29,7 +29,7 @@ The ScoreConverter handles conversions between FAISS raw scores and user-facing 
 **For L2 Distance:**
 
 * FAISS returns squared L2 distance (lower = more similar)
-* Always output as distance (no conversion)
+* Output the Euclidean L2 distance by taking the square root
 
 Usage::
 
@@ -209,6 +209,7 @@ See Also
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -368,7 +369,7 @@ class ScoreConverter:
         """Convert raw FAISS score to output format."""
         if self.metric == "cosine":
             return float(raw_score if self.return_similarity else 1.0 - raw_score)
-        return float(raw_score)
+        return math.sqrt(max(0.0, float(raw_score)))
 
     def to_similarity(self, score: float) -> float:
         """Convert score to similarity (for output formatting)."""

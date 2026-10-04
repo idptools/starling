@@ -461,11 +461,12 @@ class SequenceStore:
         gids_list = [int(g) for g in gids]
         if not gids_list:
             return []
-        if len(gids_list) <= 1000:
-            qmarks = ",".join("?" for _ in gids_list)
+        unique_gids = list(dict.fromkeys(gids_list))
+        if len(unique_gids) <= 999:
+            qmarks = ",".join("?" for _ in unique_gids)
             sql = f"SELECT gid, header, len FROM sequences WHERE gid IN ({qmarks})"
             cur = self.conn.cursor()
-            cur.execute(sql, gids_list)
+            cur.execute(sql, unique_gids)
             found = {
                 int(gid_): (self.decode_header(hdr_blob), int(len_val))
                 for gid_, hdr_blob, len_val in cur.fetchall()
@@ -475,7 +476,7 @@ class SequenceStore:
         cur.execute("CREATE TEMP TABLE IF NOT EXISTS gids_tmp(gid INTEGER PRIMARY KEY)")
         cur.execute("DELETE FROM gids_tmp;")
         cur.executemany(
-            "INSERT INTO gids_tmp(gid) VALUES(?)", [(g,) for g in gids_list]
+            "INSERT INTO gids_tmp(gid) VALUES(?)", [(g,) for g in unique_gids]
         )
         cur.execute(
             "SELECT s.gid, s.header, s.len FROM sequences s JOIN gids_tmp t ON s.gid=t.gid"
@@ -497,6 +498,7 @@ class SequenceStore:
         gids_list = [int(g) for g in gids]
         if not gids_list:
             return []
+        unique_gids = list(dict.fromkeys(gids_list))
 
         # temp table for large lists
         cur = self.conn.cursor()
@@ -506,7 +508,7 @@ class SequenceStore:
         # Use a transaction for the bulk insert into the temporary table
         with self.conn:
             cur.executemany(
-                "INSERT INTO gids_tmp(gid) VALUES(?)", [(g,) for g in gids_list]
+                "INSERT INTO gids_tmp(gid) VALUES(?)", [(g,) for g in unique_gids]
             )
 
         # Perform the join to retrieve all metadata in one go

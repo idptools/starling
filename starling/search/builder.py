@@ -184,6 +184,7 @@ class IndexBuilder:
         self.files: List[str] = []
         self.shard_ids: List[int] = []
         self.counts: List[int] = []
+        self.feature_headers: dict[int, list[str] | None] = {}
         self.total: int = 0
         self.dim: Optional[int] = None
 
@@ -304,6 +305,70 @@ class IndexBuilder:
         data = torch.load(path, map_location="cpu")
         return self._extract_features_from_data(data, path=path)
 
+    @staticmethod
+    def _feature_headers(data: Any, row_count: int) -> list[str] | None:
+        """Return stable feature identifiers when the shard stores them."""
+        if isinstance(data, dict):
+            features = data.get("features")
+            if isinstance(features, dict):
+                entries = [
+                    (header, value)
+                    for header, value in features.items()
+                    if isinstance(value, torch.Tensor)
+                ]
+                if len(entries) == row_count and all(
+                    value.ndim == 1 or (value.ndim == 2 and value.shape[0] == 1)
+                    for _, value in entries
+                ):
+                    headers = [str(header) for header, _ in entries]
+                    return headers
+            elif isinstance(features, torch.Tensor):
+                headers = data.get("headers")
+                if isinstance(headers, (list, tuple)) and len(headers) == row_count:
+                    return [str(header) for header in headers]
+            else:
+                values = [
+                    (header, value)
+                    for header, value in data.items()
+                    if isinstance(value, torch.Tensor)
+                ]
+                if len(values) == row_count and all(
+                    value.ndim == 1 or (value.ndim == 2 and value.shape[0] == 1)
+                    for _, value in values
+                ):
+                    return [str(header) for header, _ in values]
+        elif isinstance(data, list):
+            entries = []
+            for record in data:
+                if not isinstance(record, dict) or record.get("header") is None:
+                    return None
+                embedding = next(
+                    (
+                        record[key]
+                        for key in ("embedding", "feature", "tensor")
+                        if isinstance(record.get(key), torch.Tensor)
+                    ),
+                    None,
+                )
+                if embedding is None:
+                    tensors = [
+                        value
+                        for value in record.values()
+                        if isinstance(value, torch.Tensor)
+                    ]
+                    if len(tensors) != 1:
+                        return None
+                    embedding = tensors[0]
+                if not (
+                    embedding.ndim == 1
+                    or (embedding.ndim == 2 and embedding.shape[0] == 1)
+                ):
+                    return None
+                entries.append(str(record["header"]))
+            if len(entries) == row_count:
+                return entries
+        return None
+
     def _discover_files(self) -> None:
         """Discover and inventory all feature shard files."""
         t0 = time.time()
@@ -318,9 +383,11 @@ class IndexBuilder:
                 if self.verbose:
                     self._log(f"[DISCOVER][SKIP] Could not parse shard id: {p}")
                 continue
-            arr = self._load_features(p)
+            data = torch.load(p, map_location="cpu")
+            arr = self._extract_features_from_data(data, path=p)
             n, d = arr.shape
-            records.append((sid, p, int(n), int(d)))
+            headers = self._feature_headers(data, int(n))
+            records.append((sid, p, int(n), int(d), headers))
 
         # Sort strictly by numeric shard id to keep pairing stable
         records.sort(key=lambda t: t[0])
@@ -331,7 +398,7 @@ class IndexBuilder:
         # Populate class fields in the sorted order
         self.files, self.shard_ids, self.counts = [], [], []
         self.dim = None
-        for sid, p, n, d in records:
+        for sid, p, n, d, headers in records:
             if self.dim is None:
                 self.dim = d
             elif self.dim != d:
@@ -339,6 +406,7 @@ class IndexBuilder:
             self.files.append(p)
             self.shard_ids.append(sid)
             self.counts.append(n)
+            self.feature_headers[sid] = headers
 
         self.total = sum(self.counts)
         self._log(
@@ -710,6 +778,28 @@ class IndexBuilder:
                 raise ValueError(
                     f"Length mismatch for {tok_path}: tokens={tok_count} vs features={feat_count} (shard {shard_id:06d})"
                 )
+
+            feature_headers = self.feature_headers[shard_id]
+            if feature_headers is None:
+                raise ValueError(
+                    f"Feature shard {feat_path} has no stable sequence identifiers; "
+                    "cannot safely align vectors with token records. Store headers "
+                    "alongside features or provide a keyed feature mapping."
+                )
+            token_by_header = {}
+            for record in recs:
+                header = record.get("header")
+                if header is None or header in token_by_header:
+                    raise ValueError(
+                        f"Missing or duplicate token header in {tok_path}; "
+                        "feature-to-sequence alignment must be one-to-one."
+                    )
+                token_by_header[header] = record
+            if set(token_by_header) != set(feature_headers):
+                raise ValueError(
+                    f"Feature and token identifiers do not match for shard {shard_id:06d}."
+                )
+            recs = [token_by_header[header] for header in feature_headers]
 
             for local_idx, r in enumerate(recs):
                 seq = r["sequence"]

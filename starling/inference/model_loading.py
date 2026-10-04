@@ -19,6 +19,12 @@ class ModelManager:
     def __init__(self):
         self.encoder_model: VAE | None = None
         self.diffusion_model: DiffusionModel | None = None
+        self._cache_key: tuple[str, str, str, str] | None = None
+
+    def clear(self) -> None:
+        self.encoder_model = None
+        self.diffusion_model = None
+        self._cache_key = None
 
     def load_models(
         self,
@@ -71,6 +77,8 @@ class ModelManager:
         """
         Lazy-load models if not already loaded.
 
+        One model pair is cached. Changing checkpoint paths or device replaces it.
+
         Parameters
         ----------
         encoder_path : str
@@ -89,12 +97,19 @@ class ModelManager:
         encoder_model, diffusion_model
             The loaded encoder and diffusion models.
         """
-        if self.encoder_model is None or self.diffusion_model is None:
-            # Models haven't been loaded yet, so load them now
+        key = (
+            encoder_path or DEFAULT_ENCODER_WEIGHTS_PATH,
+            ddpm_path or DEFAULT_DDPM_WEIGHTS_PATH,
+            str(torch.device(device)),
+            repr((configs.TORCH_COMPILATION["enabled"], configs.TORCH_COMPILATION["options"])),
+        )
+        if self.encoder_model is None or self.diffusion_model is None or self._cache_key != key:
+            self._cache_key = None
             self.encoder_model, self.diffusion_model = self.load_models(encoder_path, ddpm_path, device)
             if configs.TORCH_COMPILATION["enabled"]:
                 # Compile the models if requested
                 self.encoder_model, self.diffusion_model = self.compile()
+            self._cache_key = key
 
         # Return the already-loaded models
         return self.encoder_model, self.diffusion_model

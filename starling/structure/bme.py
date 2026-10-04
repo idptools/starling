@@ -128,6 +128,9 @@ class BME:
     calculated_values : np.ndarray
         Array of calculated observable values for each frame.
         Shape: (n_frames, n_observables)
+    theta : float, optional
+        Explicit positive theta. If omitted, ``fit(auto_theta=True)`` selects
+        theta automatically and ``fit(auto_theta=False)`` uses ``DEFAULT_THETA``.
     initial_weights : np.ndarray, optional
         Initial weights for ensemble frames. If None, uniform weights are used.
     """
@@ -136,7 +139,7 @@ class BME:
         self,
         observables: list,
         calculated_values: np.ndarray,
-        theta: float = DEFAULT_THETA,
+        theta: Optional[float] = None,
         initial_weights: Optional[np.ndarray] = None,
     ):
         # Validate inputs
@@ -167,7 +170,12 @@ class BME:
         # Results storage
         self._result: Optional[BMEResult] = None
         self._theta_scan_result: Optional["ThetaScanResult"] = None
-        self._theta: Optional[float] = None
+        if theta is not None and theta <= 0:
+            raise ValueError(f"theta must be positive, got {theta}")
+        self._constructor_theta: Optional[float] = (
+            float(theta) if theta is not None else None
+        )
+        self._theta = self._constructor_theta
 
     def _validate_inputs(self, observables, calculated_values, initial_weights):
         """Validate input parameters."""
@@ -562,7 +570,7 @@ class BME:
             if verbose:
                 print(f"[BME] Using manual theta = {self._theta:.4g} (no theta scan).")
 
-        elif auto_theta:
+        elif auto_theta and self._constructor_theta is None:
             if verbose:
                 print(
                     "[BME] Auto theta mode: running theta scan to select optimal θ..."
@@ -598,13 +606,13 @@ class BME:
             return self._result
 
         else:
-            # auto_theta=False and no manual theta: choose a sane default
+            # Preserve an explicit constructor theta; otherwise use the default
+            # when automatic selection was disabled.
             if self._theta is None:
                 self._theta = DEFAULT_THETA
             if verbose:
                 print(
-                    f"[BME] auto_theta=False and no manual theta; "
-                    f"using θ={self._theta:.4g}."
+                    f"[BME] Using θ={self._theta:.4g} without a theta scan."
                 )
 
         # 2) run single-theta optimization for self._theta

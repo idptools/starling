@@ -171,6 +171,7 @@ def generate(
     ddpm_path=None,
     remove_errors=False,
     relax=True,
+    compile_forces=False,
 ):
     """
     Generate STARLING ensembles and distance maps for one or more sequences.
@@ -251,6 +252,10 @@ def generate(
         screen when ``remove_errors`` is ``True``, so MDS-broken conformers are
         repaired rather than discarded. Has no effect when
         ``return_structures`` is ``False``.
+    compile_forces : bool, default=False
+        Fuse CUDA thermalization forces for sustained throughput. Requires
+        ``relax=True`` and ``return_structures=True``. Adds compilation startup
+        time; preserves precision, the force field, and thermalization steps.
     encoder_path : str or os.PathLike or None, default=None
         Custom encoder checkpoint path overriding the configured default.
     ddpm_path : str or os.PathLike or None, default=None
@@ -364,6 +369,10 @@ def generate(
     # check relax is a bool
     if not isinstance(relax, bool):
         raise ValueError("Error: relax must be True or False.")
+    if not isinstance(compile_forces, bool):
+        raise ValueError("Error: compile_forces must be True or False.")
+    if compile_forces and (not relax or not return_structures):
+        raise ValueError("compile_forces requires relax=True and return_structures=True")
 
     # we do this specific sanity check to make the logic later in this function easier
     if return_single_ensemble and return_data is False:
@@ -376,6 +385,8 @@ def generate(
 
     # check device, get back a torch.device (not a str!)
     device = utilities.check_device(device)
+    if compile_forces and device.type != "cuda":
+        raise ValueError("compile_forces requires a CUDA device")
 
     # run the actual inference and return the results
     ensemble_return = generation.generate_backend(
@@ -399,6 +410,7 @@ def generate(
         ddpm_path=ddpm_path,
         remove_errors=remove_errors,
         relax=relax,
+        compile_forces=compile_forces,
     )
 
     if not return_data:
@@ -514,7 +526,8 @@ def sequence_encoder(
     # check device, get back a torch.device (not a str!)
     device = utilities.check_device(device)
 
-    sequence_dict = handle_input(sequence_dict)
+    if not pretokenized:
+        sequence_dict = handle_input(sequence_dict)
 
     embeddings = generation.sequence_encoder_backend(
         sequence_dict=sequence_dict,

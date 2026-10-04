@@ -78,6 +78,7 @@ train = [
   "hydra-core>=1.3",
   "omegaconf>=2.3",
   "wandb",
+  "webdataset",
 ]
 
 [tool.setuptools]
@@ -97,7 +98,8 @@ starling = [
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: marks tests that require model weights and are slow to run",
+    "slow: marks tests that are slow to run",
+    "requires_weights: requires locally available encoder and diffusion checkpoints",
     "integration: marks integration tests that require external resources",
 ]
 filterwarnings = [

@@ -20,9 +20,8 @@ def distance_matrix_to_3d_structure_torch_mds(
     """
     SMACOF implementation using PyTorch with support for batched processing.
 
-    NB; as of Feb 2024 this is substantially slower for MPS than the other approach,
-    because MPS seems to fail and fall back on CPU in this parallelized version. This
-    is 1.5-2x slower than the other approach.
+    On MPS, initialization and the weighted Laplacian pseudoinverse run on
+    CPU in float32; SMACOF refinement runs on the requested device.
 
     This is the coordinate reconstruction path for CPU, CUDA, and MPS.
     Classical MDS provides a deterministic three-dimensional initialization;
@@ -61,6 +60,35 @@ def distance_matrix_to_3d_structure_torch_mds(
         [1] numpy.ndarray; Stress history, shape (total_samples, n_iter).
 
     """
+    coordinates, stress = _mds_coordinates(target_distances, batch_size, n_iter, tol, device, progress_bar, weights)
+    return coordinates.cpu().numpy(), stress.cpu().numpy()
+
+
+def _classical_mds(distances, dim=3):
+    """Initialize coordinates from the positive modes of the centered Gram matrix."""
+    squared = distances.square()
+    gram = -0.5 * (
+        squared
+        - squared.mean(dim=1, keepdim=True)
+        - squared.mean(dim=2, keepdim=True)
+        + squared.mean(dim=(1, 2), keepdim=True)
+    )
+    values, vectors = torch.linalg.eigh(gram)
+    dimensions = min(dim, distances.shape[-1])
+    coordinates = vectors[:, :, -dimensions:] * values[:, -dimensions:].clamp_min(0).sqrt()[:, None, :]
+    return torch.nn.functional.pad(coordinates, (0, dim - dimensions))
+
+
+def _mds_coordinates(
+    target_distances,
+    batch_size=100,
+    n_iter=300,
+    tol=1e-4,
+    device="cuda",
+    progress_bar=True,
+    weights=None,
+):
+    """Return coordinates (Angstroms) and stress tensors on the requested device."""
     device = torch.device(device)
 
     target_distances = torch.as_tensor(target_distances)
@@ -81,57 +109,28 @@ def distance_matrix_to_3d_structure_torch_mds(
             or not torch.allclose(weights, weights.T)
             or torch.any(weights.diagonal() != 0)
         ):
-            raise ValueError(
-                "weights must be finite, symmetric, nonnegative, and hollow"
-            )
+            raise ValueError("weights must be finite, symmetric, nonnegative, and hollow")
         laplacian = torch.diag(weights.sum(dim=1)) - weights
         # MPS does not support the SVD used by pinv reliably.
-        laplacian_pinv = torch.linalg.pinv(
-            laplacian.cpu() if device.type == "mps" else laplacian
-        ).to(device)
+        laplacian_pinv = torch.linalg.pinv(laplacian.cpu() if device.type == "mps" else laplacian).to(device)
 
     X_results = []
     stress_results = []
 
     for start in tqdm(range(0, total_samples, batch_size), disable=not progress_bar):
         end = min(start + batch_size, total_samples)
-        batch_distances = target_distances[start:end].to(
-            device=device, dtype=torch.float32
-        )
+        batch_distances = target_distances[start:end].to(device=device, dtype=torch.float32)
 
         # Double-center squared distances and retain the three positive modes.
-        # MPS lacks float64, so initialize on CPU there before returning to MPS.
-        initial_distances = (
-            batch_distances.cpu() if device.type == "mps" else batch_distances
-        )
-        squared = initial_distances.to(torch.float64).square()
-        gram = -0.5 * (
-            squared
-            - squared.mean(dim=1, keepdim=True)
-            - squared.mean(dim=2, keepdim=True)
-            + squared.mean(dim=(1, 2), keepdim=True)
-        )
-        values, vectors = torch.linalg.eigh(gram)
-        dimensions = min(dim, n_points)
-        X = (
-            vectors[:, :, -dimensions:]
-            * values[:, -dimensions:].clamp_min(0).sqrt()[:, None, :]
-        )
-        X = torch.nn.functional.pad(X, (0, dim - dimensions)).to(
-            device=device, dtype=torch.float32
-        )
+        # Eigensolver support still requires CPU initialization on MPS.
+        initial_distances = batch_distances.cpu() if device.type == "mps" else batch_distances
+        X = _classical_mds(initial_distances, dim).to(device=device)
         X = X - X.mean(dim=1, keepdim=True)
-        weighted_distances = (
-            batch_distances if weights is None else weights * batch_distances
-        )
+        weighted_distances = batch_distances if weights is None else weights * batch_distances
 
         # Initialize stress tracking
-        stress_history = torch.zeros(
-            end - start, n_iter, dtype=torch.float32, device=device
-        )
-        old_stress = torch.full(
-            (end - start,), float("inf"), dtype=torch.float32, device=device
-        )
+        stress_history = torch.zeros(end - start, n_iter, dtype=torch.float32, device=device)
+        old_stress = torch.full((end - start,), float("inf"), dtype=torch.float32, device=device)
         converged = torch.zeros(end - start, dtype=torch.bool, device=device)
 
         for it in range(n_iter):
@@ -139,21 +138,18 @@ def distance_matrix_to_3d_structure_torch_mds(
             D = torch.norm(diff, dim=3) + eps
 
             residual = (D - batch_distances) ** 2
-            stress = torch.sum(
-                residual if weights is None else weights * residual, dim=(1, 2)
-            )
+            stress = torch.sum(residual if weights is None else weights * residual, dim=(1, 2))
             stress_history[:, it] = stress
 
             converged = converged | (torch.abs(old_stress - stress) < tol)
-            if torch.all(converged):
+            # Freeze each converged map immediately; inspect batch completion
+            # less often on GPUs to avoid a host synchronization every step.
+            if (device.type == "cpu" or (it + 1) % 8 == 0) and torch.all(converged):
                 # Keep the documented fixed width when batches stop independently.
                 stress_history[:, it + 1 :] = stress[:, None]
                 break
 
-            B = torch.zeros_like(D)
-            mask = D > eps
-
-            B = torch.where(mask, -weighted_distances / D, B)
+            B = torch.where(D > eps, -weighted_distances / D, 0.0)
 
             row_sums = B.sum(dim=2)
             B.diagonal(dim1=1, dim2=2).copy_(-row_sums)
@@ -165,21 +161,18 @@ def distance_matrix_to_3d_structure_torch_mds(
                 assert laplacian_pinv is not None
                 X_new = torch.matmul(laplacian_pinv, B_X)
 
-            X = torch.where(converged.unsqueeze(1).unsqueeze(2), X, X_new)
-            X = torch.where(
-                converged.unsqueeze(1).unsqueeze(2), X, X - X.mean(dim=1, keepdim=True)
-            )
+            X = torch.where(converged[:, None, None], X, X_new - X_new.mean(dim=1, keepdim=True))
 
             old_stress = stress
 
-        X_results.append(X.cpu())
-        stress_results.append(stress_history.cpu())
+        X_results.append(X)
+        stress_results.append(stress_history)
 
     # Concatenate all chunk results
     X_final = torch.cat(X_results, dim=0)
     stress_final = torch.cat(stress_results, dim=0)
 
-    return X_final.numpy(), stress_final.numpy()
+    return X_final, stress_final
 
 
 def compare_distance_matrices(original_distance_matrix, coords, return_abs_diff=True):
@@ -297,9 +290,7 @@ def save_trajectory(traj, filename):
     traj.save(filename)
 
 
-def generate_3d_coordinates_from_distances(
-    device, batch_size, distance_maps, progress_bar=True
-):
+def generate_3d_coordinates_from_distances(device, batch_size, distance_maps, progress_bar=True):
     """
     Function to generate 3D coordinates from distance maps.
 

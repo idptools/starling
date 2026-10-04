@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 
@@ -48,7 +50,7 @@ def cosine_beta_schedule(timesteps: int, s: float = 0.008) -> torch.Tensor:
 
 
 def sigmoid_beta_schedule(
-    timesteps: int, start: int = 3, end: int = 3, tau: int = 1
+    timesteps: int, start: float = -3, end: float = 3, tau: float = 1
 ) -> torch.Tensor:
     """
     The beta values are generated using a sigmoid function. The beta values are
@@ -58,11 +60,11 @@ def sigmoid_beta_schedule(
     ----------
     timesteps : int
         The number of timesteps which will be used to generate the beta values.
-    start : int, optional
-        The starting value for the sigmoid function, by default 3
-    end : int, optional
+    start : float, optional
+        The starting value for the sigmoid function, by default -3.
+    end : float, optional
         The ending value for the sigmoid function, by default 3
-    tau : int, optional
+    tau : float, optional
         The time constant for the sigmoid function, by default 1
 
     Returns
@@ -70,6 +72,13 @@ def sigmoid_beta_schedule(
     torch.Tensor
         A tensor containing the beta values.
     """
+    if timesteps < 1:
+        raise ValueError("timesteps must be a positive integer")
+    if not all(math.isfinite(value) for value in (start, end, tau)):
+        raise ValueError("start, end, and tau must be finite")
+    if end <= start or tau <= 0:
+        raise ValueError("sigmoid schedule requires end > start and tau > 0")
+
     steps = timesteps + 1
     t = torch.linspace(0, timesteps, steps, dtype=torch.float64) / timesteps
     v_start = torch.tensor(start / tau).sigmoid()

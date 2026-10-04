@@ -132,10 +132,8 @@ class Ensemble:
             )
 
         self.__metadata: dict[str, str | float] = {}
-        self.__metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = (
-            configs.DEFAULT_ENCODER_WEIGHTS_PATH
-        )
-        self.__metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = configs.DEFAULT_DDPM_WEIGHTS_PATH
+        self.__metadata["DEFAULT_ENCODER_WEIGHTS_PATH"] = "UNKNOWN (external ensemble)"
+        self.__metadata["DEFAULT_DDPM_WEIGHTS_PATH"] = "UNKNOWN (external ensemble)"
         self.__metadata["VERSION"] = __version__
         self.__metadata["DATE"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if ionic_strength is not None:
@@ -255,14 +253,13 @@ class Ensemble:
                 self.__distance_maps = np.delete(
                     self.__distance_maps, bad_frames, axis=0
                 )
-                self.__rg_vals = []
-                self.__rh_vals = []
-                self.number_of_conformations = len(self.__distance_maps)
+                self._invalidate_frame_derived_state()
 
                 if self.__trajectory is not None:
                     if rebuild_trajectory:
-                        # delete and zero
                         self.build_ensemble_trajectory(force_recompute=True)
+                    else:
+                        self.__trajectory = None
 
         return bad_frames
 
@@ -359,11 +356,16 @@ class Ensemble:
                 self.__distance_maps = np.delete(
                     self.__distance_maps, bad_frames, axis=0
                 )
-                self.__rg_vals = []
-                self.__rh_vals = []
-                self.number_of_conformations = len(self.__distance_maps)
+                self._invalidate_frame_derived_state()
 
         return bad_frames
+
+    def _invalidate_frame_derived_state(self) -> None:
+        self.number_of_conformations = len(self.__distance_maps)
+        self.__rg_vals = []
+        self.__rh_vals = []
+        self.__bme = None
+        self.__bme_result = None
 
     def rij(self, i, j, return_mean=False, use_bme_weights=False):
         """

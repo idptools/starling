@@ -55,7 +55,7 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
         Current compilation settings
     """
     from starling import configs
-    from starling.inference import model_loading
+    from starling.inference.generation import model_manager
 
     # Only update if values are provided
     if enabled is not None:
@@ -65,10 +65,7 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
     for key, value in torch_compile_kwargs.items():
         cast(dict[str, object], configs.TORCH_COMPILATION["options"])[key] = value
 
-    # Clear cached models to ensure settings take effect
-    if hasattr(model_loading, "model_manager"):
-        if model_loading.model_manager.encoder_model is not None:
-            model_loading.model_manager = model_loading.ModelManager()
+    model_manager.clear()
 
     # Return current settings
     return {

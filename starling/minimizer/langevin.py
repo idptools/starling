@@ -33,10 +33,12 @@ eXpress, 2013(1), 34-56.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from numbers import Integral
 from typing import Final
 
 import torch
+
+from starling.minimizer.fire import ForceFunction
 
 # Boltzmann constant in kJ mol^-1 K^-1 (CODATA 2018: k_B * N_A)
 BOLTZMANN_KJ_PER_MOL_K: Final[float] = 0.008314462618
@@ -61,10 +63,6 @@ DEFAULT_TIMESTEP_PS: Final[float] = 0.02
 # ~8.5 ps^-1) are close to critically damped, so local degrees of freedom
 # thermalize within a few ps while large-scale motions stay slow
 DEFAULT_FRICTION_PER_PS: Final[float] = 10.0
-
-# signature shared with the FIRE minimizer: given coordinates (batch, n, 3) and
-# the index of each conformation in the full set, return forces
-ForceFunction = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
 def langevin_thermalize(
@@ -125,21 +123,20 @@ def langevin_thermalize(
         range.
     RuntimeError
         If any force becomes non-finite, which means the timestep is too
-        large for the forces involved.
+        large for the forces involved. Checked before returning; no invalid
+        trajectory is returned.
     """
     if coordinates.ndim != 3 or coordinates.shape[-1] != 3:
-        raise ValueError(
-            f"coordinates must have shape (batch, n, 3), got {tuple(coordinates.shape)}"
-        )
-    if n_steps < 0:
-        raise ValueError(f"n_steps must be >= 0, got {n_steps}")
+        raise ValueError(f"coordinates must have shape (batch, n, 3), got {tuple(coordinates.shape)}")
+    if isinstance(n_steps, bool) or not isinstance(n_steps, Integral) or n_steps < 0:
+        raise ValueError(f"n_steps must be a nonnegative integer, got {n_steps}")
     for name, value in (
         ("temperature_K", temperature_K),
         ("timestep_ps", timestep_ps),
         ("friction_per_ps", friction_per_ps),
         ("bead_mass", bead_mass),
     ):
-        if value <= 0:
+        if not math.isfinite(value) or value <= 0:
             raise ValueError(f"{name} must be positive, got {value}")
 
     x = coordinates.clone()
@@ -162,6 +159,7 @@ def langevin_thermalize(
 
     v = thermal_speed * noise()
     acceleration = acceleration_scale * force_function(x, index)
+    finite = torch.isfinite(acceleration).all()
     half_step = 0.5 * timestep_ps
 
     for _ in range(n_steps):
@@ -171,12 +169,15 @@ def langevin_thermalize(
         x = x + half_step * v  # A
 
         forces = force_function(x, index)
-        if not torch.isfinite(forces).all():
-            raise RuntimeError(
-                "non-finite forces during Langevin thermalization; the timestep "
-                f"({timestep_ps} ps) is too large for these structures"
-            )
+        # Retain failures on device, including transient ones. Inspect once
+        # at the output boundary rather than synchronizing every timestep.
+        finite = finite & torch.isfinite(forces).all()
         acceleration = acceleration_scale * forces
         v = v + half_step * acceleration  # B
 
+    if not finite:
+        raise RuntimeError(
+            "non-finite forces during Langevin thermalization; the timestep "
+            f"({timestep_ps} ps) is too large for these structures"
+        )
     return x

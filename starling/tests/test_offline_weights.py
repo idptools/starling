@@ -10,11 +10,65 @@ than a (slow, flaky) network call.
 import os
 
 import pytest
+import torch
 
 from starling import configs
 
 URL = "https://example.invalid/releases/download/v0/fake_weights.ckpt"
 NAME = "fake_weights.ckpt"
+
+
+def test_model_cache_reloads_when_paths_or_device_change(monkeypatch):
+    from starling.inference.model_loading import ModelManager
+
+    manager = ModelManager()
+    calls = []
+
+    def load(encoder_path, ddpm_path, device):
+        calls.append((encoder_path, ddpm_path, str(device)))
+        return torch.nn.Identity(), torch.nn.Identity()
+
+    monkeypatch.setattr(manager, "load_models", load)
+    monkeypatch.setitem(configs.TORCH_COMPILATION, "enabled", False)
+    first = manager.get_models("encoder-a", "diffusion-a", "cpu")
+    assert manager.get_models("encoder-a", "diffusion-a", torch.device("cpu")) == first
+    for encoder, diffusion, device in (
+        ("encoder-b", "diffusion-a", "cpu"),
+        ("encoder-b", "diffusion-b", "cpu"),
+        ("encoder-b", "diffusion-b", "cuda"),
+    ):
+        assert manager.get_models(encoder, diffusion, device) != first
+    assert calls == [
+        ("encoder-a", "diffusion-a", "cpu"),
+        ("encoder-b", "diffusion-a", "cpu"),
+        ("encoder-b", "diffusion-b", "cpu"),
+        ("encoder-b", "diffusion-b", "cuda"),
+    ]
+
+
+def test_failed_compilation_does_not_leave_a_mismatched_cached_pair(monkeypatch):
+    from starling.inference.model_loading import ModelManager
+
+    manager = ModelManager()
+    loads = []
+
+    def load(encoder_path, ddpm_path, device):
+        loads.append(ddpm_path)
+        return torch.nn.Identity(), torch.nn.Identity()
+
+    def fail_compile():
+        raise RuntimeError("compiler unavailable")
+
+    monkeypatch.setattr(manager, "load_models", load)
+    monkeypatch.setattr(manager, "compile", fail_compile)
+    monkeypatch.setitem(configs.TORCH_COMPILATION, "enabled", False)
+    manager.get_models("encoder", "old", "cpu")
+    monkeypatch.setitem(configs.TORCH_COMPILATION, "enabled", True)
+    with pytest.raises(RuntimeError, match="compiler unavailable"):
+        manager.get_models("encoder", "new", "cpu")
+    monkeypatch.setitem(configs.TORCH_COMPILATION, "enabled", False)
+    manager.get_models("encoder", "old", "cpu")
+    assert loads == ["old", "new", "old"]
 
 
 @pytest.fixture
@@ -117,9 +171,7 @@ def test_search_artifact_offline_missing_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("STARLING_OFFLINE", "1")
     dest = tmp_path / "index.faiss"
     with pytest.raises(FileNotFoundError) as excinfo:
-        configs._download_if_missing(
-            "https://example.invalid/index.faiss", str(dest), ""
-        )
+        configs._download_if_missing("https://example.invalid/index.faiss", str(dest), "")
     assert "STARLING_FAISS_INDEX_PATH" in str(excinfo.value)
 
 
@@ -128,9 +180,7 @@ def test_search_artifact_offline_present_bad_md5_is_used(tmp_path, monkeypatch, 
     dest = tmp_path / "index.faiss"
     dest.write_bytes(b"not the real index")
     # must not raise and must not attempt a download
-    configs._download_if_missing(
-        "https://example.invalid/index.faiss", str(dest), "0" * 32
-    )
+    configs._download_if_missing("https://example.invalid/index.faiss", str(dest), "0" * 32)
     assert dest.read_bytes() == b"not the real index"
     assert "STARLING_OFFLINE" in capsys.readouterr().out
 
@@ -139,7 +189,5 @@ def test_search_artifact_present_good_md5_noop(tmp_path, monkeypatch):
     monkeypatch.delenv("STARLING_OFFLINE", raising=False)
     dest = tmp_path / "index.faiss"
     dest.write_bytes(b"abc")
-    configs._download_if_missing(
-        "https://example.invalid/index.faiss", str(dest), configs._md5_file(str(dest))
-    )
+    configs._download_if_missing("https://example.invalid/index.faiss", str(dest), configs._md5_file(str(dest)))
     assert dest.read_bytes() == b"abc"

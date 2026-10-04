@@ -8,11 +8,13 @@ of conformations of that sequence at once, on CPU, CUDA or MPS.
 Every term in the energy (bonds, Wang-Frenkel, Debye-Huckel, and any
 restraints) depends only on inter-residue distances, so for each term we
 compute dU/dr on the full (batch, n, n) distance matrix and turn the summed
-derivatives into forces with a single batched matrix product:
+derivatives into forces using:
 
     F_i = sum_j g_ij (x_i - x_j),  where g_ij = -(dU_ij / dr_ij) / r_ij
 
-which avoids ever building a (batch, n, n, 3) displacement tensor. Energies
+which avoids building a (batch, n, n, 3) displacement tensor for the force
+reduction. CUDA float32 instead reduces each coordinate axis directly, avoiding
+TF32 matrix products. The CUDA distance kernel does use a temporary displacement tensor. Energies
 are only computed on request, because the minimizer only needs forces.
 """
 
@@ -105,6 +107,11 @@ def pairwise_distances(coordinates: torch.Tensor) -> torch.Tensor:
     the matrix-multiplication shortcut, which loses precision for beads that
     are close together relative to their distance from the origin.
 
+    CUDA uses explicit differences and a vector norm: torch.cdist's direct
+    reduction kernel is inefficient for three-coordinate float64 inputs.
+    This retains direct-distance accuracy at the cost of a temporary
+    (batch, n, n, 3) tensor. CPU and MPS retain torch.cdist.
+
     Parameters
     ----------
     coordinates : torch.Tensor
@@ -115,9 +122,9 @@ def pairwise_distances(coordinates: torch.Tensor) -> torch.Tensor:
     torch.Tensor
         Distances in Angstroms, shape (batch, n, n).
     """
-    return torch.cdist(
-        coordinates, coordinates, compute_mode="donot_use_mm_for_euclid_dist"
-    )
+    if coordinates.device.type == "cuda":
+        return torch.linalg.vector_norm(coordinates[:, :, None] - coordinates[:, None], dim=-1)
+    return torch.cdist(coordinates, coordinates, compute_mode="donot_use_mm_for_euclid_dist")
 
 
 def forces_from_pair_derivatives(
@@ -146,6 +153,12 @@ def forces_from_pair_derivatives(
         Forces in kJ/mol/Angstrom, shape (batch, n, 3).
     """
     g = -dudr / distances
+    if coordinates.device.type == "cuda" and coordinates.dtype == torch.float32:
+        # Model inference may enable TF32 globally; physical forces must not use it.
+        return torch.stack(
+            [(g * (coordinates[:, :, axis, None] - coordinates[:, None, :, axis])).sum(dim=-1) for axis in range(3)],
+            dim=-1,
+        )
     return g.sum(dim=-1, keepdim=True) * coordinates - torch.bmm(g, coordinates)
 
 
@@ -258,9 +271,7 @@ class MpipiGG:
         self.coulomb_cutoff: float = float(coulomb_cutoff)
 
         self.device: torch.device = utilities.check_device(device)
-        self.dtype: torch.dtype = (
-            dtype if dtype is not None else default_dtype(self.device)
-        )
+        self.dtype: torch.dtype = dtype if dtype is not None else default_dtype(self.device)
 
         self._build_tensors()
 
@@ -314,6 +325,8 @@ class MpipiGG:
             self._two_nu = self._tensor(2.0 * p.nu)
             self._cutoff_power = self._tensor(WANG_FRENKEL_CUTOFF_RATIO ** (2.0 * p.mu))
 
+        self._wf_derivative_scale = -self._two_mu * self._eps_alpha
+
         # Debye-Huckel: q_i q_j e^2 N_A / (4 pi eps0 eps_r), only for charged
         # non-bonded pairs. Sequences with fewer than two charges skip it
         qq = COULOMB_CONSTANT * np.outer(p.charges, p.charges) / self.dielectric
@@ -322,12 +335,21 @@ class MpipiGG:
         self._dh_mask = torch.as_tensor(dh_mask, device=self.device)
         self._qq = self._tensor(np.where(dh_mask, qq, 0.0))
         self._kappa = 0.0 if np.isinf(self.debye_length) else 1.0 / self.debye_length
+        self._dh_pairs: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._dh_pair_qq: torch.Tensor | None = None
+        # Zero charge products contribute exactly zero. Cache their complement
+        # once on CUDA; fully charged sequences have nothing useful to skip.
+        if self.device.type == "cuda" and self._has_electrostatics and np.any(p.charges == 0.0):
+            rows, columns = np.nonzero(dh_mask)
+            self._dh_pairs = (
+                torch.as_tensor(rows, device=self.device),
+                torch.as_tensor(columns, device=self.device),
+            )
+            self._dh_pair_qq = self._qq[self._dh_pairs]
 
     # .........................................................................
     #
-    def _wang_frenkel(
-        self, r: torch.Tensor, compute_energy: bool
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def _wang_frenkel(self, r: torch.Tensor, compute_energy: bool) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Wang-Frenkel dU/dr (and optionally energy) for every pair.
 
@@ -349,22 +371,36 @@ class MpipiGG:
         within = self._wf_mask & (r < self._wf_cutoff)
 
         # a = (sigma / r)^(2 mu) and b = (R / r)^(2 mu)
-        a = torch.pow(self._sigma / r, self._two_mu)
+        ratio = self._sigma / r
+        a = (
+            ratio.square().square()
+            if isinstance(self._two_mu, float) and self._two_mu == 4.0
+            else torch.pow(ratio, self._two_mu)
+        )
         b = self._cutoff_power * a
         b_minus_1 = b - 1.0
 
         # dphi/dr = -(2 mu eps alpha / r) (b - 1)^(2 nu - 1) [a (b - 1) + 2 nu (a - 1) b]
-        dudr = (
-            -(self._two_mu * self._eps_alpha / r)
-            * torch.pow(b_minus_1, self._two_nu - 1.0)
-            * (a * b_minus_1 + self._two_nu * (a - 1.0) * b)
+        power = (
+            b_minus_1
+            if isinstance(self._two_nu, float) and self._two_nu == 2.0
+            else torch.pow(b_minus_1, self._two_nu - 1.0)
         )
-        dudr = torch.where(within, dudr, torch.zeros_like(dudr))
+        # Since b = C*a, the bracket is a * [(2 nu + 1)b - (1 + 2 nu C)].
+        # Factoring avoids repeated full-matrix products and differences.
+        bracket = a * ((self._two_nu + 1.0) * b - (1.0 + self._two_nu * self._cutoff_power))
+        dudr = (self._wf_derivative_scale / r) * power * bracket
+        dudr = torch.where(within, dudr, 0.0)
 
         energy = None
         if compute_energy:
-            phi = self._eps_alpha * (a - 1.0) * torch.pow(b_minus_1, self._two_nu)
-            phi = torch.where(within, phi, torch.zeros_like(phi))
+            energy_power = (
+                b_minus_1.square()
+                if isinstance(self._two_nu, float) and self._two_nu == 2.0
+                else torch.pow(b_minus_1, self._two_nu)
+            )
+            phi = self._eps_alpha * (a - 1.0) * energy_power
+            phi = torch.where(within, phi, 0.0)
             # every pair appears twice in the full matrix
             energy = 0.5 * phi.sum(dim=(1, 2))
 
@@ -372,9 +408,7 @@ class MpipiGG:
 
     # .........................................................................
     #
-    def _debye_huckel(
-        self, r: torch.Tensor, compute_energy: bool
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def _debye_huckel(self, r: torch.Tensor, compute_energy: bool) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Debye-Huckel dU/dr (and optionally energy) for every pair.
 
@@ -393,15 +427,27 @@ class MpipiGG:
             [0] torch.Tensor: dU/dr in kJ/mol/Angstrom, shape (batch, n, n).
             [1] torch.Tensor or None: energy in kJ/mol, shape (batch,).
         """
-        within = self._dh_mask & (r <= self.coulomb_cutoff)
+        pairs = self._dh_pairs
+        if pairs is None:
+            selected_r, qq = r, self._qq
+            within = self._dh_mask & (r <= self.coulomb_cutoff)
+        else:
+            selected_r = r[:, pairs[0], pairs[1]]
+            assert self._dh_pair_qq is not None
+            qq = self._dh_pair_qq
+            within = selected_r <= self.coulomb_cutoff
 
-        u = self._qq * torch.exp(-self._kappa * r) / r
-        u = torch.where(within, u, torch.zeros_like(u))
+        u = qq * torch.exp(-self._kappa * selected_r) / selected_r
+        u = torch.where(within, u, 0.0)
 
         # d/dr [exp(-kappa r) / r] = -(kappa + 1 / r) exp(-kappa r) / r
-        dudr = -u * (self._kappa + 1.0 / r)
+        dudr = -u * (self._kappa + 1.0 / selected_r)
 
-        energy = 0.5 * u.sum(dim=(1, 2)) if compute_energy else None
+        energy = 0.5 * u.flatten(start_dim=1).sum(dim=1) if compute_energy else None
+        if pairs is not None:
+            dense_dudr = torch.zeros_like(r)
+            dense_dudr[:, pairs[0], pairs[1]] = dudr
+            dudr = dense_dudr
 
         return dudr, energy
 
@@ -448,8 +494,7 @@ class MpipiGG:
         """
         if coordinates.ndim != 3 or coordinates.shape[1:] != (self.n_residues, 3):
             raise ValueError(
-                f"coordinates must have shape (batch, {self.n_residues}, 3), got "
-                f"{tuple(coordinates.shape)}"
+                f"coordinates must have shape (batch, {self.n_residues}, 3), got {tuple(coordinates.shape)}"
             )
         if restraints is not None and frame_index is None:
             raise ValueError("frame_index is required when restraints are given")
@@ -469,9 +514,7 @@ class MpipiGG:
         e_restraint: torch.Tensor | None = None
         if restraints is not None:
             assert frame_index is not None
-            restraint_dudr, e_restraint = restraints.pair_terms(
-                r, frame_index, compute_energy
-            )
+            restraint_dudr, e_restraint = restraints.pair_terms(r, frame_index, compute_energy)
             dudr = dudr + restraint_dudr
 
         # harmonic bonds live on the first off-diagonals; both non-bonded terms
@@ -494,10 +537,7 @@ class MpipiGG:
                 "restraint": e_restraint if e_restraint is not None else zeros,
             }
             energies["total"] = (
-                energies["bond"]
-                + energies["wang_frenkel"]
-                + energies["debye_huckel"]
-                + energies["restraint"]
+                energies["bond"] + energies["wang_frenkel"] + energies["debye_huckel"] + energies["restraint"]
             )
 
         return ForceFieldEvaluation(forces=forces, energies=energies)
@@ -530,8 +570,6 @@ class MpipiGG:
             Energy in kJ/mol for each term in ENERGY_TERMS, each of shape
             (batch,).
         """
-        result = self.evaluate(
-            coordinates, restraints, frame_index, compute_energy=True
-        )
+        result = self.evaluate(coordinates, restraints, frame_index, compute_energy=True)
         assert result.energies is not None
         return result.energies

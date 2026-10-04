@@ -48,6 +48,28 @@ from starling.minimizer.potentials import (
 SEQ = "MKDEYGSPLRRAEWFKDVHQNTSGIC"
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+def test_float32_force_reduction_is_independent_of_tf32():
+    from starling.minimizer.forcefield import forces_from_pair_derivatives
+
+    generator = torch.Generator(device="cuda").manual_seed(17)
+    coordinates = torch.randn(2, 37, 3, generator=generator, device="cuda")
+    distances = torch.ones(2, 37, 37, device="cuda")
+    dudr = torch.randn(2, 37, 37, generator=generator, device="cuda")
+    dudr = (dudr + dudr.transpose(-1, -2)) / 2
+    expected = (-dudr[..., None] * (coordinates[:, :, None] - coordinates[:, None])).sum(dim=2)
+    previous = torch.get_float32_matmul_precision()
+    try:
+        torch.set_float32_matmul_precision("highest")
+        strict = forces_from_pair_derivatives(coordinates, distances, dudr)
+        torch.set_float32_matmul_precision("high")
+        reduced = forces_from_pair_derivatives(coordinates, distances, dudr)
+    finally:
+        torch.set_float32_matmul_precision(previous)
+    torch.testing.assert_close(strict, reduced, rtol=0, atol=0)
+    torch.testing.assert_close(strict, expected)
+
+
 def _random_chain(n, seed, bond=BOND_LENGTH, min_distance=6.5):
     """
     Build a random-walk chain with ideal bonds and no close non-bonded pairs.
@@ -196,10 +218,15 @@ def test_harmonic_bond_and_debye_huckel():
 # ------------------------------------------------------------------------------
 
 
-def test_torch_energy_matches_numpy_reference():
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("sequence", [SEQ, "DDDDDDDD", "GGGGGGGG"])
+def test_torch_energy_matches_numpy_reference(device, sequence):
+    if device == "cuda" and not torch.cuda.is_available():
+        raise pytest.skip.Exception("CUDA is not available")
     _, noisy = _noisy_ensemble(n_frames=3)
-    ff = MpipiGG(SEQ, device="cpu")
-    energies = ff.energy(torch.as_tensor(noisy))
+    noisy = noisy[:, : len(sequence)]
+    ff = MpipiGG(sequence, device=device)
+    energies = ff.energy(torch.as_tensor(noisy, device=device))
 
     for k in range(noisy.shape[0]):
         ref = mpipi_gg_energy(noisy[k], ff.parameters, ff.debye_length)
@@ -207,18 +234,67 @@ def test_torch_energy_matches_numpy_reference():
             assert float(energies[term][k]) == pytest.approx(ref[term], rel=1e-10)
 
 
-def test_forces_match_autograd():
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_forces_match_autograd(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        raise pytest.skip.Exception("CUDA is not available")
     truth, noisy = _noisy_ensemble(n_frames=3)
-    ff = MpipiGG(SEQ, device="cpu")
-    restraints = DistanceRestraints(_distance_maps(truth), sigma=ff.parameters.sigma, tolerance=0.2)
-    index = torch.arange(noisy.shape[0])
+    ff = MpipiGG(SEQ, device=device)
+    restraints = DistanceRestraints(
+        _distance_maps(truth), sigma=ff.parameters.sigma, tolerance=0.2, device=device, dtype=ff.dtype
+    )
+    index = torch.arange(noisy.shape[0], device=device)
 
-    x = torch.as_tensor(noisy).requires_grad_(True)
+    x = torch.as_tensor(noisy, device=device).requires_grad_(True)
     ff.energy(x, restraints, index)["total"].sum().backward()
     assert x.grad is not None
 
-    forces = ff.evaluate(torch.as_tensor(noisy), restraints, index).forces
+    forces = ff.evaluate(torch.as_tensor(noisy, device=device), restraints, index).forces
     assert torch.allclose(forces, -x.grad, rtol=1e-8, atol=1e-8)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_cuda_thermalization_matches_generic_force_reference(monkeypatch):
+    """Optimized forces preserve the generic restrained 250-step trajectory."""
+    truth, noisy = _noisy_ensemble(n_frames=4)
+    ff = MpipiGG(SEQ, device="cuda")
+    restraints = DistanceRestraints(_distance_maps(truth), sigma=ff.parameters.sigma, device="cuda", dtype=ff.dtype)
+    coordinates = torch.as_tensor(noisy, device="cuda")
+
+    def force(x, index):
+        return ff.evaluate(x, restraints, index).forces
+
+    def run():
+        return langevin_thermalize(coordinates, force, 250, generator=torch.Generator(device="cuda").manual_seed(17))
+
+    def generic_wang_frenkel(self, r, compute_energy):
+        # Un-factored analytical derivative, independent of the shortcuts.
+        assert not compute_energy
+        a = torch.pow(self._sigma / r, self._two_mu)
+        b = self._cutoff_power * a
+        derivative = (
+            -(self._two_mu * self._eps_alpha / r)
+            * torch.pow(b - 1.0, self._two_nu - 1.0)
+            * (a * (b - 1.0) + self._two_nu * (a - 1.0) * b)
+        )
+        return torch.where(self._wf_mask & (r < self._wf_cutoff), derivative, torch.zeros_like(derivative)), None
+
+    def dense_debye_huckel(self, r, compute_energy):
+        assert not compute_energy
+        u = self._qq * torch.exp(-self._kappa * r) / r
+        u = torch.where(self._dh_mask & (r <= self.coulomb_cutoff), u, torch.zeros_like(u))
+        return -u * (self._kappa + 1.0 / r), None
+
+    actual = run()
+    with monkeypatch.context() as context:
+        context.setattr(
+            "starling.minimizer.forcefield.pairwise_distances",
+            lambda x: torch.cdist(x, x, compute_mode="donot_use_mm_for_euclid_dist"),
+        )
+        context.setattr(MpipiGG, "_wang_frenkel", generic_wang_frenkel)
+        context.setattr(MpipiGG, "_debye_huckel", dense_debye_huckel)
+        expected = run()
+    torch.testing.assert_close(actual, expected, rtol=1e-10, atol=1e-9)
 
 
 def test_bonded_neighbours_are_excluded_from_nonbonded_terms():
@@ -244,7 +320,8 @@ def test_forcefield_rejects_bad_shapes():
 # ------------------------------------------------------------------------------
 
 
-def test_restraints_are_flat_bottomed_and_skip_local_pairs():
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_restraints_are_flat_bottomed_and_skip_local_pairs(direction):
     n = 10
     chain = _random_chain(n, seed=3)[None]
     reference = _distance_maps(chain)
@@ -252,17 +329,17 @@ def test_restraints_are_flat_bottomed_and_skip_local_pairs():
     index = torch.zeros(1, dtype=torch.long)
 
     # inside the tolerance there is no energy and no force
-    within = torch.as_tensor(reference + 0.4)
+    within = torch.as_tensor(reference + direction * 0.4)
     dudr, energy = restraints.pair_terms(within, index, compute_energy=True)
     assert energy is not None and float(energy[0]) == 0.0
     assert torch.count_nonzero(dudr) == 0
 
     # beyond it, only pairs at least min_separation apart are penalised
-    beyond = torch.as_tensor(reference + 1.5)
+    beyond = torch.as_tensor(reference + direction * 1.5)
     dudr, energy = restraints.pair_terms(beyond, index, compute_energy=True)
     separation = np.abs(np.subtract.outer(np.arange(n), np.arange(n)))
     assert torch.all(dudr[0][torch.as_tensor(separation < 4)] == 0)
-    assert torch.all(dudr[0][torch.as_tensor(separation >= 4)] > 0)
+    assert torch.all(direction * dudr[0][torch.as_tensor(separation >= 4)] > 0)
 
     k_pair = restraints.pair_force_constant
     expected = 0.5 * k_pair * 1.0**2 * restraints.n_restrained_pairs
@@ -286,18 +363,34 @@ def test_restraint_reference_floor():
 # ------------------------------------------------------------------------------
 
 
-def test_fire_restores_bond_lengths():
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_fire_restores_bond_lengths(dtype):
     # a straight chain with every bond compressed to 3 A
     n = 12
-    x0 = torch.zeros(1, n, 3, dtype=torch.float64)
-    x0[0, :, 0] = 3.0 * torch.arange(n, dtype=torch.float64)
-    ff = MpipiGG("G" * n, device="cpu")
+    x0 = torch.zeros(1, n, 3, dtype=dtype)
+    x0[0, :, 0] = 3.0 * torch.arange(n, dtype=dtype)
+    ff = MpipiGG("G" * n, device="cpu", dtype=dtype)
 
     result = fire_minimize(x0, lambda x, index: ff.evaluate(x).forces, force_tolerance=0.01)
     assert bool(result.converged[0])
 
     bonds = torch.linalg.vector_norm(torch.diff(result.coordinates[0], dim=0), dim=-1)
     assert torch.allclose(bonds, torch.full_like(bonds, BOND_LENGTH), atol=0.01)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda", "mps"])
+def test_float32_fire_resolves_extreme_clash(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        raise pytest.skip.Exception("Requires CUDA")
+    if device == "mps" and not torch.backends.mps.is_available():
+        raise pytest.skip.Exception("Requires MPS")
+    x = torch.tensor([[[0.0, 0.0, 0.0], [3.81, 0.0, 0.0], [0.1, 0.0, 0.0]]], device=device)
+    field = MpipiGG("DDD", device=device, dtype=torch.float32)
+    result = fire_minimize(x, lambda x, index: field.evaluate(x).forces)
+    assert bool(result.converged.all())
+    assert bool(torch.isfinite(result.coordinates).all())
+    assert bool((result.max_force < 1.0).all())
+    assert float(torch.linalg.vector_norm(result.coordinates[:, 0] - result.coordinates[:, 2])) > 0.1
 
 
 def test_relaxation_repairs_local_geometry_and_keeps_global_shape():
@@ -394,6 +487,28 @@ def test_relax_ensemble_returns_a_new_ensemble(recorded, override, expected):
     assert result.reference == "distance_map"
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+def test_minimizers_reject_nonfinite_controls_before_evaluating_forces(bad):
+    def unexpected_force(x, index):
+        raise AssertionError("Invalid controls must be rejected before force evaluation")
+
+    x = torch.zeros(1, 2, 3)
+    with pytest.raises(ValueError, match="force_tolerance"):
+        fire_minimize(x, unexpected_force, force_tolerance=bad)
+    for name in ("temperature_K", "timestep_ps", "friction_per_ps", "bead_mass"):
+        with pytest.raises(ValueError, match=name):
+            langevin_thermalize(x, unexpected_force, 1, **{name: bad})
+
+
+@pytest.mark.parametrize("bad", [True, 1.5, float("nan"), -1])
+def test_minimizers_reject_invalid_step_counts(bad):
+    x = torch.zeros(1, 2, 3)
+    with pytest.raises(ValueError, match="max_steps"):
+        fire_minimize(x, lambda x, index: -x, max_steps=bad)
+    with pytest.raises(ValueError, match="n_steps"):
+        langevin_thermalize(x, lambda x, index: -x, bad)
+
+
 def test_relax_conformations_rejects_bad_input():
     _, noisy = _noisy_ensemble(n_frames=2, seed=50)
     with pytest.raises(ValueError):
@@ -412,6 +527,158 @@ def test_relax_conformations_rejects_bad_input():
             device="cpu",
             progress_bar=False,
         )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda", "mps"])
+def test_tensor_relaxation_matches_numpy_input(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        raise pytest.skip.Exception("CUDA is not available")
+    if device == "mps" and not torch.backends.mps.is_available():
+        raise pytest.skip.Exception("MPS is not available")
+    truth, noisy = _noisy_ensemble(n_frames=3, seed=60)
+    maps = _distance_maps(truth)
+    dtype = torch.float32 if device == "mps" else torch.float64
+    coordinates = torch.as_tensor(noisy, dtype=dtype, device=device)
+    reference = torch.as_tensor(maps, dtype=dtype, device=device)
+    original = coordinates.clone()
+
+    def run(x, reference_maps):
+        return relax_conformations(
+            x,
+            SEQ,
+            reference_distances=reference_maps,
+            device=device,
+            batch_size=2,
+            progress_bar=False,
+            seed=11,
+            thermalization_steps=20,
+        )
+
+    expected = run(coordinates.cpu().numpy(), reference.cpu().numpy())
+    actual = run(coordinates, reference)
+    np.testing.assert_array_equal(actual.coordinates, expected.coordinates)
+    np.testing.assert_array_equal(actual.n_steps, expected.n_steps)
+    np.testing.assert_array_equal(actual.initial_coordinates, coordinates.cpu().numpy())
+    torch.testing.assert_close(coordinates, original, rtol=0, atol=0)
+
+
+def test_force_compilation_rejects_unsupported_options():
+    _, noisy = _noisy_ensemble(n_frames=1)
+    with pytest.raises(ValueError, match="requires a CUDA"):
+        relax_conformations(noisy, SEQ, device="cpu", compile_forces=True, progress_bar=False)
+    with pytest.raises(TypeError, match="must be a bool"):
+        relax_conformations(noisy, SEQ, device="cpu", compile_forces="yes", progress_bar=False)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_relaxation_uses_float32_for_fire_and_thermalization(monkeypatch, device):
+    if device == "cuda" and not torch.cuda.is_available():
+        raise pytest.skip.Exception("CUDA is not available")
+    import importlib
+
+    relaxation = importlib.import_module("starling.minimizer.relax")
+    original_fire = relaxation.fire_minimize
+    original_thermalize = relaxation.langevin_thermalize
+    dtypes = []
+
+    def fire(x, force, **kwargs):
+        dtypes.append(x.dtype)
+        return original_fire(x, force, **kwargs)
+
+    def thermalize(x, force, steps, **kwargs):
+        assert x.dtype == torch.float32
+        assert force(x, torch.arange(x.shape[0], device=x.device)).dtype == torch.float32
+        return original_thermalize(x, force, steps, **kwargs)
+
+    monkeypatch.setattr(relaxation, "fire_minimize", fire)
+    monkeypatch.setattr(relaxation, "langevin_thermalize", thermalize)
+    _, noisy = _noisy_ensemble(n_frames=3)
+    result = relax_conformations(
+        noisy, SEQ, device=device, batch_size=2, thermalization_steps=5, seed=17, progress_bar=False
+    )
+    assert dtypes == [torch.float32, torch.float32]
+    assert result.coordinates.dtype == np.float64
+    assert all(values.dtype == np.float64 for values in result.energy_before.values())
+    assert all(values.dtype == np.float64 for values in result.energy_after.values())
+    assert result.settings["thermalization_dtype"] == "float32"
+    assert result.settings["minimization_dtype"] == "float32"
+    assert result.settings["fused_thermalization_batches"] == (2 if device == "cuda" else 0)
+    assert result.settings["fused_minimization_batches"] == (2 if device == "cuda" else 0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_fused_failure_falls_back_once_before_drawing_noise(monkeypatch):
+    import importlib
+
+    relaxation = importlib.import_module("starling.minimizer.relax")
+    from starling.minimizer import fused_forces
+
+    _, noisy = _noisy_ensemble(n_frames=3)
+    kwargs: dict[str, Any] = dict(device="cuda", batch_size=2, thermalization_steps=5, seed=17, progress_bar=False)
+    with monkeypatch.context() as context:
+        context.setattr(relaxation, "_try_fused_forces", lambda *args: None)
+        expected = relax_conformations(noisy, SEQ, **kwargs)
+    calls = []
+
+    def unavailable(*args):
+        calls.append(1)
+        raise ImportError("test Triton unavailable")
+
+    monkeypatch.setattr(fused_forces, "fused_forces", unavailable)
+    with pytest.warns(RuntimeWarning, match="using eager float32 relaxation.*test Triton unavailable"):
+        actual = relax_conformations(noisy, SEQ, **kwargs)
+    np.testing.assert_array_equal(actual.coordinates, expected.coordinates)
+    assert actual.settings["fused_thermalization_batches"] == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_force_compilation_failure_warns_and_preserves_rng(monkeypatch):
+    _, noisy = _noisy_ensemble(n_frames=3)
+    kwargs: dict[str, Any] = dict(device="cuda", progress_bar=False, batch_size=2, thermalization_steps=5, seed=17)
+    expected = relax_conformations(noisy, SEQ, **kwargs)
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        calls.append(1)
+        raise RuntimeError("test compiler unavailable")
+
+    monkeypatch.setattr(torch, "compile", unavailable)
+    with pytest.warns(RuntimeWarning, match="Whole-force compilation failed.*test compiler unavailable"):
+        actual = relax_conformations(noisy, SEQ, compile_forces=True, **kwargs)
+    np.testing.assert_allclose(actual.coordinates, expected.coordinates, rtol=0, atol=1e-4)
+    assert actual.settings["compiled_thermalization_batches"] == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_compiled_relaxation_matches_eager_with_partial_batch():
+    truth, noisy = _noisy_ensemble(n_frames=3)
+    kwargs: dict[str, Any] = dict(
+        device="cuda", progress_bar=False, batch_size=2, seed=17, reference_distances=_distance_maps(truth)
+    )
+    expected = relax_conformations(noisy, SEQ, **kwargs)
+    actual = relax_conformations(noisy, SEQ, compile_forces=True, **kwargs)
+    np.testing.assert_allclose(actual.coordinates, expected.coordinates, rtol=0, atol=1e-4)
+    np.testing.assert_array_equal(actual.n_steps, expected.n_steps)
+    assert actual.settings["compiled_thermalization_batches"] == 2
+
+
+@pytest.mark.parametrize("bad_call", [1, 3])
+def test_thermalization_rejects_transient_nonfinite_forces(bad_call):
+    coordinates = torch.ones(2, 4, 3)
+    original = coordinates.clone()
+    calls = 0
+
+    def force(x, index):
+        nonlocal calls
+        calls += 1
+        return torch.full_like(x, float("nan")) if calls == bad_call else torch.zeros_like(x)
+
+    with pytest.raises(RuntimeError, match="non-finite forces"):
+        langevin_thermalize(coordinates, force, n_steps=5)
+    torch.testing.assert_close(coordinates, original, rtol=0, atol=0)
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS is not available")
@@ -504,9 +771,12 @@ def test_thermalization_restores_thermal_bond_spread():
     assert thermalized.settings["thermalization_steps"] == 250
 
 
-def test_thermalization_is_reproducible_with_a_seed():
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_thermalization_is_reproducible_with_a_seed(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        raise pytest.skip.Exception("CUDA is not available")
     _, noisy = _noisy_ensemble(n_frames=2, seed=80)
-    kwargs: dict[str, Any] = dict(device="cpu", progress_bar=False, thermalization_steps=50)
+    kwargs: dict[str, Any] = dict(device=device, progress_bar=False, thermalization_steps=50)
     first = relax_conformations(noisy, SEQ, seed=1, **kwargs)
     again = relax_conformations(noisy, SEQ, seed=1, **kwargs)
     other = relax_conformations(noisy, SEQ, seed=2, **kwargs)
@@ -645,13 +915,13 @@ def test_cli_relax_requires_return_structures(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_relax_coordinates_works_in_nanometres():
+def test_relax_coordinates_converts_angstrom_inputs_to_nanometre_outputs():
     from starling.inference.generation import _relax_coordinates
 
     truth, noisy = _noisy_ensemble(n_frames=2, seed=70)
     relaxed = _relax_coordinates(
         SEQ,
-        noisy / 10.0,
+        noisy,
         _distance_maps(truth),
         ionic_strength=150,
         device="cpu",
@@ -688,7 +958,7 @@ def test_error_filter_screens_the_relaxed_structures(monkeypatch):
 
     def fake_relax(sequence, coordinates, distance_maps, *args, **kwargs):
         relax_calls.append(len(coordinates))
-        out = np.array(coordinates, dtype=np.float64)
+        out = coordinates.detach().cpu().numpy().astype(np.float64) / 10.0
         if len(relax_calls) == 1:
             out[::2] *= 5.0
         return out
@@ -723,6 +993,7 @@ def test_error_filter_screens_the_relaxed_structures(monkeypatch):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_generate_relaxes_structures_end_to_end():
     from starling import generate
 
@@ -745,6 +1016,7 @@ def test_generate_relaxes_structures_end_to_end():
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_relaxation_repairs_unweighted_smacof_structures():
     """
     Relaxation still repairs structures from unweighted SMACOF.

@@ -9,6 +9,7 @@ from starling.inference.model_loading import ModelManager
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 @pytest.mark.integration
 def test_sequence_encoder_backend_real_models():
     """Optional end-to-end test loading real weights.

@@ -418,6 +418,18 @@ def read_starling_ensemble(filename):
     return return_dict
 
 
+def symmetrize_tensor_distance_maps(dist_maps: torch.Tensor) -> torch.Tensor:
+    """Reflect the strict upper triangle across the last two axes.
+
+    Accepts square maps with any batch dimensions. Returns a new tensor with
+    zero diagonal, preserving device, dtype, and gradients; input is unchanged.
+    """
+    if dist_maps.ndim < 2 or dist_maps.shape[-2] != dist_maps.shape[-1]:
+        raise ValueError("Distance maps must be square on their last two axes")
+    upper = torch.triu(dist_maps, diagonal=1)
+    return upper + upper.transpose(-1, -2)
+
+
 def symmetrize_distance_maps(dist_maps):
     """
     Symmetrizes a stack of distance maps along an axis by reflecting the upper triangle
@@ -551,6 +563,9 @@ def check_distance_map_for_error(
 
     if distance_map.shape[0] != distance_map.shape[1]:
         raise ValueError("Input matrix must be square.")
+
+    if not np.isfinite(distance_map).all() or np.any(distance_map < 0):
+        return True
 
     n = distance_map.shape[0]
 

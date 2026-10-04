@@ -364,13 +364,11 @@ def numpy2starling():
 
 
 def xtc2starling():
-    from pathlib import Path
-
     # Initialize the argument parser
     parser = ArgumentParser(description="Convert .xtc files to .starling ensembles")
 
     # Add command-line arguments corresponding to the parameters of the generate function
-    parser.add_argument("--xtc", type=str, help="Input xtc file", default=None)
+    parser.add_argument("--xtc", type=str, help="Input xtc file", required=True)
     parser.add_argument("--pdb", type=str, help="PDB topology file", default=None)
     parser.add_argument(
         "-o",
@@ -383,7 +381,8 @@ def xtc2starling():
     # Parse the command-line arguments
     args = parser.parse_args()
 
-    outname = Path(args.xtc).parts[-1].replace(".xtc", ".starling")
+    args.input_file = args.xtc
+    outname = parse_output_path(args)
     ss_traj = SSTrajectory(args.xtc, args.pdb)
     ss_protein = ss_traj.proteinTrajectoryList[0]
     sequence = ss_protein.get_amino_acid_sequence(oneletter=True)

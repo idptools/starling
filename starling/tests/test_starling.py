@@ -3,7 +3,6 @@ Unit and regression test for the starling package.
 """
 
 # Import package, test suite, and other packages as needed
-import sys
 import numpy as np
 
 import pytest
@@ -14,11 +13,6 @@ from starling.structure.ensemble import Ensemble
 from starling import utilities
 
 import torch
-
-
-def test_starling_imported():
-    """Sample test, will always pass so long as import statement worked."""
-    assert "starling" in sys.modules
 
 
 @pytest.mark.parametrize("compression", [None, "lzma", "gzip"])
@@ -48,6 +42,7 @@ def test_ensemble_generation_save_and_load(tmp_path, compression, reduce_precisi
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_generation(tmp_path):
 
     # define sequence
@@ -74,6 +69,7 @@ def test_ensemble_generation(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_generation_single_ensemble(tmp_path):
 
     # define sequence
@@ -106,6 +102,7 @@ def test_ensemble_generation_single_ensemble(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_generation_cpu(tmp_path):
 
     # define sequence
@@ -138,6 +135,7 @@ def test_ensemble_generation_cpu(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_generation_mps(tmp_path):
 
     if not torch.backends.mps.is_available():
@@ -174,6 +172,7 @@ def test_ensemble_generation_mps(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_generation_cuda(tmp_path):
 
     if not torch.cuda.is_available():
@@ -210,6 +209,7 @@ def test_ensemble_generation_cuda(tmp_path):
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_reconstruction_re():
     seq = "ASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAPSPASPASPAPSPASPAPSPPASPASPAASAPASPAPSPAP"
     C = generate(
@@ -224,6 +224,7 @@ def test_ensemble_reconstruction_re():
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_reconstruction_dm():
     #
     # MDS reconstruction is hard, so our tolerance here is ~5% of frames can have ONE OR MORE distance that
@@ -260,6 +261,7 @@ def test_ensemble_reconstruction_dm():
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_reconstruction_dm_CPU():
     #
     # MDS reconstruction is hard, so our tolerance here is ~10% of frames can have ONE OR MORE distance that
@@ -292,6 +294,7 @@ def test_ensemble_reconstruction_dm_CPU():
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_reconstruction_dm_mps():
     #
     # MDS reconstruction is hard, so our tolerance here is ~10% of frames can have ONE OR MORE distance that
@@ -326,6 +329,7 @@ def test_ensemble_reconstruction_dm_mps():
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_ensemble_reconstruction_dm_cuda():
     #
     # MDS reconstruction is hard, so our tolerance here is ~10% of frames can have ONE OR MORE distance that
@@ -360,6 +364,7 @@ def test_ensemble_reconstruction_dm_cuda():
 
 
 @pytest.mark.slow
+@pytest.mark.requires_weights
 def test_skip_long_seqs():
     """
     Check we can pass a sequence that's too long and it's skipped but

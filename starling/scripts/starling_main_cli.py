@@ -46,15 +46,9 @@ def print_info():
     # local imports if needed
     print_starling()
     print("Using models at the following locations:")
-    print(
-        f"  VAE  model weights: {_describe_weights(configs.DEFAULT_ENCODER_WEIGHTS_PATH)}"
-    )
-    print(
-        f"  DDPM model weights: {_describe_weights(configs.DEFAULT_DDPM_WEIGHTS_PATH)}"
-    )
-    print(
-        f"  Offline mode       : {'ON (STARLING_OFFLINE set)' if configs.is_offline() else 'off'}"
-    )
+    print(f"  VAE  model weights: {_describe_weights(configs.DEFAULT_ENCODER_WEIGHTS_PATH)}")
+    print(f"  DDPM model weights: {_describe_weights(configs.DEFAULT_DDPM_WEIGHTS_PATH)}")
+    print(f"  Offline mode       : {'ON (STARLING_OFFLINE set)' if configs.is_offline() else 'off'}")
     print("  Local weight directories searched (in order):")
     for d in (configs.DEFAULT_MODEL_DIR, configs.torch_hub_checkpoint_dir()):
         print(f"    - {d}")
@@ -65,9 +59,7 @@ def print_info():
     print("  Default steps      :", configs.DEFAULT_STEPS)
     print(f"  Default device     : {check_device(None)}")
     print("-------------------------------------------------------")
-    print(
-        "Need help - please raise an issue on GitHub: https://github.com/idptools/starling/issues"
-    )
+    print("Need help - please raise an issue on GitHub: https://github.com/idptools/starling/issues")
 
     print("\n")
 
@@ -190,6 +182,11 @@ def main():
             "(default: False)"
         ),
     )
+    parser.add_argument(
+        "--compile-forces",
+        action="store_true",
+        help="Fuse CUDA thermalization forces for sustained throughput; adds compilation startup time. Requires --relax -r.",
+    )
 
     # will need to update this default...
     parser.add_argument(
@@ -231,11 +228,13 @@ def main():
         )
         sys.exit(1)
 
+    if args.compile_forces and (not args.relax or not args.return_structures):
+        parser.error("--compile-forces requires --relax and -r/--return_structures")
+
     # relaxation acts on 3D structures, so without -r it would silently do nothing
     if args.relax and not args.return_structures:
         print(
-            "ERROR: --relax relaxes the 3D structures, so it requires "
-            "-r/--return_structures.",
+            "ERROR: --relax relaxes the 3D structures, so it requires -r/--return_structures.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -260,6 +259,7 @@ def main():
         show_progress_bar=args.progress_bar,
         remove_errors=args.remove_errors,
         relax=args.relax,
+        compile_forces=args.compile_forces,
     )
 
 

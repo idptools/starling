@@ -329,9 +329,13 @@ class DiffusionModel(pl.LightningModule):
             # This improves training stability by reweighting timestep losses
             snr = self.compute_snr(t)
 
-            # Calculate weight using min(snr, γ) / snr formula
-            # Handle zero SNR case by replacing potential infinities with 1.0
-            snr_weight = torch.clamp(self.min_snr_gamma / snr, min=1.0)
+            # min(snr, gamma) / snr, with the zero-SNR limit defined as 1.
+            snr_weight = torch.where(
+                snr > 0,
+                torch.clamp(snr, max=self.min_snr_gamma)
+                / snr.clamp_min(torch.finfo(snr.dtype).tiny),
+                torch.ones_like(snr),
+            )
 
             # Apply the SNR-weighted MSE loss
             # First compute per-element losses, then average across spatial dimensions
