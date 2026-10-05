@@ -76,9 +76,12 @@ Samplers
    :toctree: autosummary
    :recursive:
 
+   samplers.base_sampler
+   samplers.sampler_utilities
    samplers.ddpm_sampler
    samplers.ddim_sampler
    samplers.plms_sampler
+   samplers.dpmpp_sampler
 
 Data Processing
 ---------------

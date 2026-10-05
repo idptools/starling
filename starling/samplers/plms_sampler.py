@@ -1,330 +1,169 @@
-"""SAMPLING ONLY."""
+"""
+PLMS sampling: DDIM steps driven by a multistep combination of noise predictions.
+
+References
+----------
+[1] Liu, L., Ren, Y., Lin, Z., & Zhao, Z. (2022). Pseudo numerical methods
+    for diffusion models on manifolds. ICLR 2022. arXiv:2202.09778.
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
-import numpy as np
 import torch
-from einops import rearrange
-from tqdm import tqdm
 
-from starling.data.tokenizer import StarlingTokenizer
-from starling.inference.constraints import ConstraintLogger
+from starling import configs
+from starling.samplers.base_sampler import BaseSampler
+from starling.samplers.sampler_utilities import (
+    UNIFORM_DISCRETIZATION,
+    check_step_count,
+    ddim_timesteps,
+    ddim_update,
+)
 
 if TYPE_CHECKING:
     from starling.models.diffusion import DiffusionModel
     from starling.models.vae import VAE
 
-# def noise_like(shape, device, repeat=False):
-#     repeat_noise = lambda: torch.randn((1, *shape[1:]), device=device).repeat(
-#         shape[0], *((1,) * (len(shape) - 1))
-#     )
-#     noise = lambda: torch.randn(shape, device=device)
-#     return repeat_noise() if repeat else noise()
+# PLMS combines the current noise prediction with up to three earlier ones
+# (fourth-order Adams-Bashforth)
+MAX_PREVIOUS_PREDICTIONS: Final[int] = 3
 
 
-def dynamic_thresholding_fn(x0: torch.Tensor, p: float = 0.995, max_val: float = 1.0) -> torch.Tensor:
+def pseudo_linear_multistep_noise(
+    predicted_noise: torch.Tensor,
+    previous_predictions: list[torch.Tensor],
+) -> torch.Tensor:
     """
-    Applies dynamic thresholding to VAE latent predictions.
+    Combine the current and earlier noise predictions with Adams-Bashforth weights.
 
-    Args:
-        x0: Tensor of shape (B, C, H, W) — predicted x_0 in latent space
-        p: Quantile threshold, e.g., 0.995
-        max_val: Absolute minimum threshold cap to avoid over-compression
+    With one, two or three earlier predictions this is the second-, third- or
+    fourth-order Adams-Bashforth combination used by PLMS [1].
 
-    Returns:
-        Clamped and rescaled tensor.
+    Parameters
+    ----------
+    predicted_noise : torch.Tensor
+        Noise predicted at the current step.
+    previous_predictions : list of torch.Tensor
+        Noise predicted at earlier steps, oldest first. Must not be empty;
+        only the last three are used.
+
+    Returns
+    -------
+    torch.Tensor
+        The combined noise prediction, same shape as predicted_noise.
     """
-    # Compute scale per sample
-    s = torch.quantile(x0.abs().reshape(x0.shape[0], -1), p, dim=1, keepdim=True)
-    s = torch.maximum(s, torch.tensor(max_val, device=x0.device))
-    while s.ndim < x0.ndim:
-        s = s.unsqueeze(-1)  # expand to match x0 shape
-    x0 = torch.clamp(x0, -s, s) / s
-    return x0
+    assert previous_predictions, "the first PLMS step has no earlier predictions to combine"
+
+    if len(previous_predictions) == 1:
+        return (3 * predicted_noise - previous_predictions[-1]) / 2
+
+    if len(previous_predictions) == 2:
+        return (23 * predicted_noise - 16 * previous_predictions[-1] + 5 * previous_predictions[-2]) / 12
+
+    return (
+        55 * predicted_noise
+        - 59 * previous_predictions[-1]
+        + 37 * previous_predictions[-2]
+        - 9 * previous_predictions[-3]
+    ) / 24
 
 
-def make_ddim_sampling_parameters(alphacums, ddim_timesteps, eta):
-    # select alphas for computing the variance schedule
-    # Convert to plain numpy arrays to avoid torch/numpy interop deprecation warnings
-    alphas = np.asarray(alphacums[ddim_timesteps])
-    alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
+class PLMSSampler(BaseSampler):
+    """
+    Deterministic multistep sampler on DDIM's timestep grid.
 
-    # according the the formula provided in https://arxiv.org/abs/2010.02502
-    sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))
-    return sigmas, alphas, alphas_prev
+    PLMS [1] takes the same deterministic DDIM steps, but feeds them an
+    Adams-Bashforth combination of the current and up to three earlier noise
+    predictions, which makes each step higher order. The first step has no
+    history, so it averages the noise predicted at the start and at a
+    provisional end of the step (a pseudo improved Euler step), which costs
+    one extra network evaluation.
+    """
 
+    name = "PLMS"
 
-class PLMSSampler(object):
     def __init__(
         self,
         ddpm_model: DiffusionModel,
         encoder_model: VAE,
         n_steps: int,
-        ionic_strength: float = 150,
-        ddim_discretize="uniform",
-        schedule="linear",
-        **kwargs,
-    ):
-        super().__init__()
-        self.ddpm_model = ddpm_model
-        self.encoder_model = encoder_model
-        self.ddpm_num_timesteps = ddpm_model.num_timesteps
-        self.n_steps = n_steps
-        self.schedule = schedule
-        self.device = ddpm_model.device
-        self.ionic_strength = torch.tensor([ionic_strength], device=self.device).unsqueeze(0)
-
-        self.tokenizer = StarlingTokenizer()
-
-        # Makes the sampler deterministic (I think)
-        ddim_eta = 0
-
-        # Ways to discretize the generative process
-        if ddim_discretize == "uniform":
-            c = self.ddpm_num_timesteps // n_steps
-            self.ddim_time_steps = np.asarray(list(range(0, self.ddpm_num_timesteps - 1, c))) + 1
-        elif ddim_discretize == "quad":
-            self.ddim_time_steps = ((np.linspace(0, np.sqrt(self.ddpm_num_timesteps * 0.8), n_steps)) ** 2).astype(
-                int
-            ) + 1
-        else:
-            raise NotImplementedError(ddim_discretize)
-
-        with torch.no_grad():
-            # ddim sampling parameters
-            self.ddim_sigmas, self.ddim_alphas, self.ddim_alphas_prev = make_ddim_sampling_parameters(
-                alphacums=self.ddpm_model.alphas_cumprod.cpu(),
-                ddim_timesteps=self.ddim_time_steps,
-                eta=ddim_eta,
-            )
-
-            self.ddim_sqrt_one_minus_alphas = (1.0 - self.ddim_alphas) ** 0.5
-
-            self.sigmas_for_original_sampling_steps = ddim_eta * torch.sqrt(
-                (1 - self.ddpm_model.alphas_cumprod_prev)
-                / (1 - self.ddpm_model.alphas_cumprod)
-                * (1 - self.ddpm_model.alphas_cumprod / self.ddpm_model.alphas_cumprod_prev)
-            )
-
-    def generate_labels(self, labels: str) -> tuple[torch.Tensor, torch.Tensor]:
+        ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
+        ddim_discretize: str = UNIFORM_DISCRETIZATION,
+    ) -> None:
         """
-        Generate labels to condition the generative process on.
+        Set up a PLMS sampler.
 
         Parameters
         ----------
-        labels : str
-            A sequence to generate labels from.
+        ddpm_model : DiffusionModel
+            The trained diffusion model.
+        encoder_model : VAE
+            The trained VAE, used to decode latents into distance maps.
+        n_steps : int
+            Requested number of steps; the grid is DDIM's (30 gives 31 steps).
+        ionic_strength : float, optional
+            Ionic strength in mM. Default configs.DEFAULT_IONIC_STRENGTH.
+        ddim_discretize : str, optional
+            Spacing of the timestep grid, 'uniform' (default) or 'quad'.
 
-        Returns
-        -------
-        torch.Tensor
-            The labels to condition the generative process on.
+        Raises
+        ------
+        ValueError
+            If n_steps is not an integer between 1 and the number of training
+            timesteps.
         """
+        super().__init__(ddpm_model, encoder_model, ionic_strength)
+        check_step_count(n_steps, self.num_timesteps)
+        self.timesteps, self.next_timesteps = ddim_timesteps(self.alphas_cumprod, n_steps, ddim_discretize)
 
-        tokens = torch.tensor(self.tokenizer.encode(labels), device=self.device)
-        tokens = rearrange(tokens, "f -> 1 f")
-        attention_mask = torch.ones_like(tokens, device=self.device, dtype=torch.bool)
-
-        context = self.ddpm_model.sequence2labels(tokens, attention_mask, self.ionic_strength)
-
-        return context, attention_mask
-
-    @torch.no_grad()
-    def sample(
+    def denoising_step(
         self,
-        num_conformations: int,
-        labels: str,
-        repeat_noise: bool = False,
-        temperature: float = 1.0,
-        show_per_step_progress_bar: bool = True,
-        batch_count: int = 1,
-        max_batch_count: int = 1,
-        constraint=None,
+        latents: torch.Tensor,
+        step_index: int,
+        context: torch.Tensor,
+        attention_mask: torch.Tensor,
+        history: list[torch.Tensor],
     ) -> torch.Tensor:
         """
-        Sample the generative process using the DDIM model.
+        Take one PLMS step.
 
         Parameters
         ----------
-        num_conformations : int
-            Number of conformations to generate.
-
-        labels : torch.Tensor
-            The labels to condition the generative process on.
-
-        repeat_noise : bool, optional
-            _description_, by default False
-
-        temperature : float, optional
-            _description_, by default 1.0
-
-        show_per_step_progress_bar : bool, optional
-            whether to show progress bar per step.
-
-        batch_count : int, optional
-            The batch count for the progress bar, by default 1
-
-        max_batch_count : int, optional
-            The maximum batch count for the progress bar, by default 1
+        latents : torch.Tensor
+            Latents at timestep self.timesteps[step_index], shape (batch, 1, 24, 24).
+        step_index : int
+            Which step this is.
+        context : torch.Tensor
+            Sequence context.
+        attention_mask : torch.Tensor
+            Attention mask for the context.
+        history : list of torch.Tensor
+            Noise predicted at the start of earlier steps, oldest first. This
+            step appends its own prediction.
 
         Returns
         -------
         torch.Tensor
-            The generated distance maps.
+            Latents at timestep self.next_timesteps[step_index].
         """
+        timestep = self.timesteps[step_index]
+        alpha_bar = self.alphas_cumprod[timestep]
+        next_alpha_bar = self.alphas_cumprod[self.next_timesteps[step_index]]
+        predicted_noise = self.predict_noise(latents, timestep, context, attention_mask)
 
-        sequence_length = len(labels)
+        if history:
+            combined_noise = pseudo_linear_multistep_noise(predicted_noise, history)
+        else:
+            # pseudo improved Euler: also predict the noise where a plain DDIM
+            # step would land (the next grid timestep), and average the two
+            provisional_latents = ddim_update(latents, predicted_noise, alpha_bar, next_alpha_bar)
+            provisional_timestep = self.timesteps[min(step_index + 1, self.n_steps - 1)]
+            provisional_noise = self.predict_noise(provisional_latents, provisional_timestep, context, attention_mask)
+            combined_noise = (predicted_noise + provisional_noise) / 2
 
-        # Initialize the latents with noise
-        x = torch.randn(
-            [num_conformations, 1, 24, 24],
-            device=self.device,
-        )
+        history.append(predicted_noise)
+        del history[:-MAX_PREVIOUS_PREDICTIONS]
 
-        time_steps = np.flip(self.ddim_time_steps)
-
-        # Get the labels to condition the generative process on
-        context, attention_mask = self.generate_labels(
-            labels,
-        )
-
-        # initialize progress bar if we want to show it
-        if show_per_step_progress_bar:
-            pbar_inner = tqdm(
-                total=len(time_steps),
-                position=1,
-                leave=False,
-                desc=f"PLMS steps (batch {batch_count} of {max_batch_count})",
-            )
-
-        if constraint is not None:
-            constraint_logger = ConstraintLogger(
-                n_steps=self.n_steps,
-                verbose=True,
-            )
-            constraint_logger.setup()
-
-            constraint.initialize(
-                self.encoder_model,
-                self.ddpm_model.latent_space_scaling_factor,
-                self.n_steps,
-                sequence_length,
-            )
-
-        old_eps = []
-
-        # Denoise the initial latent
-        for i, step in enumerate(time_steps):
-            index = len(time_steps) - i - 1
-
-            # Batch the timesteps
-            ts = x.new_full((num_conformations,), step, dtype=torch.long)
-
-            ts_next = torch.full(
-                (num_conformations,),
-                time_steps[min(i + 1, len(time_steps) - 1)],
-                device=self.device,
-                dtype=torch.long,
-            )
-
-            # Sample the generative process
-            outs = self.p_sample_plms(
-                x=x,
-                c=context,
-                t=ts,
-                attention_mask=attention_mask,
-                index=index,
-                old_eps=old_eps,
-                t_next=ts_next,
-                temperature=temperature,
-            )
-
-            x, _, e_t = outs
-            old_eps.append(e_t)
-            if len(old_eps) >= 4:
-                old_eps.pop(0)
-
-            # Apply custom constraint
-            if constraint is not None and step != 0:
-                x = constraint.apply(x, step, logger=constraint_logger)
-
-            # update progress bar if we are showing it
-            if show_per_step_progress_bar:
-                pbar_inner.update(1)
-
-        if constraint is not None:
-            constraint_logger.close()
-
-        # if we have progress bar, close after finishing the steps.
-        if show_per_step_progress_bar:
-            pbar_inner.close()
-
-        # Scale the latents back to the original scale
-        # x = x * self.ddpm_model.latent_space_std + self.ddpm_model.latent_space_mean
-
-        x = x * (1 / self.ddpm_model.latent_space_scaling_factor)
-
-        # Decode the latents to get the distance maps
-        x = self.encoder_model.decode(x)
-
-        return x
-
-    @torch.no_grad()
-    def p_sample_plms(
-        self,
-        x,
-        c,
-        t,
-        attention_mask,
-        index,
-        temperature=1.0,
-        old_eps: list[torch.Tensor] | None = None,
-        t_next=None,
-    ):
-        if old_eps is None:
-            old_eps = []
-        b, *_, device = *x.shape, x.device
-
-        alphas = self.ddim_alphas
-        alphas_prev = self.ddim_alphas_prev
-        sqrt_one_minus_alphas = self.ddim_sqrt_one_minus_alphas
-        sigmas = self.ddim_sigmas
-
-        def get_x_prev_and_pred_x0(e_t, index):
-            # select parameters corresponding to the currently considered timestep
-            a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
-            a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device)
-            sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)
-            sqrt_one_minus_at = torch.full((b, 1, 1, 1), sqrt_one_minus_alphas[index], device=device)
-
-            # current prediction for x_0
-            pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
-            # direction pointing to x_t
-            dir_xt = (1.0 - a_prev - sigma_t**2).sqrt() * e_t
-            noise = sigma_t * torch.randn(x.shape, device=device) * temperature
-
-            x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
-            return x_prev, pred_x0
-
-        e_t = self.ddpm_model.model(x, t, c, attention_mask)
-
-        if len(old_eps) == 0:
-            # Pseudo Improved Euler (2nd order)
-            x_prev, pred_x0 = get_x_prev_and_pred_x0(e_t, index)
-            e_t_next = self.ddpm_model.model(x_prev, t_next, c, attention_mask)
-            e_t_prime = (e_t + e_t_next) / 2
-        elif len(old_eps) == 1:
-            # 2nd order Pseudo Linear Multistep (Adams-Bashforth)
-            e_t_prime = (3 * e_t - old_eps[-1]) / 2
-        elif len(old_eps) == 2:
-            # 3nd order Pseudo Linear Multistep (Adams-Bashforth)
-            e_t_prime = (23 * e_t - 16 * old_eps[-1] + 5 * old_eps[-2]) / 12
-        elif len(old_eps) >= 3:
-            # 4nd order Pseudo Linear Multistep (Adams-Bashforth)
-            e_t_prime = (55 * e_t - 59 * old_eps[-1] + 37 * old_eps[-2] - 9 * old_eps[-3]) / 24
-
-        x_prev, pred_x0 = get_x_prev_and_pred_x0(e_t_prime, index)
-
-        return x_prev, pred_x0, e_t
+        return ddim_update(latents, combined_noise, alpha_bar, next_alpha_bar)

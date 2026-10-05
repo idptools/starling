@@ -12,10 +12,7 @@ from starling import configs
 from starling.data.tokenizer import StarlingTokenizer
 from starling.inference.model_loading import ModelManager
 from starling.minimizer import relax_conformations
-from starling.samplers.ddim_sampler import DDIMSampler
-from starling.samplers.ddpm_sampler import DDPMSampler
-from starling.samplers.dpmpp_sampler import DPMppSampler
-from starling.samplers.plms_sampler import PLMSSampler
+from starling.samplers import SAMPLERS
 from starling.structure.coordinates import (
     _mds_coordinates,
     create_ca_topology_from_coords,
@@ -283,8 +280,7 @@ def _sample_distance_maps(
     Parameters
     ----------
     sampler : object
-        An initialized sampler (``DDIMSampler``, ``PLMSSampler`` or
-        ``DDPMSampler``) exposing a ``.sample()`` method.
+        An initialized sampler (any ``starling.samplers.BaseSampler``).
 
     sequence : str
         The amino acid sequence being sampled.
@@ -312,7 +308,7 @@ def _sample_distance_maps(
     for batch, start in enumerate(range(0, conformations, batch_size), start=1):
         distance_maps = sampler.sample(
             min(batch_size, conformations - start),
-            labels=sequence,
+            sequence=sequence,
             show_per_step_progress_bar=show_per_step_progress_bar,
             batch_count=batch,
             max_batch_count=real_batch_count,
@@ -751,40 +747,17 @@ def generate_backend(
     # function multiple times.
     encoder_model, diffusion = model_manager.get_models(device=device, encoder_path=encoder_path, ddpm_path=ddpm_path)
 
-    # Construct a sampler
-    if sampler.lower() == "plms":
-        print("Using PLMS sampler")
-        sampler = PLMSSampler(
-            ddpm_model=diffusion,
-            encoder_model=encoder_model,
-            n_steps=steps,
-            ionic_strength=ionic_strength,
-        )
-    elif sampler.lower() == "ddim":
-        print("Using DDIM sampler")
-        sampler = DDIMSampler(
-            ddpm_model=diffusion,
-            encoder_model=encoder_model,
-            n_steps=steps,
-            ionic_strength=ionic_strength,
-        )
-    elif sampler.lower() == "ddpm":
-        print("Using DDPM sampler")
-        sampler = DDPMSampler(
-            ddpm_model=diffusion,
-            encoder_model=encoder_model,
-            ionic_strength=ionic_strength,
-        )
-    elif sampler.lower() == "dpmpp":
-        print("Using DPM++ sampler")
-        sampler = DPMppSampler(
-            ddpm_model=diffusion,
-            encoder_model=encoder_model,
-            n_steps=steps,
-            ionic_strength=ionic_strength,
-        )
-    else:
-        raise ValueError(f"Error: sampler must be one of 'plms', 'ddim', 'ddpm', or 'dpmpp'. Got {sampler}.")
+    # Construct a sampler (DDPM ignores steps and always uses every timestep)
+    sampler_class = SAMPLERS.get(sampler.lower())
+    if sampler_class is None:
+        raise ValueError(f"Error: sampler must be one of {', '.join(map(repr, SAMPLERS))}. Got {sampler}.")
+    print(f"Using {sampler_class.name} sampler")
+    sampler = sampler_class(
+        ddpm_model=diffusion,
+        encoder_model=encoder_model,
+        n_steps=steps,
+        ionic_strength=ionic_strength,
+    )
 
     # dictionary to hold distance maps and structures if applicable.
     output_dict = {}

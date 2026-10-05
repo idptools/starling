@@ -34,24 +34,13 @@ import numpy as np
 import torch
 
 from starling.data.schedulers import cosine_beta_schedule
-from starling.samplers.ddim_sampler import DDIMSampler
-from starling.samplers.ddpm_sampler import DDPMSampler
-from starling.samplers.dpmpp_sampler import DPMppSampler
-from starling.samplers.plms_sampler import PLMSSampler
+from starling.samplers import SAMPLERS
 
 # the released checkpoints use 1000 timesteps of the cosine schedule
 N_TIMESTEPS: Final[int] = 1000
 
 # any valid sequence; the exact predictor ignores the conditioning
 SEQUENCE: Final[str] = "MKTAYIAKQRQ"
-
-# the samplers each STARLING sampler name maps to
-SAMPLER_CLASSES: Final[dict[str, type]] = {
-    "ddpm": DDPMSampler,
-    "ddim": DDIMSampler,
-    "plms": PLMSSampler,
-    "dpmpp": DPMppSampler,
-}
 
 
 # the encoder's decoder is the identity, so samplers return latents directly
@@ -137,7 +126,7 @@ def exact_diffusion_model(mixture: GaussianMixture, scaling_factor: float = 1.0)
     """
     A stand-in for STARLING's DiffusionModel whose network is exact.
 
-    Provides every attribute the four samplers read: the cosine schedule and
+    Provides every attribute STARLING's samplers read: the cosine schedule and
     the quantities derived from it, the latent scaling factor, a sequence
     encoder that returns its tokens unchanged, and the noise predictor.
 
@@ -212,8 +201,7 @@ def draw_samples(
         samples of mixture divided by scaling_factor.
     """
     model = exact_diffusion_model(mixture, scaling_factor)
-    cls = SAMPLER_CLASSES[sampler]
-    instance = cls(model, IDENTITY_DECODER) if sampler == "ddpm" else cls(model, IDENTITY_DECODER, steps)
+    instance = SAMPLERS[sampler](model, IDENTITY_DECODER, steps)
 
     torch.manual_seed(seed)
     output = instance.sample(n_conformations, SEQUENCE, show_per_step_progress_bar=False)
