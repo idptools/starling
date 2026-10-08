@@ -2,6 +2,19 @@
 
 This file contains our changelog for STARLING
 
+## October 5th 2026
+
+### Improvements
+
+- **Samplers share one base class** (`starling/samplers/`).
+  DDPM, DDIM, PLMS and DPM++ now derive from `BaseSampler` (`base_sampler.py`), which handles sequence encoding, initial noise, the denoising loop, constraint guidance, progress bars and decoding; each sampler only defines its timesteps and one denoising step. Stateless helpers shared between samplers (input checks, the DDIM/PLMS timestep grid and the DDIM update) live in `sampler_utilities.py`, and each sampler keeps its own file. Every sampler is built the same way, `SAMPLERS[name](ddpm_model, encoder_model, n_steps, ionic_strength)` (DDPM ignores `n_steps`), and `sample()` now takes `sequence` rather than `labels`. With the same seed DDPM, DDIM and DPM++ give the same output as before (DDIM to within float32 rounding of the final latent rescaling). Unused options were removed: DDIM's `repeat_noise` and `temperature`, DDPM's `return_all_timesteps`, PLMS's `schedule`, and `dynamic_thresholding_fn`.
+
+### Bug Fixes
+
+- **PLMS constraints now guide sampling** (`starling/samplers/plms_sampler.py`). PLMS told constraints its own step count (e.g. 30) rather than the 1000 training timesteps that constraints schedule their guidance on, so guidance stayed off until the final step.
+- **PLMS no longer starts from near-zero-signal timesteps.** PLMS now uses DDIM's timestep grid, including its cap at sqrt(alpha_bar) >= 0.01 (timestep 992 for the released model). Step counts whose grid ran past the cap (e.g. 12 or 31, which started at timestep 997) now start at 992 and give different results; PLMS-30 is unchanged. PLMS also no longer draws random numbers that it then multiplied by zero, so with the same seed, batches after the first now start from different noise.
+- **DDPM respects `show_per_step_progress_bar`** and reports its steps the same way as the other samplers.
+
 ## October 4th 2026
 
 ### Bug Fixes

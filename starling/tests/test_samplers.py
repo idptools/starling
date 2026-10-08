@@ -11,6 +11,7 @@ import torch
 from starling.data.schedulers import cosine_beta_schedule, sigmoid_beta_schedule
 from starling.models.diffusion import DiffusionModel
 from starling.models.vae import VAE
+from starling.samplers import SAMPLERS
 from starling.samplers.ddim_sampler import DDIMSampler
 
 
@@ -59,13 +60,19 @@ def test_inference_loader_disables_training_only_random_conditioning(monkeypatch
 
 
 def diffusion():
-    alpha = torch.cumprod(1 - cosine_beta_schedule(1000), dim=0)
+    betas = cosine_beta_schedule(1000)
+    alpha = torch.cumprod(1 - betas, dim=0)
+    alpha_prev = torch.cat([torch.ones(1), alpha[:-1]])
     return cast(
         DiffusionModel,
         SimpleNamespace(
             device=torch.device("cpu"),
             num_timesteps=1000,
             alphas_cumprod=alpha,
+            betas=betas,
+            sqrt_recip_alphas=torch.sqrt(1 / (1 - betas)),
+            sqrt_one_minus_alphas_cumprod=torch.sqrt(1 - alpha),
+            posterior_variance=betas * (1 - alpha_prev) / (1 - alpha),
             latent_space_scaling_factor=2.0,
             sequence2labels=lambda tokens, mask, salt: tokens,
             model=lambda x, t, c, mask: 0.1 * x + t[:, None, None, None] * 0.0001,
@@ -76,30 +83,32 @@ def diffusion():
 def test_ddim_30_preserves_reference_schedule_and_update():
     model = diffusion()
     sampler = DDIMSampler(model, unused_encoder(), 30)
-    timesteps = np.arange(1, 1000, 33)
-    assert np.array_equal(sampler.ddim_time_steps, timesteps)
+    timesteps = np.arange(1, 1000, 33)[::-1]
+    assert np.array_equal(sampler.timesteps, timesteps)
     torch.manual_seed(7)
-    x, eps = torch.randn(2, 1, 3, 3), torch.randn(2, 1, 3, 3)
-    for index in range(len(timesteps)):
-        alpha = model.alphas_cumprod[timesteps[index]]
-        prev = model.alphas_cumprod[timesteps[index - 1] if index else 0]
+    x = torch.randn(2, 1, 3, 3)
+    context, mask = sampler.encode_sequence("AAAA")
+    for index, timestep in enumerate(timesteps):
+        eps = model.model(x, torch.full((2,), timestep), context, mask)
+        alpha = model.alphas_cumprod[timestep]
+        prev = model.alphas_cumprod[timesteps[index + 1] if index + 1 < len(timesteps) else 0]
         clean = (x - (1 - alpha).sqrt() * eps) / alpha.sqrt()
         expected = prev.sqrt() * clean + (1 - prev).sqrt() * eps
-        actual, _ = sampler.get_x_prev_and_pred_x0(eps, index, x, 1.0, False)
+        actual = sampler.denoising_step(x, index, context, mask, [])
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 def test_ddim_preserves_safe_quadratic_schedule_including_repeated_steps():
     sampler = DDIMSampler(diffusion(), unused_encoder(), 100, ddim_discretize="quad")
     legacy = (np.linspace(0, np.sqrt(800), 100) ** 2).astype(int) + 1
-    assert np.array_equal(sampler.ddim_time_steps, legacy)
+    assert np.array_equal(sampler.timesteps, legacy[::-1])
 
 
 @pytest.mark.parametrize("steps", [12, 500, 501, 900, 1000])
 def test_ddim_limits_clean_prediction_amplification(steps):
     sampler = DDIMSampler(diffusion(), unused_encoder(), steps)
-    assert sampler.ddim_alpha_sqrt.min() >= 0.01
-    assert np.all(np.diff(sampler.ddim_time_steps) > 0)
+    assert sampler.alphas_cumprod[sampler.timesteps].sqrt().min() >= 0.01
+    assert np.all(np.diff(sampler.timesteps) < 0)
 
 
 @pytest.mark.parametrize("steps", [0, -1, 1001, 2.5, True])
@@ -119,7 +128,7 @@ def test_dpmpp_matches_independent_scalar_midpoint_reference():
     alpha, sigma = np.sqrt(abar), np.sqrt(1 - abar)
     lam = np.log(alpha / sigma)
     previous = previous_time = None
-    times = sampler.timesteps
+    times = [*sampler.timesteps, sampler.next_timesteps[-1]]
     assert len(times) == 13
     for i, (source, target) in enumerate(zip(times, times[1:])):
         noise = 0.1 * expected + source * 0.0001
@@ -144,10 +153,11 @@ def test_dpmpp_schedule_is_strict_and_finite(steps):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         sampler = DPMppSampler(diffusion(), cast(VAE, SimpleNamespace(decode=lambda x: x)), steps)
-    assert np.all(np.diff(sampler.timesteps) < 0)
-    assert sampler.timesteps[-1] == 1
-    assert torch.isfinite(sampler.lambda_t[sampler.timesteps]).all()
-    assert sampler.lambda_t[sampler.timesteps[0]] >= -5.1
+    times = [*sampler.timesteps, sampler.next_timesteps[-1]]
+    assert np.all(np.diff(times) < 0)
+    assert times[-1] == 1
+    assert torch.isfinite(sampler.lambda_t[times]).all()
+    assert sampler.lambda_t[times[0]] >= -5.1
     assert torch.isfinite(sampler.sample(1, "AAAA", show_per_step_progress_bar=False)).all()
 
 
@@ -257,3 +267,63 @@ def test_public_dpmpp_rejects_constraints_before_loading_models(monkeypatch):
     monkeypatch.setattr(generation.model_manager, "get_models", unexpected_load)
     with pytest.raises(ValueError, match="constraints"):
         generate("AAAA", sampler="dpmpp", constraint=object(), device="cpu")
+
+
+class RecordingConstraint:
+    """Constraint stand-in that records how a sampler drives it and changes nothing."""
+
+    def __init__(self):
+        self.n_steps = None
+        self.timesteps = []
+
+    def initialize(self, encoder_model, latent_space_scaling_factor, n_steps, sequence_length):
+        self.n_steps = n_steps
+
+    def apply(self, latents, timestep, logger=None):
+        self.timesteps.append(timestep)
+        return latents
+
+
+def identity_decoder() -> VAE:
+    return cast(VAE, SimpleNamespace(device=torch.device("cpu"), decode=lambda x: x))
+
+
+@pytest.mark.parametrize("name", sorted(SAMPLERS))
+def test_every_sampler_is_built_and_sampled_the_same_way(name):
+    sampler = SAMPLERS[name](diffusion(), identity_decoder(), 12, 150)
+    torch.manual_seed(0)
+    latents = sampler.sample(3, "AAAA", show_per_step_progress_bar=False)
+    assert latents.shape == (3, 1, 24, 24)
+    assert torch.isfinite(latents).all()
+    with pytest.raises(ValueError, match="num_conformations"):
+        sampler.sample(0, "AAAA")
+
+
+@pytest.mark.parametrize("name", sorted(SAMPLERS))
+def test_each_step_evaluates_the_network_where_it_starts(name):
+    model = diffusion()
+    network = model.model
+    evaluated_at = []
+    model.model = lambda x, t, c, mask: evaluated_at.append(int(t[0])) or network(x, t, c, mask)
+
+    sampler = SAMPLERS[name](model, identity_decoder(), 30)
+    sampler.sample(1, "AAAA", show_per_step_progress_bar=False)
+
+    # PLMS's first step makes one extra evaluation, at the next grid timestep
+    if name == "plms":
+        assert evaluated_at.pop(1) == sampler.timesteps[1]
+    assert evaluated_at == sampler.timesteps
+    assert len(evaluated_at) == sampler.n_steps
+
+
+@pytest.mark.parametrize("name", ["ddim", "ddpm", "plms"])
+def test_constraints_are_scheduled_on_training_timesteps(name):
+    # Constraints weight their guidance by timestep / n_steps, so every sampler
+    # must tell them the number of training timesteps, not its own step count
+    # (PLMS used to pass its step count, which switched guidance off until the
+    # last step).
+    sampler = SAMPLERS[name](diffusion(), identity_decoder(), 30)
+    constraint = RecordingConstraint()
+    sampler.sample(1, "AAAA", show_per_step_progress_bar=False, constraint=constraint)
+    assert constraint.n_steps == 1000
+    assert constraint.timesteps == [t for t in sampler.timesteps if t != 0]

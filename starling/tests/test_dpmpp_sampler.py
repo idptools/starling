@@ -68,13 +68,13 @@ def test_timesteps_decrease_to_one_and_each_is_evaluated_once():
     sampler = make_sampler(stub, 12)
 
     assert sampler.n_steps == 12
-    assert len(sampler.timesteps) == 13
-    assert sampler.timesteps[-1] == 1
+    assert len(sampler.timesteps) == 12
+    assert sampler.next_timesteps == [*sampler.timesteps[1:], 1]
     assert all(a > b for a, b in zip(sampler.timesteps, sampler.timesteps[1:]))
 
     sampler.sample(3, SEQ, show_per_step_progress_bar=False)
-    # one network evaluation per step, at every timestep except the last
-    assert stub.called_at == sampler.timesteps[:-1]
+    # one network evaluation per step, at the timestep each step starts from
+    assert stub.called_at == sampler.timesteps
 
 
 def test_output_shape_and_reproducibility():
@@ -101,7 +101,7 @@ def test_solves_the_probability_flow_ode_exactly_for_point_data():
     # replay the sampler's initial noise and evaluate the closed-form solution
     torch.manual_seed(2)
     x_start = torch.randn(5, *LATENT_SHAPE)
-    start, end = sampler.timesteps[0], sampler.timesteps[-1]
+    start, end = sampler.timesteps[0], sampler.next_timesteps[-1]
     alpha_start, sigma_start = sampler.alpha[start], sampler.sigma[start]
     alpha_end, sigma_end = sampler.alpha[end], sampler.sigma[end]
     eps = (x_start - alpha_start * x0) / sigma_start
