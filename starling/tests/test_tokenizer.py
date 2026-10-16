@@ -66,3 +66,24 @@ def test_tokenizer_lowercase_raises():
 def test_tokenizer_all_zero_decodes_empty():
     tok = StarlingTokenizer()
     assert tok.decode([0, 0, 0]) == ""
+
+
+def test_tokenizer_rejects_padding_character():
+    """'0' is the padding token, not a residue; encode used to turn 'A0C' into [1, 0, 2]."""
+    tok = StarlingTokenizer()
+    with pytest.raises(KeyError, match="'0' at position 1"):
+        tok.encode("A0C")
+
+
+def test_tokenizer_non_ascii_raises_key_error():
+    """Non-ASCII characters raise the same KeyError as other unknown characters (not UnicodeEncodeError)."""
+    tok = StarlingTokenizer()
+    with pytest.raises(KeyError, match="'Å' at position 2"):
+        tok.encode("ACÅD")
+
+
+def test_tokenizer_decode_still_drops_padding_after_encode_rejects_it():
+    """Rejecting '0' in encode does not change how decode treats padding tokens."""
+    tok = StarlingTokenizer()
+    assert tok.int_to_aa[0] == "0"
+    assert tok.decode([1, 0, 2]) == "AC"

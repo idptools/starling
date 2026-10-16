@@ -16,6 +16,7 @@ starling.inference.model\_loading.ModelManager
       :nosignatures:
    
       ~ModelManager.__init__
+      ~ModelManager.clear
       ~ModelManager.compile
       ~ModelManager.get_models
       ~ModelManager.load_models

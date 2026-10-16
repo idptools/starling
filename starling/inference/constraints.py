@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from abc import ABC
 from typing import TYPE_CHECKING, Tuple
 
@@ -8,14 +9,42 @@ import torch
 from einops import rearrange, reduce
 from tqdm.auto import tqdm
 
-from starling.utilities import helix_dm
+from starling import configs
+from starling.utilities import deterministic_cudnn, helix_dm
 from starling.utilities import symmetrize_tensor_distance_maps as symmetrize_distance_maps
 
 if TYPE_CHECKING:
     from starling.models.vae import VAE
 
+# Batch size the existing constraint_weight values were tuned at (the default
+# generate() batch size, configs.DEFAULT_BATCH_SIZE, at the time). Guidance used
+# to differentiate the batch-mean loss, so each conformer's update scaled as
+# 1 / batch_size. Each conformer now gets the gradient of its own loss divided by
+# this constant, which leaves guidance at this batch size unchanged and makes it
+# independent of batch size.
+REFERENCE_BATCH_SIZE = 100
+
+# Accepted values for a constraint's time-dependent guidance schedule; None
+# keeps a constant weight of 1.0 throughout sampling
+VALID_SCHEDULES = ("cosine", "bell_shaped", "linear", None)
+
 
 class Constraint(ABC):
+    """
+    Base class for constraints that guide sampling towards a target.
+
+    At each guided diffusion step the current latents are decoded into
+    distance maps, the constraint's loss is evaluated for every conformer,
+    and the latents are nudged down the gradient of that loss. Each conformer
+    is moved by the gradient of its own loss, divided by
+    ``REFERENCE_BATCH_SIZE`` (100), so the guidance a conformer receives does
+    not depend on how many conformers are sampled alongside it. Before this
+    the gradient of the batch-mean loss was used, which made guidance scale
+    as 1 / batch_size; dividing by ``REFERENCE_BATCH_SIZE`` keeps existing
+    ``constraint_weight`` values (tuned at the default batch size of 100)
+    meaning what they did at that batch size.
+    """
+
     def __init__(
         self,
         constraint_weight=1.0,
@@ -29,16 +58,29 @@ class Constraint(ABC):
         Parameters
         ----------
         constraint_weight : float, default=1.0
-            Weight factor for the constraint
-        schedule : str, default="cosine"
-            Scheduling function for time-dependent guidance strength
+            Weight factor for the constraint. Guidance does not depend on
+            batch size (see the class docstring).
+        schedule : {"cosine", "bell_shaped", "linear"} or None, default="cosine"
+            Scheduling function for time-dependent guidance strength.
+            ``"cosine"`` fades guidance in smoothly from zero at the start of
+            sampling to full strength at the end; ``"bell_shaped"`` peaks
+            about 43% of the way through sampling; ``"linear"`` ramps
+            linearly from zero at the start to full strength at the end; and
+            None keeps a constant weight of 1.0 throughout.
         verbose : bool, default=True
             Whether to print debug information
         guidance_start : float, default=0.0
             Normalized timestep to start applying guidance (0.0 = beginning)
         guidance_end : float, default=1.0
             Normalized timestep to stop applying guidance (1.0 = end)
+
+        Raises
+        ------
+        ValueError
+            If ``schedule`` is not one of the accepted values.
         """
+        if schedule not in VALID_SCHEDULES:
+            raise ValueError(f"schedule must be one of {VALID_SCHEDULES}; got {schedule!r}")
 
         # These will be set by the sampler
         self.encoder_model: VAE | None = None
@@ -99,9 +141,12 @@ class Constraint(ABC):
         reverse = 1 - t_frac
         return self.guidance_start <= reverse <= self.guidance_end
 
-    def cosine_weight(self, t, total_steps, s=0.008):
+    def cosine_weight(self, t, total_steps):
         """
         Cosine schedule for time-dependent guidance strength.
+
+        The weight is cos^2(pi t / (2 T)), which is 0 at the start of sampling
+        (t = T) and rises smoothly to 1 at the end (t = 0).
 
         Parameters
         ----------
@@ -109,8 +154,6 @@ class Constraint(ABC):
             Current timestep.
         total_steps : int
             Total number of steps.
-        s : float, optional
-            Smoothing parameter (default: 0.008).
 
         Returns
         -------
@@ -124,7 +167,8 @@ class Constraint(ABC):
         """Bell-shaped schedule for time-dependent guidance strength.
 
         Creates a schedule that gradually increases guidance strength,
-        peaks at 60% through the sampling process, and then decreases again.
+        peaks at timestep t/T ~ 0.57 (about 43% of the way through sampling,
+        which runs from t = T down to 0), and then decreases again.
 
         Parameters
         ----------
@@ -134,10 +178,12 @@ class Constraint(ABC):
         Returns
         -------
         float
-            Guidance strength factor (peaks in the middle of sampling)
+            Guidance strength factor (peaks a little before the middle of
+            sampling)
         """
         normalized_t = timestep / self._require_n_steps()
-        # Peak at 60% through the sampling process
+        # The Gaussian factor is centred on t/T = 0.6, but multiplying by the
+        # sine pulls the peak to t/T ~ 0.57, i.e. ~43% of the way through sampling
         return math.sin(normalized_t * math.pi) * math.exp(-((normalized_t - 0.6) ** 2) / 0.1)
 
     def get_adaptive_clip_threshold(self, timestep):
@@ -199,18 +245,7 @@ class Constraint(ABC):
             return latents
 
         with torch.inference_mode(False):
-            latents_copy = latents.clone().requires_grad_(True)
-            scaled_latents = latents_copy / self.latent_space_scaling_factor
-            distance_maps = self.encoder_model.decode(scaled_latents)
-            distance_maps = symmetrize_distance_maps(distance_maps)
-
-            # Get per-sample losses and total loss
-            per_batch_loss, loss = self._loss_for_guidance(
-                distance_maps, timestep, n_steps
-            )
-
-            # Compute gradients
-            base_grad = torch.autograd.grad(loss, latents_copy)[0]
+            per_batch_loss, base_grad = self._per_conformer_loss_and_gradient(latents, timestep, n_steps)
 
             # Get time-dependent scaling
             time_scale = self.get_time_scale(timestep)
@@ -252,7 +287,7 @@ class Constraint(ABC):
                     timestep,
                     self.__class__.__name__,
                     {
-                        "loss": loss.item(),
+                        "loss": mean_loss.item(),
                         "grad_norm": update.norm().item(),
                         # "update_norm": update_norm,
                         "time_scale": time_scale,
@@ -264,15 +299,88 @@ class Constraint(ABC):
 
             return latents + update.detach()
 
+    @deterministic_cudnn()
+    def _per_conformer_loss_and_gradient(
+        self, latents: torch.Tensor, timestep: int, n_steps: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Evaluate every conformer's loss and its gradient, a few conformers at a time.
+
+        Backpropagating through the VAE decoder needs about 320 MB of GPU
+        memory per conformer, so a whole sampling batch is done
+        configs.VAE_DECODE_CHUNK_SIZE conformers at a time. Each
+        conformer's loss depends only on its own distance map, so this does
+        not change what is computed. cuDNN runs deterministically here (see
+        starling.utilities.deterministic_cudnn), so identically seeded runs
+        give identical guidance. Must be called with autograd enabled.
+
+        Parameters
+        ----------
+        latents : torch.Tensor
+            Latents in the diffusion model's scaled space, shape
+            (batch, 1, 24, 24).
+        timestep : int
+            Current diffusion timestep.
+        n_steps : int
+            Total number of diffusion timesteps.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
+            Each conformer's loss, shape (batch,), and the gradient of that
+            loss with respect to its latents divided by REFERENCE_BATCH_SIZE,
+            same shape as latents.
+        """
+        assert self.encoder_model is not None and self.latent_space_scaling_factor is not None
+
+        losses = []
+        gradients = []
+        for chunk in torch.split(latents, configs.VAE_DECODE_CHUNK_SIZE):
+            chunk_copy = chunk.clone().requires_grad_(True)
+            distance_maps = self.encoder_model.decode(chunk_copy / self.latent_space_scaling_factor)
+            distance_maps = symmetrize_distance_maps(distance_maps)
+            chunk_loss, _ = self._loss_for_guidance(distance_maps, timestep, n_steps)
+
+            # Differentiating the summed loss gives every conformer the gradient
+            # of its own loss, whatever the batch size; see REFERENCE_BATCH_SIZE
+            # for why it is then divided by that constant. The division also
+            # makes a new tensor, so nothing here aliases a CUDA-graph buffer
+            # that the next chunk's call would overwrite.
+            gradients.append(torch.autograd.grad(chunk_loss.sum(), chunk_copy)[0] / REFERENCE_BATCH_SIZE)
+            losses.append(chunk_loss.detach())
+
+        return torch.cat(losses), torch.cat(gradients)
+
     def get_time_scale(self, timestep: int) -> float:
-        """Get the time-dependent scaling factor."""
+        """
+        Get the time-dependent scaling factor.
+
+        Parameters
+        ----------
+        timestep : int
+            Current diffusion timestep.
+
+        Returns
+        -------
+        float
+            Guidance weight for this timestep under ``self.schedule``
+            (1.0 throughout when the schedule is None).
+
+        Raises
+        ------
+        ValueError
+            If ``self.schedule`` has been set to an unknown value.
+        """
         n_steps = self._require_n_steps()
+        if self.schedule is None:
+            return 1.0
         if self.schedule == "cosine":
             return self.cosine_weight(timestep, total_steps=n_steps)
         elif self.schedule == "bell_shaped":
             return self.bell_shaped_schedule(timestep)
-        else:
+        elif self.schedule == "linear":
             return 1.0 - (timestep / n_steps)
+        raise ValueError(f"schedule must be one of {VALID_SCHEDULES}; got {self.schedule!r}")
 
 
 class BondConstraint(Constraint):
@@ -285,8 +393,10 @@ class BondConstraint(Constraint):
     def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Compute bond loss based on distance maps.
-        This loss penalizes deviations from the ideal bond length of 3.81 Å
-        and applies a flat-bottom potential for deviations beyond 1.0 Å.
+        This loss penalizes deviations from the ideal bond length
+        (``bond_length``, 3.81 Å by default) with a harmonic potential. Only
+        deviations beyond ``tolerance`` are penalized (a flat bottom); the
+        default tolerance of 0.0 Å means there is no flat bottom.
 
         Parameters
         ----------
@@ -335,8 +445,9 @@ class StericClashConstraint(Constraint):
 
         Returns
         -------
-        torch.Tensor
-            Per-batch loss and mean loss
+        Tuple[torch.Tensor, torch.Tensor]
+            Per-batch loss and mean loss. Both are zero for sequences of two
+            or fewer residues, which have no residue pairs to check.
         """
         mask = torch.triu(
             torch.ones(self.sequence_length, self.sequence_length, device=distance_maps.device),
@@ -357,6 +468,13 @@ class StericClashConstraint(Constraint):
         # Sum across all residue pairs and normalize
         steric_clash = reduce(steric_clash, "b c h w -> b", "sum")
         normalization_factor = mask.sum()
+
+        # with two or fewer residues no pair is |i - j| >= 2 apart, so the
+        # (all-zero) loss must not be divided by a pair count of zero, which
+        # would turn the guided latents into NaN
+        if normalization_factor == 0:
+            return steric_clash, steric_clash.mean()
+
         per_batch_loss = steric_clash / normalization_factor
 
         return per_batch_loss, per_batch_loss.mean()
@@ -364,6 +482,27 @@ class StericClashConstraint(Constraint):
 
 class HelicityConstraint(Constraint):
     def __init__(self, resid_start, resid_end, tolerance=0.0, force_constant=2.0, **kwargs):
+        """Create constraint pushing a region towards ideal helical distances.
+
+        Parameters
+        ----------
+        resid_start : int
+            Index of the first residue in the helical region. Indices are
+            0-based (the first residue is 0).
+        resid_end : int
+            Index one past the last residue in the helical region (the region
+            is ``resid_start`` to ``resid_end - 1`` inclusive, like a Python
+            slice). The region must lie within the sequence and contain at
+            least two residues; this is checked when the sampler initializes
+            the constraint.
+        tolerance : float, default=0.0
+            Allowed deviation (Angstroms) from the helical distance before a
+            penalty applies.
+        force_constant : float, default=2.0
+            Force constant for the harmonic potential.
+        **kwargs
+            Additional parameters passed to parent Constraint class
+        """
         super().__init__(**kwargs)
 
         self.resid_start = resid_start
@@ -377,7 +516,15 @@ class HelicityConstraint(Constraint):
         self.weights = None
 
     def _setup_constraint(self):
-        """Set up device-specific tensors."""
+        """Check the helical region fits the sequence, then set up device-specific tensors."""
+        # a region needs at least two residues to contain a pair; with fewer the
+        # mask is empty and the loss would divide by zero
+        if self.resid_start < 0 or self.resid_end > self.sequence_length or self.resid_end - self.resid_start < 2:
+            raise ValueError(
+                f"HelicityConstraint region resid_start={self.resid_start}, resid_end={self.resid_end} does not fit "
+                f"a sequence of {self.sequence_length} residues. Indices are 0-based and resid_end is exclusive, so "
+                f"0 <= resid_start, resid_end <= {self.sequence_length} and resid_end - resid_start >= 2 are required."
+            )
         if self.encoder_model is None:
             return
         if self.device is None:
@@ -416,13 +563,38 @@ class HelicityConstraint(Constraint):
 
 class DistanceConstraint(Constraint):
     def __init__(self, resid1, resid2, target, tolerance=0.0, force_constant=2.0, **kwargs):
-        """Create constraint for distance between two residues."""
+        """Create constraint for distance between two residues.
+
+        Parameters
+        ----------
+        resid1, resid2 : int
+            Indices of the two residues. Indices are 0-based (the first
+            residue is 0) and must lie within the sequence; this is checked
+            when the sampler initializes the constraint.
+        target : float
+            Target distance between the two residues in Angstroms.
+        tolerance : float, default=0.0
+            Allowed deviation from target (Angstroms) before penalty applies.
+        force_constant : float, default=2.0
+            Force constant for the harmonic potential.
+        **kwargs
+            Additional parameters passed to parent Constraint class
+        """
         super().__init__(**kwargs)
         self.resid1 = resid1
         self.resid2 = resid2
         self.target = target
         self.tolerance = tolerance
         self.force_constant = force_constant
+
+    def _setup_constraint(self):
+        """Check both residue indices lie within the sequence being sampled."""
+        for resid in (self.resid1, self.resid2):
+            if not 0 <= resid < self.sequence_length:
+                raise ValueError(
+                    f"DistanceConstraint residue index {resid} is outside a sequence of {self.sequence_length} "
+                    f"residues. Indices are 0-based, so they must lie between 0 and {self.sequence_length - 1}."
+                )
 
     def compute_loss(self, distance_maps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # Extract distances between specified residues
@@ -546,20 +718,35 @@ class MultiConstraint(Constraint):
         verbose=True,
     ):
         """
+        Combine constraints so their losses are applied as one guidance step.
+
+        Each sub-constraint's loss is weighted by its own
+        ``constraint_weight`` and only counts at timesteps inside its own
+        ``guidance_start``/``guidance_end`` window. The time-dependent
+        schedule and verbosity come from this MultiConstraint; the
+        sub-constraints' own ``schedule`` and ``verbose`` settings are
+        ignored (with a warning if any schedule differs from this one's).
+
         Parameters
         ----------
         constraints : list
             List of constraint objects to combine
-        constraint_weights : list, optional
-            Relative weights for each constraint (defaults to equal weights)
-        guidance_scale : float
-            Overall guidance scale for the combined constraint
-        schedule : str
-            Time schedule for constraint application ("cosine" or "linear")
+        schedule : {"cosine", "bell_shaped", "linear"} or None, default="cosine"
+            Time schedule applied to the combined guidance (see
+            :class:`Constraint`).
         verbose : bool
             Whether to print debug info
         """
         super().__init__(schedule=schedule, verbose=verbose)
+
+        ignored_schedules = [type(constraint).__name__ for constraint in constraints if constraint.schedule != schedule]
+        if ignored_schedules:
+            warnings.warn(
+                f"MultiConstraint applies its own schedule ({schedule!r}); the different schedules set on "
+                f"{', '.join(ignored_schedules)} are ignored.",
+                stacklevel=2,
+            )
+
         self.constraints = constraints
         self.constraint_weights = [constraint.constraint_weight for constraint in constraints]
 

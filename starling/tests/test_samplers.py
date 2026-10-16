@@ -11,8 +11,10 @@ import torch
 from starling.data.schedulers import cosine_beta_schedule, sigmoid_beta_schedule
 from starling.models.diffusion import DiffusionModel
 from starling.models.vae import VAE
-from starling.samplers import SAMPLERS
-from starling.samplers.ddim_sampler import DDIMSampler
+from starling.samplers import SAMPLERS, base_sampler
+from starling.samplers.ddim_sampler import DDIM_FEW_STEPS_WARNING, DDIMSampler
+from starling.samplers.plms_sampler import PLMS_MIN_STEPS, PLMSSampler
+from starling.samplers.sampler_utilities import MAX_START_SIGNAL_SCALE, MINIMUM_SIGNAL_SCALE
 
 
 def test_default_sigmoid_schedule_is_finite_and_invalid_interval_is_rejected():
@@ -98,10 +100,80 @@ def test_ddim_30_preserves_reference_schedule_and_update():
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
+def noisiest_safe_timestep(model) -> int:
+    """
+    The noisiest timestep DDIM and PLMS may start from.
+
+    Parameters
+    ----------
+    model : DiffusionModel
+        Diffusion model (or stand-in) with an alphas_cumprod schedule.
+
+    Returns
+    -------
+    int
+        The last timestep with sqrt(alpha_bar) >= MINIMUM_SIGNAL_SCALE.
+    """
+    return int(torch.nonzero(model.alphas_cumprod.sqrt() >= MINIMUM_SIGNAL_SCALE).flatten()[-1])
+
+
 def test_ddim_preserves_safe_quadratic_schedule_including_repeated_steps():
-    sampler = DDIMSampler(diffusion(), unused_encoder(), 100, ddim_discretize="quad")
-    legacy = (np.linspace(0, np.sqrt(800), 100) ** 2).astype(int) + 1
-    assert np.array_equal(sampler.timesteps, legacy[::-1])
+    # The legacy quadratic grid tops out at timestep 801, where the latents
+    # still hold 30% signal, so it is stretched to run quadratically from
+    # timestep 1 to the noisiest safe timestep (992), keeping its 100 steps and
+    # its repeated steps at the low end
+    model = diffusion()
+    sampler = DDIMSampler(model, unused_encoder(), 100, ddim_discretize="quad")
+    assert noisiest_safe_timestep(model) == 992
+    stretched = np.rint(np.linspace(np.sqrt(992 - 1), 0, 100) ** 2 + 1).astype(int)
+    assert np.array_equal(sampler.timesteps, stretched)
+    assert sampler.timesteps[0] == 992 and sampler.timesteps[-1] == 1
+    assert len(sampler.timesteps) == 100
+    assert len(set(sampler.timesteps)) < 100
+
+
+@pytest.mark.filterwarnings("ignore:DDIM with .* steps narrows the ensemble")
+@pytest.mark.parametrize("steps", [1, 2, 5, 10, 20, 50])
+def test_few_step_uniform_grid_is_stretched_to_start_in_pure_noise(steps):
+    """Few-step grids used to start far below the noise level of the initial latents (10 steps: timestep 901)."""
+    model = diffusion()
+    sampler = DDIMSampler(model, unused_encoder(), steps)
+    legacy = np.arange(0, 999, 1000 // steps) + 1
+
+    # same number of steps, evenly spaced from the noisiest safe timestep down
+    # to timestep 1 (a single step is just the noisiest safe timestep)
+    stretched = np.rint(np.linspace(noisiest_safe_timestep(model), 1, len(legacy))).astype(int)
+    assert np.array_equal(sampler.timesteps, stretched)
+    assert sampler.next_timesteps == [*sampler.timesteps[1:], 0]
+
+
+@pytest.mark.parametrize("sampler_class", [DDIMSampler, PLMSSampler])
+def test_30_step_grid_is_not_stretched(sampler_class):
+    """The default 30-step grid already starts in pure noise (sqrt(alpha_bar) ~ 0.012), so it is not stretched."""
+    sampler = sampler_class(diffusion(), unused_encoder(), 30)
+    assert np.array_equal(sampler.timesteps, np.arange(1, 1000, 33)[::-1])
+    assert sampler.next_timesteps == [*sampler.timesteps[1:], 0]
+
+
+@pytest.mark.filterwarnings("ignore:DDIM with .* steps narrows the ensemble")
+@pytest.mark.parametrize("discretization", ["uniform", "quad"])
+@pytest.mark.parametrize(
+    ("sampler_class", "steps"),
+    [
+        (sampler_class, steps)
+        for sampler_class in (DDIMSampler, PLMSSampler)
+        for steps in (1, 2, 3, 5, 10, 20, 29, 30, 31, 50, 100, 200, 500, 1000)
+        # PLMS refuses fewer than PLMS_MIN_STEPS steps
+        if sampler_class is DDIMSampler or steps >= PLMS_MIN_STEPS
+    ],
+)
+def test_every_ddim_grid_starts_in_pure_noise(sampler_class, steps, discretization):
+    """Whatever the step count and spacing, the first step starts where the latents hold almost no signal."""
+    sampler = sampler_class(diffusion(), unused_encoder(), steps, ddim_discretize=discretization)
+    signal = sampler.alphas_cumprod[sampler.timesteps].sqrt()
+    assert signal[0] <= MAX_START_SIGNAL_SCALE
+    assert signal.min() >= MINIMUM_SIGNAL_SCALE
+    assert np.all(np.diff(sampler.timesteps) <= 0)
 
 
 @pytest.mark.parametrize("steps", [12, 500, 501, 900, 1000])
@@ -290,7 +362,7 @@ def identity_decoder() -> VAE:
 
 @pytest.mark.parametrize("name", sorted(SAMPLERS))
 def test_every_sampler_is_built_and_sampled_the_same_way(name):
-    sampler = SAMPLERS[name](diffusion(), identity_decoder(), 12, 150)
+    sampler = SAMPLERS[name](diffusion(), identity_decoder(), 30, 150)
     torch.manual_seed(0)
     latents = sampler.sample(3, "AAAA", show_per_step_progress_bar=False)
     assert latents.shape == (3, 1, 24, 24)
@@ -327,3 +399,89 @@ def test_constraints_are_scheduled_on_training_timesteps(name):
     sampler.sample(1, "AAAA", show_per_step_progress_bar=False, constraint=constraint)
     assert constraint.n_steps == 1000
     assert constraint.timesteps == [t for t in sampler.timesteps if t != 0]
+
+
+class RecordingProgressBar:
+    """tqdm stand-in that records the progress bars a sampler opens."""
+
+    opened: list[dict] = []
+
+    def __init__(self, *args, **kwargs):
+        RecordingProgressBar.opened.append(kwargs)
+
+    def update(self, n=1):
+        pass
+
+    def set_postfix_str(self, text):
+        pass
+
+    def refresh(self):
+        pass
+
+    def close(self):
+        pass
+
+
+@pytest.mark.parametrize(
+    ("show_per_step_progress_bar", "constraint_verbose", "expected_bars"),
+    [
+        (True, True, [("Applying constraints", 1), ("DDIM steps", 2)]),
+        (True, False, [("DDIM steps", 1)]),
+        (False, True, []),
+    ],
+)
+def test_constraint_progress_bar_follows_verbosity_and_has_its_own_row(
+    monkeypatch, show_per_step_progress_bar, constraint_verbose, expected_bars
+):
+    """The constraint bar used to be shown always, on the same row as the per-step bar."""
+    from starling.inference import constraints
+    from starling.inference.constraints import RgConstraint
+
+    RecordingProgressBar.opened = []
+    monkeypatch.setattr(constraints, "tqdm", RecordingProgressBar)
+    monkeypatch.setattr(base_sampler, "tqdm", RecordingProgressBar)
+
+    sampler = DDIMSampler(diffusion(), identity_decoder(), 12)
+    constraint = RgConstraint(target=0.0, verbose=constraint_verbose)
+    sampler.sample(1, "AAAA", constraint=constraint, show_per_step_progress_bar=show_per_step_progress_bar)
+
+    # the per-step bar is always made, but disabled when progress bars are off
+    shown = [bar for bar in RecordingProgressBar.opened if not bar.get("disable", False)]
+    assert [(bar["desc"].split(" (")[0], bar["position"]) for bar in shown] == expected_bars
+
+
+@pytest.mark.parametrize("steps", [1, 10, PLMS_MIN_STEPS - 1])
+def test_plms_rejects_too_few_steps(steps):
+    # PLMS's multistep combination blows up the spread with few large steps
+    with pytest.raises(ValueError, match=f"at least {PLMS_MIN_STEPS} steps"):
+        PLMSSampler(diffusion(), unused_encoder(), steps)
+
+
+def test_plms_accepts_the_minimum_number_of_steps():
+    sampler = PLMSSampler(diffusion(), unused_encoder(), PLMS_MIN_STEPS)
+    assert sampler.n_steps >= PLMS_MIN_STEPS
+
+
+@pytest.mark.parametrize("steps", [1, DDIM_FEW_STEPS_WARNING - 1])
+def test_ddim_warns_with_few_steps(steps):
+    with pytest.warns(UserWarning, match="narrows the ensemble"):
+        DDIMSampler(diffusion(), unused_encoder(), steps)
+
+
+def test_ddim_does_not_warn_from_the_threshold_up():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        DDIMSampler(diffusion(), unused_encoder(), DDIM_FEW_STEPS_WARNING)
+        DDIMSampler(diffusion(), unused_encoder(), 30)
+
+
+def test_public_plms_rejects_too_few_steps_before_loading_models(monkeypatch):
+    from starling import generate
+    from starling.inference import generation
+
+    def unexpected_load(**kwargs):
+        pytest.fail("models were loaded before the step count was checked")
+
+    monkeypatch.setattr(generation.model_manager, "get_models", unexpected_load)
+    with pytest.raises(ValueError, match=f"at least {PLMS_MIN_STEPS} steps"):
+        generate("AAAA", sampler="plms", steps=PLMS_MIN_STEPS - 1, device="cpu")

@@ -222,9 +222,9 @@ class TestHandleInput:
         with pytest.raises(ValueError, match="Invalid input type"):
             handle_input(12345)
 
-    def test_invalid_type_tuple_raises(self):
-        with pytest.raises(ValueError, match="Invalid input type"):
-            handle_input(("ACDE",))
+    def test_tuple_of_sequences(self):
+        # tuples are accepted like lists
+        assert handle_input(("ACDE", "FGHI")) == {"sequence_1": "ACDE", "sequence_2": "FGHI"}
 
 
 # ===========================================================================
@@ -246,7 +246,7 @@ def test_cli_compile_forces_requires_and_forwards_relaxation(monkeypatch, tmp_pa
     if structures:
         cli.main()
         assert seen["compile_forces"] is True
-        assert seen["relax"] is True
+        assert seen["relax"] == "standard"
         assert seen["return_structures"] is True
     else:
         with pytest.raises(SystemExit) as error:
@@ -258,9 +258,11 @@ def test_cli_compile_forces_requires_and_forwards_relaxation(monkeypatch, tmp_pa
 class TestGenerateValidation:
     """Test parameter validation without actually running the model."""
 
-    @pytest.mark.parametrize("structures,relax", [(False, True), (True, False)])
+    @pytest.mark.parametrize("structures,relax", [(False, True), (False, "standard"), (False, "fast"), (True, False)])
     def test_compile_forces_requires_relaxed_structures(self, structures, relax):
-        with pytest.raises(ValueError, match="requires relax=True and return_structures=True"):
+        with pytest.raises(
+            ValueError, match=r"requires relaxation \(relax='standard' or 'fast'\) and return_structures"
+        ):
             generate(SHORT_SEQ, compile_forces=True, return_structures=structures, relax=relax)
 
     def test_compile_forces_rejects_cpu(self):
@@ -515,7 +517,7 @@ class TestEnsembleProperties:
         ensemble = Ensemble((spacing * separations)[None], "ACDEFGHIKLMNPQRSTVWY")
         rg = spacing * np.sqrt((n**2 - 1) / 12)
         nygaard = rg / (0.216 * (rg - 4.06 * n**0.33) / (n**0.60 - n**0.33) + 0.821)
-        kirkwood = (n * (n - 1) / 2) / sum((n - s) / (spacing * s) for s in range(1, n))
+        kirkwood = n**2 / (2 * sum((n - s) / (spacing * s) for s in range(1, n)))
         for mode, expected in [("nygaard", nygaard), ("kr", kirkwood), ("nygaard", nygaard)]:
             np.testing.assert_allclose(ensemble.hydrodynamic_radius(mode=mode), [expected])
             assert ensemble.hydrodynamic_radius(mode=mode, return_mean=True) == pytest.approx(expected)
@@ -744,9 +746,9 @@ class TestConstraintBase:
         assert abs(ts - 1.0) < 0.01
 
     def test_get_time_scale_linear(self):
-        c = BondConstraint(schedule="linear_fallback")
+        c = BondConstraint(schedule="linear")
         c.n_steps = 100
-        # Fallback to linear: 1.0 - (t / n_steps)
+        # linear: 1.0 - (t / n_steps)
         ts = c.get_time_scale(50)
         assert abs(ts - 0.5) < 0.01
 

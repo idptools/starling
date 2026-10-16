@@ -8,6 +8,10 @@ Usage:
 Outputs:
   Per FASTA: <basename>.tokens.pt  (list[ {header, sequence, tokenized} ])
   Combined:  <prefix>.pt with { files: [...], entries: [...] }
+
+FASTA files are given either positionally or via --sequences, not both. In
+per-FASTA mode, two inputs with the same basename (e.g. a/shard.fasta and
+b/shard.fasta) would write the same <basename>.tokens.pt, so this is an error.
 """
 
 from __future__ import annotations
@@ -63,6 +67,11 @@ def _process_single(path: str) -> List[dict]:
 
 
 def _gather_paths(args) -> List[str]:
+    if args.sequences and args.fastas:
+        raise SystemExit(
+            "Give FASTA files either positionally or via --sequences, not both "
+            f"(got {len(args.fastas)} positional FASTA file(s) and --sequences {args.sequences})."
+        )
     if args.sequences:
         with open(args.sequences) as f:
             paths = [ln.strip() for ln in f if ln.strip()]
@@ -73,10 +82,58 @@ def _gather_paths(args) -> List[str]:
     return paths
 
 
+def _tokens_output_name(path: str) -> str:
+    """
+    Return the per-FASTA output file name for an input FASTA path.
+
+    Parameters
+    ----------
+    path : str
+        Path to an input FASTA file.
+
+    Returns
+    -------
+    str
+        ``<basename without extension>.tokens.pt``.
+    """
+    base = os.path.splitext(os.path.basename(path))[0]
+    return f"{base}.tokens.pt"
+
+
+def _check_unique_output_names(paths: List[str]) -> None:
+    """
+    Fail if two inputs would write the same per-FASTA tokens file.
+
+    Parameters
+    ----------
+    paths : list of str
+        Input FASTA paths.
+
+    Raises
+    ------
+    SystemExit
+        If any output name is shared by more than one input, listing the
+        clashing inputs.
+    """
+    inputs_by_name: dict[str, List[str]] = {}
+    for pth in paths:
+        inputs_by_name.setdefault(_tokens_output_name(pth), []).append(pth)
+
+    clashes = {name: ps for name, ps in inputs_by_name.items() if len(ps) > 1}
+    if clashes:
+        details = "; ".join(f"{name} <- {ps}" for name, ps in sorted(clashes.items()))
+        raise SystemExit(
+            "Several inputs would write the same output file (rename them or use --combined): "
+            f"{details}"
+        )
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     os.makedirs(args.output, exist_ok=True)
     paths = _gather_paths(args)
+    if not args.combined:
+        _check_unique_output_names(paths)
     missing = [p for p in paths if not os.path.exists(p)]
     if missing:
         print(f"Error: missing FASTA paths: {missing}", file=sys.stderr)
@@ -117,8 +174,7 @@ def main(argv=None) -> int:
     else:
         saving_iter = results if not show else tqdm(results, desc="Saving", unit="file")
         for pth, entries in saving_iter:
-            base = os.path.splitext(os.path.basename(pth))[0]
-            out_path = os.path.join(args.output, f"{base}.tokens.pt")
+            out_path = os.path.join(args.output, _tokens_output_name(pth))
             save_pt(entries, out_path)
     return 0
 

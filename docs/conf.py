@@ -100,6 +100,8 @@ autodoc_mock_imports = [
     "hydra",
     "omegaconf",
     "wandb",
+    # webdataset is only in the [train] extra, which Read the Docs does not install
+    "webdataset",
     "sparrow",
     "IPython",
 ]

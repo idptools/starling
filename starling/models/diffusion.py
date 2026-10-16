@@ -1,6 +1,6 @@
 import math
 from os import PathLike
-from typing import TypedDict, cast
+from typing import Final, TypedDict, cast
 
 import pytorch_lightning as pl
 import torch
@@ -24,7 +24,14 @@ from starling.models.vae import VAE
 # Adapted from https://github.com/Camaltra/this-is-not-real-aerial-imagery/blob/main/src/ai/diffusion_process.py
 # and https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/classifier_free_guidance.py#L720
 
-torch.set_float32_matmul_precision("high")
+# Fraction of all training steps over which LinearWarmupCosineAnnealingLR
+# ramps the learning rate up linearly before the cosine decay starts
+WARMUP_FRACTION: Final[float] = 0.01
+
+# Value the latent_space_scaling_factor buffer holds until it has been
+# estimated from the first training batch. A model loaded from a checkpoint
+# (e.g. for fine-tuning) already holds its estimated value, which is kept.
+UNSET_LATENT_SCALING_FACTOR: Final[float] = 1.0
 
 
 # Helper function
@@ -40,8 +47,9 @@ def extract(
         The tensor to extract values from.
     timestamps : torch.Tensor
         A 1D tensor containing the indices for extraction.
-    shape : int
-        The desired shape of the output tensor.
+    shape : torch.Size
+        Shape of the tensor the extracted values will be broadcast against;
+        only its number of dimensions is used.
 
     Returns
     -------
@@ -116,25 +124,30 @@ class DiffusionModel(pl.LightningModule):
         Parameters
         ----------
         model : nn.Module
-            A neural network model that takes in an image, a timestamp, and optionally labels to condition on
-            and outputs the predicted noise
-        encoder_model : nn.Module
-            A VAE model that takes in the data (e.g., a distance map) and outputs the compressed representation of
-            the data (e.g., a latent space). The denoising-diffusion model is then trained to denoise the latent space.
-        image_size : int
-            The size of the latent space (height and width)
+            A neural network model that takes in the noisy latents, the timesteps, the sequence
+            context and its attention mask and outputs the predicted noise
+        sequence_encoder : nn.Module
+            The model that turns tokenized sequences, their attention mask and the ionic strengths
+            into the context the noise predictor is conditioned on (see sequence2labels)
+        distance_map_encoder : str or PathLike or None
+            Path to a trained VAE checkpoint. If given, the VAE is loaded and frozen, and every
+            training and validation batch of distance maps is encoded into the latent space on the
+            fly. If None, the batches are expected to hold latents already.
         beta_scheduler : str, optional
-            The name of the beta scheduler to use, by default "cosine"
+            The name of the beta scheduler to use ("linear", "cosine" or "sigmoid"), by default "cosine"
         timesteps : int, optional
             The number of timesteps to run the diffusion process, by default 1000
-        schedule_fn_kwargs : Union[dict, None], optional
-            Additional arguments to pass to the beta scheduler function, by default None
-        labels : str, optional
-            The type of labels to condition the model on, by default "learned-embeddings"
         set_lr : float, optional
             The initial learning rate for the optimizer, by default 1e-4
+        min_snr_loss : bool, optional
+            Whether to weight each sample's loss by min(SNR, min_snr_gamma) / SNR (Min-SNR
+            weighting, Hang et al. 2023, https://arxiv.org/abs/2303.09556), by default False
+        min_snr_gamma : float, optional
+            The SNR cap gamma used by the Min-SNR weighting, by default 5.0
         config_scheduler : str, optional
-            The name of the learning rate scheduler to use, by default "CosineAnnealingLR"
+            The name of the learning rate scheduler to use ("LinearWarmupCosineAnnealingLR",
+            "CosineAnnealingLR", "CosineAnnealingWarmRestarts" or "OneCycleLR"), by default
+            "LinearWarmupCosineAnnealingLR"
 
         Raises
         ------
@@ -152,8 +165,12 @@ class DiffusionModel(pl.LightningModule):
         self.sequence_encoder = sequence_encoder
 
         if distance_map_encoder is not None:
-            self.distance_map_encoder = VAE.load_from_checkpoint(
-                str(distance_map_encoder)
+            # Load on the CPU: without a map_location, Lightning restores the
+            # tensors to the GPU they were saved from (cuda:0), which starts a
+            # CUDA context there even when the model is meant for the CPU or
+            # another GPU. Lightning moves the module to the right device later.
+            self.distance_map_encoder: VAE | None = VAE.load_from_checkpoint(
+                str(distance_map_encoder), map_location="cpu"
             )
 
             self.__freeze_distance_map_encoder(self.distance_map_encoder)
@@ -174,7 +191,8 @@ class DiffusionModel(pl.LightningModule):
         # Register scaling factor buffer (calculated during first training step)
         # Used to normalize latent space to unit variance per Reference #3
         self.register_buffer(
-            "latent_space_scaling_factor", torch.tensor(1.0, dtype=torch.float32)
+            "latent_space_scaling_factor",
+            torch.tensor(UNSET_LATENT_SCALING_FACTOR, dtype=torch.float32),
         )
 
         # Calculate diffusion process parameters
@@ -203,6 +221,34 @@ class DiffusionModel(pl.LightningModule):
         # Store timesteps information
         self.num_timesteps = int(betas.shape[0])
         self.monitor = "epoch_val_loss"
+
+    def _encode_distance_maps(self, distance_maps: torch.Tensor) -> torch.Tensor:
+        """
+        Encode distance maps into latents with the frozen VAE, in float32.
+
+        Training runs under bf16 mixed precision, where autocast would run the
+        encoder in bf16 and return bf16 latents. Their spacing (0.004-0.008 for
+        |x| between 0.5 and 2) is comparable to the smallest forward-process
+        noise level (0.01), the noise drawn for them with randn_like would be
+        bf16 too, and latents precomputed by
+        devtools/scripts/extract_latents_tar.py are float32, so the two data
+        paths trained on differently rounded inputs. Encoding with autocast
+        off keeps everything downstream in float32.
+
+        Parameters
+        ----------
+        distance_maps : torch.Tensor
+            Distance maps in Angstroms, shape (batch, 1, 384, 384).
+
+        Returns
+        -------
+        torch.Tensor
+            float32 latents (the mode of the VAE's posterior), shape
+            (batch, 1, 24, 24).
+        """
+        assert self.distance_map_encoder is not None
+        with torch.no_grad(), torch.autocast(device_type=distance_maps.device.type, enabled=False):
+            return self.distance_map_encoder.encode(distance_maps.float()).mode()
 
     def __freeze_distance_map_encoder(self, encoder: VAE) -> None:
         encoder.eval()
@@ -250,22 +296,23 @@ class DiffusionModel(pl.LightningModule):
         ionic_strength: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Converts sequences to labels based on user defined models,
+        Converts tokenized sequences into the context the noise predictor is conditioned on,
+        using the sequence encoder.
 
         Parameters
         ----------
-        sequences : List
-            A list of sequences to convert to labels
+        sequences : torch.Tensor
+            Tokenized sequences, shape (batch, sequence_length)
+        sequence_mask : torch.Tensor
+            Attention mask for the sequences, True for real residues and False for padding,
+            shape (batch, sequence_length)
+        ionic_strength : torch.Tensor
+            Ionic strength of each sequence in mM, shape (batch, 1)
 
         Returns
         -------
         torch.Tensor
-            Returns the labels for the decoder
-
-        Raises
-        ------
-        ValueError
-            If the labels are not one of the three options
+            The sequence context, shape (batch, sequence_length, embed_dim)
         """
         encoded = self.sequence_encoder(sequences, sequence_mask, ionic_strength)
 
@@ -282,28 +329,28 @@ class DiffusionModel(pl.LightningModule):
     ) -> torch.Tensor:
         """
         A function that runs the model and calculates the loss based on the
-        predicted noise and the actual noise. The loss can either be L1 or L2.
+        predicted noise and the actual noise. The loss is the mean squared error,
+        optionally with Min-SNR weighting (see min_snr_loss in __init__).
 
         Parameters
         ----------
         x_start : torch.Tensor
-            The starting image tensor
-        t : int
-            The timestep along the denoising-diffusion process
-        labels : torch.Tensor, optional
-            Labels to condition the model on, by default None
+            The starting (scaled) latents, shape (batch, 1, 24, 24)
+        t : torch.Tensor
+            The timestep of each sample along the denoising-diffusion process, shape (batch,)
+        labels : torch.Tensor
+            Tokenized sequences to condition the model on, shape (batch, sequence_length)
+        mask : torch.Tensor
+            Attention mask for the sequences, True for real residues, shape (batch, sequence_length)
+        ionic_strengths : torch.Tensor
+            Ionic strength of each sequence in mM, shape (batch, 1)
         noise : torch.Tensor, optional
-            Sampled noise from N(0,I), by default None
+            Sampled noise from N(0,I), by default None (drawn here)
 
         Returns
         -------
         torch.Tensor
             Returns the loss
-
-        Raises
-        ------
-        ValueError
-            If the loss type is not one of the two options (l1, l2)
         """
         if noise is None:
             noise = torch.randn_like(x_start)
@@ -365,8 +412,12 @@ class DiffusionModel(pl.LightningModule):
         ----------
         x : torch.Tensor
             The starting tensor to noise/denoise
-        labels : torch.Tensor, optional
-            Sequences to condition the model on, by default None
+        labels : torch.Tensor
+            Tokenized sequences to condition the model on, shape (batch, sequence_length)
+        mask : torch.Tensor
+            Attention mask for the sequences, True for real residues, shape (batch, sequence_length)
+        ionic_strengths : torch.Tensor
+            Ionic strength of each sequence in mM, shape (batch, 1)
 
         Returns
         -------
@@ -382,8 +433,9 @@ class DiffusionModel(pl.LightningModule):
 
     def _initialize_latent_scaling(self, latent_encoding: torch.Tensor) -> None:
         """
-        Initialize the latent space mean and standard deviation using the first batch
-        for z-scoring (standardization).
+        Set the latent space scaling factor to 1 / std of the first batch of latents
+        (averaged over processes), so the scaled latents have roughly unit variance.
+        The latents are only rescaled, not centred.
 
         Parameters
         ----------
@@ -415,13 +467,16 @@ class DiffusionModel(pl.LightningModule):
         )
 
         if self.distance_map_encoder is not None:
-            with torch.no_grad():
-                latent_encoding = self.distance_map_encoder.encode(
-                    latent_encoding
-                ).mode()
+            latent_encoding = self._encode_distance_maps(latent_encoding)
 
-        # Calculate scaling factor on first batch (only once during training)
-        if self.global_step == 0 and batch_idx == 0:
+        # Calculate scaling factor on first batch (only once during training).
+        # A model fine-tuned from a checkpoint keeps the factor it was trained
+        # with rather than replacing it with an estimate from one new batch.
+        if (
+            self.global_step == 0
+            and batch_idx == 0
+            and float(self.latent_space_scaling_factor) == UNSET_LATENT_SCALING_FACTOR
+        ):
             self._initialize_latent_scaling(latent_encoding)
 
         # Z-score the latent encoding
@@ -450,10 +505,7 @@ class DiffusionModel(pl.LightningModule):
         )
 
         if self.distance_map_encoder is not None:
-            with torch.no_grad():
-                latent_encoding = self.distance_map_encoder.encode(
-                    latent_encoding
-                ).mode()
+            latent_encoding = self._encode_distance_maps(latent_encoding)
 
         # Z-score the latent encoding
         latent_encoding = latent_encoding * self.latent_space_scaling_factor
@@ -493,12 +545,9 @@ class DiffusionModel(pl.LightningModule):
     def configure_optimizers(self):
         """
         Configure the optimizer and the learning rate scheduler for the model.
-        Here I am using NVIDIA suggested settings for learning rate and weight
-        decay. For ResNet50 they have seen best performance with CosineAnnealingLR,
-        initial learning rate of 0.256 for batch size of 256 and linearly scaling
-        it down/up for other batch sizes. The weight decay is set to 1/32768 for all
-        parameters except the batch normalization layers. For further information check:
-        https://catalog.ngc.nvidia.com/orgs/nvidia/resources/resnet_50_v1_5_for_pytorch
+        The noise predictor and the sequence encoder are trained with AdamW
+        (learning rate set_lr, weight decay 0.01); the frozen VAE is not
+        optimized. The learning rate scheduler is chosen by config_scheduler.
 
         Returns
         -------
@@ -558,8 +607,8 @@ class DiffusionModel(pl.LightningModule):
                 raise RuntimeError("max_epochs must be set for this scheduler")
             total_steps = int(self.trainer.estimated_stepping_batches)
             steps_per_epoch = total_steps // num_epochs
-            # Warmup for 5% of the total steps
-            warmup_steps = steps_per_epoch * int(num_epochs * 0.01)
+            # Warmup for 1% (WARMUP_FRACTION) of the total steps
+            warmup_steps = int(total_steps * WARMUP_FRACTION)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:

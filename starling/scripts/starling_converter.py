@@ -141,18 +141,14 @@ def starling2numpy():
 
 def starling2sequence():
     # Initialize the argument parser
-    parser = ArgumentParser(description="Get the amino acid sequence associated with a STARLING file written to stdout")
+    parser = ArgumentParser(
+        description="Print the amino acid sequence associated with a STARLING file to stdout "
+        "(redirect with '>' to save it to a file)"
+    )
 
     # Add command-line arguments corresponding to the parameters of the generate function
     parser.add_argument(
         "input_file", type=str, help="Input starling file", default=None
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        default=".",
-        help="Directory and/or filename to save output (default: '.')",
     )
 
     # Parse the command-line arguments
@@ -208,7 +204,10 @@ def starling2info():
 def starling2starling():
     # Initialize the argument parser
     parser = ArgumentParser(
-        description="Convert .starling ensembles to a different .starling ensemble! We include this is for error checking/correction in case you discover a sequence that is badly behaved..."
+        description="Convert .starling ensembles to a different .starling ensemble! We include this is for error checking/correction in case you discover a sequence that is badly behaved... "
+        "A new .starling file is written only when --remove-errors is set AND at least one erroneous "
+        "conformer was found and removed; it is saved as fixed_<name>.starling (in the -o directory, or "
+        "with 'fixed_' prefixed to the -o file name) unless --overwrite is set."
     )
 
     # Add command-line arguments corresponding to the parameters of the generate function
@@ -232,7 +231,7 @@ def starling2starling():
         "--remove-errors",
         action="store_true",
         default=False,
-        help="If set then the we output a new .starling file with any error-identified confomers removed.",
+        help="If set then the we output a new .starling file with any error-identified confomers removed (implies --error-check). Nothing is written if no errors are found.",
     )
     parser.add_argument(
         "--overwrite",
@@ -249,15 +248,23 @@ def starling2starling():
     # build an ensemble from the starling file
     E = ensemble.load_ensemble(args.input_file)
 
-    if args.error_check:
+    # removing errors requires finding them first, so --remove-errors implies --error-check
+    if args.error_check or args.remove_errors:
         nframes = len(E)
         E.check_for_errors(remove_errors=args.remove_errors, verbose=True)
         if args.remove_errors and len(E) != nframes:
             if args.overwrite:
                 outname = args.input_file
             else:
-                outname = "fixed_" + outname
+                # prefix the file name only, so '-o outdir' gives 'outdir/fixed_<name>'
+                out_dir, out_base = os.path.split(outname)
+                outname = os.path.join(out_dir, "fixed_" + out_base)
             E.save(outname, verbose=False)
+            # save() swaps any extension for .starling, so report the name it actually writes
+            written = os.path.splitext(outname)[0] + ".starling"
+            print(f"Removed {nframes - len(E)} erroneous conformers; wrote {written}")
+        elif args.remove_errors:
+            print("No erroneous conformers found; no new file written")
 
 
 def numpy2starling():
@@ -268,7 +275,7 @@ def numpy2starling():
 
     # Add command-line arguments corresponding to the parameters of the generate function
     parser.add_argument(
-        "input_file", type=str, help="Input starling file", default=None
+        "input_file", type=str, help="Input .npy file of distance maps", default=None
     )
     parser.add_argument(
         "-s",
@@ -343,6 +350,14 @@ def numpy2starling():
         print("Error: sequence length does not match the distance map")
         sys.exit(1)
 
+    # check the XTC trajectory has one frame per distance map
+    if ssprot is not None and ssprot.n_frames != distance_maps.shape[0]:
+        print(
+            f"Error: XTC trajectory has {ssprot.n_frames} frames but the numpy file has "
+            f"{distance_maps.shape[0]} distance maps; these must match one-to-one"
+        )
+        sys.exit(1)
+
     # build
     E = ensemble.Ensemble(distance_maps, args.sequence, ssprot_ensemble=ssprot)
 
@@ -389,7 +404,8 @@ def xtc2starling():
     distance_maps, _ = ss_protein.get_distance_map(return_instantaneous_maps=True)
     sym_distance_maps = symmetrize_distance_maps(distance_maps)
 
-    # build an ensemble from the starling file
-    ens = ensemble.Ensemble(sym_distance_maps, sequence)
+    # build an ensemble from the trajectory, keeping the input coordinates so they are
+    # saved with the .starling file (rather than reconstructed later)
+    ens = ensemble.Ensemble(sym_distance_maps, sequence, ssprot_ensemble=ss_protein)
 
     ens.save(outname)

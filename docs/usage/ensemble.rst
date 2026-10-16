@@ -22,7 +22,8 @@ Ensembles can be loaded from STARLING format files:
     # Load an ensemble from a file
     ensemble = load_ensemble("example_ensemble.starling")
     
-    # Optionally ignore 3D structures for faster loading
+    # Optionally discard any stored 3D structures (the whole file is still
+    # read, so this does not make loading faster)
     ensemble = load_ensemble("example_ensemble.starling", ignore_structures=True)
     
     # Get basic ensemble information
@@ -48,9 +49,24 @@ The ``Ensemble`` class provides methods to compute various biophysical propertie
     # Calculate end-to-end distance
     end_to_end = ensemble.end_to_end_distance(return_mean=True)
     
+    # Local radius of gyration of residues 10-29 (0-based; end is exclusive,
+    # like a Python slice, and must satisfy 0 <= start < end <= sequence length)
+    local_rg = ensemble.local_radius_of_gyration(10, 30, return_mean=True)
+    
     # Calculate hydrodynamic radius using different methods
     rh_nygaard = ensemble.hydrodynamic_radius(mode="nygaard", return_mean=True)
     rh_kr = ensemble.hydrodynamic_radius(mode="kr", return_mean=True)
+
+``mode="kr"`` uses the Kirkwood-Riseman expression
+:math:`1/R_h = (1/N^2) \sum_{i \neq j} 1/r_{ij}` (as in SOURSOP 2.0.6 and
+later). The Nygaard equation (the default) is parameterised for chains much
+longer than a few residues; for very short chains, where its Rg/Rh ratio is not
+positive, it raises a ``ValueError`` and ``mode="kr"`` should be used instead.
+
+If you construct an :class:`~starling.structure.ensemble.Ensemble` yourself
+from distance maps, the maps must be full symmetric matrices with a zero
+diagonal; use :func:`starling.utilities.symmetrize_distance_maps` on maps that
+hold only one triangle.
 
 Distance and Contact Analysis
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -88,7 +104,8 @@ STARLING can generate 3D structures from distance maps:
     # Check if the ensemble already has 3D structures
     has_structures = ensemble.has_structures
     
-    # Access the trajectory (generates 3D structures if needed)
+    # Access the trajectory (builds 3D structures from the distance maps if
+    # the ensemble has none; these are not relaxed)
     trajectory = ensemble.trajectory
     
     # Explicitly build structures with custom parameters
@@ -101,6 +118,29 @@ STARLING can generate 3D structures from distance maps:
     # Save trajectory to files
     ensemble.save_trajectory("my_structures", pdb_trajectory=True)  # Save as multi-model PDB
     ensemble.save_trajectory("my_structures")  # Save as PDB/XTC
+
+Structures built by ``trajectory`` or ``build_ensemble_trajectory()`` come
+straight from MDS/SMACOF reconstruction and are not relaxed. Structures made by
+:func:`starling.generate` with ``return_structures=True`` are relaxed with the
+Mpipi-GG force field by default; to relax the structures of an ensemble you
+have loaded, use :func:`starling.minimizer.relax_ensemble <starling.minimizer.relax.relax_ensemble>` (see
+:ref:`relaxing-existing-ensembles`).
+
+Checking for errors
+~~~~~~~~~~~~~~~~~~~
+
+:meth:`~starling.structure.ensemble.Ensemble.check_for_errors` finds
+conformations with physically impossible inter-residue distances:
+
+.. code-block:: python
+
+    bad_frames = ensemble.check_for_errors()
+
+    # Remove them in place. Any attached structures are sliced to match, so
+    # relaxed or user-supplied coordinates are kept; pass
+    # rebuild_trajectory=True to rebuild (unrelaxed) structures from the
+    # remaining distance maps instead.
+    ensemble.check_for_errors(remove_errors=True)
 
 Ensemble Reweighting with BME
 -----------------------------

@@ -3,10 +3,18 @@ import hdf5plugin
 import numpy as np
 import pandas as pd
 
+# Character used to right-pad shorter sequences in one_hot_encode; it is the padding
+# token (index 0) of the amino-acid alphabet below
+PADDING_TOKEN = "0"
+
 
 def one_hot_encode(sequences):
     """
     One-hot encodes a sequence.
+
+    Sequences shorter than the longest one are right-padded with the padding
+    token "0", so a batch of different-length sequences is encoded exactly as if
+    each had been padded with "0" by hand.
     """
     # Define the mapping of each amino acid to a unique integer
     aa_to_int = {
@@ -33,15 +41,19 @@ def one_hot_encode(sequences):
         "Y": 20,
     }
 
-    # Convert sequences to numpy array of integers
-    int_sequences = [[aa_to_int[aa] for aa in sequence] for sequence in sequences]
-    int_sequences = np.array(int_sequences)
-
-    # Create an array of zeros with shape (num_sequences, sequence_length, num_classes)
     num_sequences = len(sequences)
     sequence_length = max(len(sequence) for sequence in sequences)
     num_classes = len(aa_to_int)
 
+    # Convert sequences to a padded numpy array of integers; np.array on the ragged
+    # per-sequence lists would raise for sequences of different lengths
+    int_sequences = np.full(
+        (num_sequences, sequence_length), aa_to_int[PADDING_TOKEN], dtype=np.int64
+    )
+    for i, sequence in enumerate(sequences):
+        int_sequences[i, : len(sequence)] = [aa_to_int[aa] for aa in sequence]
+
+    # Create an array of zeros with shape (num_sequences, sequence_length, num_classes)
     one_hot_encoded_seq = np.zeros(
         (num_sequences, sequence_length, num_classes), dtype=np.float32
     )
@@ -61,15 +73,30 @@ def MaxPad(original_array: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     ----------
     original_array : np.array
         A distance map
+    shape : tuple[int, int]
+        The (height, width) to zero-pad the distance map to. Must be at least as
+        large as the distance map in both dimensions.
 
     Returns
     -------
     np.array
         A distance map padded to a desired shape
+
+    Raises
+    ------
+    ValueError
+        If the distance map is larger than shape in either dimension, since
+        padding cannot shrink it.
     """
+    if original_array.shape[0] > shape[0] or original_array.shape[1] > shape[1]:
+        raise ValueError(
+            f"Cannot pad a distance map of shape {original_array.shape} to the "
+            f"smaller shape {tuple(shape)}"
+        )
+
     # Pad the distance map to a desired shape
-    pad_height = max(0, shape[0] - original_array.shape[0])
-    pad_width = max(0, shape[1] - original_array.shape[1])
+    pad_height = shape[0] - original_array.shape[0]
+    pad_width = shape[1] - original_array.shape[1]
     return np.pad(
         original_array,
         ((0, pad_height), (0, pad_width)),
@@ -89,6 +116,9 @@ def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
 
     Returns:
         - dict: {key: np.ndarray or np.ndarray slice}
+
+    Raises:
+        - IndexError: If frame is out of range for 'dm' or 'latents'.
     """
     special_keys = {"dm", "latents"}
     data = {}
@@ -97,10 +127,19 @@ def load_hdf5_compressed(file_path, frame=None, keys_to_load=None):
         keys = keys_to_load if keys_to_load is not None else list(f.keys())
         for key in keys:
             dataset = f[key]
-            if frame is not None and key in special_keys and dataset.shape[0] > frame:
-                data[key] = dataset[frame]
-            else:
+            if frame is None or key not in special_keys:
                 data[key] = dataset[()]
+                continue
+
+            # Fail loudly rather than silently returning every frame when the
+            # requested frame does not exist
+            num_frames = dataset.shape[0]
+            if not -num_frames <= frame < num_frames:
+                raise IndexError(
+                    f"frame {frame} is out of range for '{key}' in {file_path}, "
+                    f"which has {num_frames} frames"
+                )
+            data[key] = dataset[frame]
     return data
 
 

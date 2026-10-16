@@ -3,10 +3,10 @@ import os
 
 import hydra
 import pytorch_lightning as pl
+import torch
 import wandb
 import yaml
 from typing import Any, cast
-from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -16,6 +16,14 @@ from starling.data.ddpm_loader_tar import DDPMDataLoader
 from starling.models.diffusion import DiffusionModel
 from starling.models.transformer import SequenceEncoder
 from starling.models.vit import ViT
+from starling.utilities import MODEL_FLOAT32_MATMUL_PRECISION
+
+# ViT backbone hyperparameters of the released STARLING diffusion model. These
+# match the ViT that starling/inference/model_loading.py builds to load the
+# released weights, so changing them makes new checkpoints incompatible with it.
+VIT_NUM_LAYERS = 12
+VIT_EMBED_DIM = 512
+VIT_NUM_HEADS = 8
 
 
 @rank_zero_only
@@ -24,7 +32,7 @@ def wandb_init(project: str = "starling", id=None):
 
 
 def setup_directories(output_path):
-    """Create necessary directories and save the configuration file."""
+    """Create the output directory if it does not already exist."""
     os.makedirs(output_path, exist_ok=True)
 
 
@@ -57,13 +65,81 @@ def get_checkpoint_path(output_path):
     return "last" if checkpoint_files else None
 
 
+def get_resume_checkpoint(trainer_config: DictConfig, output_path: str) -> str | None:
+    """
+    Decide which checkpoint, if any, trainer.fit should resume from.
+
+    This mirrors vae_train. When fine-tuning, trainer.checkpoint only supplies the
+    starting weights (see setup_models), so nothing is resumed. Otherwise an explicit
+    trainer.checkpoint is resumed as given, and if none is set, training resumes from
+    the last.ckpt that an earlier run left in output_path.
+
+    Parameters
+    ----------
+    trainer_config : DictConfig
+        The trainer section of the Hydra config; reads fine_tune and checkpoint.
+    output_path : str
+        Directory where checkpoints for this run are written.
+
+    Returns
+    -------
+    str or None
+        The checkpoint to pass as trainer.fit(ckpt_path=...). This is the explicit
+        checkpoint path, "last" (which Lightning resolves to the newest last
+        checkpoint in output_path), or None to start from scratch.
+    """
+    if trainer_config.fine_tune:
+        return None
+    if trainer_config.checkpoint is not None:
+        return trainer_config.checkpoint
+    return get_checkpoint_path(output_path)
+
+
+def get_effective_batch_size(trainer: pl.Trainer, batch_size: int) -> int:
+    """
+    Compute the number of samples consumed per training step across all processes.
+
+    The world size is read from the Trainer after construction because Lightning has
+    already resolved trainer.cuda (an int, -1 for all available devices, or a list of
+    device indices) and num_nodes into the number of processes it will launch.
+
+    Parameters
+    ----------
+    trainer : pl.Trainer
+        The constructed Trainer that will run training.
+    batch_size : int
+        The per-process batch size from the dataloader config.
+
+    Returns
+    -------
+    int
+        world_size * batch_size.
+
+    Raises
+    ------
+    ValueError
+        If the world size or batch size is not a positive integer.
+    """
+    world_size = trainer.world_size
+    if world_size < 1 or batch_size < 1:
+        raise ValueError(
+            f"Expected a positive world size and batch size, got world_size={world_size} "
+            f"and batch_size={batch_size}"
+        )
+    return world_size * batch_size
+
+
 def setup_data_module(cfg, effective_batch_size=None):
-    """Set up the data module for VAE training."""
+    """Set up the data module for diffusion training."""
 
     if cfg.dataloader.type == "h5":
-        dataloader_config = cfg.dataloader.h5
-        dataset = instantiate(dataloader_config)
-        dataset.setup(stage="fit")
+        # The h5 block in configs/dataloader/dataloader.yaml has no _target_ and no
+        # h5 diffusion data module exists, so only tar shards are supported
+        raise NotImplementedError(
+            "dataloader.type 'h5' is not supported for diffusion training; "
+            "set dataloader.type to 'tar' and point dataloader.tar.dataset at "
+            "webdataset tar shards"
+        )
 
     elif cfg.dataloader.type == "tar":
         dataset = DDPMDataLoader(
@@ -85,7 +161,14 @@ def setup_models(config):
     seq_encoder_dict = cast(
         dict[str, Any], OmegaConf.to_container(config.sequence_encoder, resolve=True)
     )
-    vit = ViT(12, 512, 8, 512)
+    # The ViT cross-attends to the sequence encoder output, so its context
+    # dimension must equal the sequence encoder's embed_dim
+    vit = ViT(
+        VIT_NUM_LAYERS,
+        VIT_EMBED_DIM,
+        VIT_NUM_HEADS,
+        context_dim=seq_encoder_dict["embed_dim"],
+    )
     sequence_encoder = SequenceEncoder(**seq_encoder_dict)
 
     if config.diffusion.type == "discrete":
@@ -97,10 +180,14 @@ def setup_models(config):
         raise ValueError(f"Unsupported diffusion type: {config.diffusion.type}")
 
     if config.trainer.fine_tune:
+        # Load on the CPU; without a map_location every DDP rank would restore
+        # the checkpoint onto the GPU it was saved from (cuda:0). Lightning
+        # moves the model to each rank's device.
         diffusion_model = diffusion_models[config.diffusion.type].load_from_checkpoint(
             model_path,
             model=vit,
             sequence_encoder=sequence_encoder,
+            map_location="cpu",
             **diffusion_config_dict,
         )
     else:
@@ -140,6 +227,10 @@ def setup_trainer(config, callbacks, logger):
     config_name="configs",
 )
 def train_model(cfg: DictConfig):
+    # Training owns the whole process, so the models' TF32 matmul precision
+    # is set process-wide here; library code only ever scopes it
+    torch.set_float32_matmul_precision(MODEL_FLOAT32_MATMUL_PRECISION)
+
     # Setup directories and save config
     output_path = cfg.trainer.output_path
     setup_directories(output_path)
@@ -152,17 +243,9 @@ def train_model(cfg: DictConfig):
 
     # Setup checkpoints
     checkpoint_callback, save_last_checkpoint = setup_checkpoints(output_path)
-    ckpt_path = cfg.trainer.checkpoint
-
-    # Setup data module
-    if cfg.dataloader.type == "tar":
-        effective_batch_size = (
-            cfg.trainer.cuda * cfg.trainer.num_nodes * cfg.dataloader.tar.batch_size
-        )
-    else:
-        effective_batch_size = None
-
-    dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
+    ckpt_path = get_resume_checkpoint(cfg.trainer, output_path)
+    if ckpt_path is not None:
+        print(f"Resuming from checkpoint: {ckpt_path}")
 
     # Setup models
     diffusion_model = setup_models(cfg)
@@ -185,10 +268,19 @@ def train_model(cfg: DictConfig):
         logger=wandb_logger,
     )
 
+    # Setup data module after the Trainer so the effective batch size uses the
+    # world size Lightning resolved from trainer.cuda and num_nodes
+    if cfg.dataloader.type == "tar":
+        effective_batch_size = get_effective_batch_size(
+            trainer, cfg.dataloader.tar.batch_size
+        )
+    else:
+        effective_batch_size = None
+
+    dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
+
     # Start training
-    trainer.fit(
-        diffusion_model, dataset, ckpt_path=None if cfg.trainer.fine_tune else ckpt_path
-    )
+    trainer.fit(diffusion_model, dataset, ckpt_path=ckpt_path)
 
     # Detach WandB logging
     wandb_logger.experiment.unwatch(diffusion_model)

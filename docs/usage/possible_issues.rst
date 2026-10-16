@@ -105,3 +105,28 @@ Python search API.
   after conda-installing GPU packages
 * **Multiple FAISS versions**: Run ``pip list | grep faiss`` and ``conda list faiss`` 
   to check for conflicting installations
+
+FAISS and PyTorch on macOS (OpenMP)
+-----------------------------------
+
+**Issue:**
+
+On macOS, ``faiss-cpu`` and PyTorch each ship their own OpenMP runtime, and a
+process that uses both can abort with
+``OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already initialized``
+(or segfault).
+
+**Solution:**
+
+This is handled automatically. On macOS, importing ``starling.search`` (which
+``starling-search`` does) sets ``KMP_DUPLICATE_LIB_OK=TRUE`` and
+``OMP_NUM_THREADS=1`` before FAISS is loaded, keeping any values you have
+already set. As a result FAISS runs single-threaded on macOS unless you set
+``OMP_NUM_THREADS`` yourself (PyTorch has already fixed its own thread count by
+then). If your own code imports ``faiss`` before ``starling.search``, export the
+variables before starting Python:
+
+.. code-block:: bash
+
+    export KMP_DUPLICATE_LIB_OK=TRUE
+    export OMP_NUM_THREADS=1

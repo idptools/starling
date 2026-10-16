@@ -1,3 +1,4 @@
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, List, Optional, Tuple, Union
@@ -125,8 +126,20 @@ class BMEResult:
     @property
     def kl_divergence(self) -> float:
         """
-        returns the KL divergence (relative entropy) from phi.
+        Return the KL divergence (relative entropy) D_KL(w || w0) from phi.
+
+        Since phi = exp(-D_KL), this is -log(phi). A failed fit stores
+        phi = NaN, so NaN is returned (not inf) to make it clear that no
+        divergence was computed; inf is reserved for phi = 0, where the
+        reweighted ensemble has lost all overlap with the initial weights.
+
+        Returns
+        -------
+        float
+            The KL divergence in nats, NaN for a failed fit, or inf if phi is 0.
         """
+        if np.isnan(self.phi):
+            return np.nan
         if self.phi > 0:
             return -np.log(self.phi)
         else:
@@ -151,8 +164,12 @@ class BMEResult:
           This is the standard BME measure: N_eff^(S) = N * Φ.
 
         - neff_renyi2 (N_eff^(2)): 1 / sum_i w_i^2 (Rényi-2 / participation ratio).
-          This is more sensitive to a few large weights, so it is always
-          <= neff_entropy for the same weights.
+          This is more sensitive to a few large weights. With a uniform prior
+          (the default initial weights) N_eff^(S) = exp(Shannon entropy of w),
+          so N_eff^(2) <= N_eff^(S) always holds, because Rényi entropies do not
+          increase with order. With non-uniform initial weights N_eff^(S) is
+          measured relative to the prior, the two are no longer ordered, and
+          N_eff^(2) can exceed N_eff^(S).
         """
         diagnostics: dict = {}
         warnings: List[str] = []
@@ -294,8 +311,9 @@ class BMEResult:
         print("  - N_eff^(S): entropy-based (from Φ = exp(-D_KL));")
         print("    this matches the usual BME definition.")
         print("  - N_eff^(2): 1/Σw² (Rényi-2 / participation ratio);")
-        print("    more sensitive to a few large weights, so it is always")
-        print("    ≤ N_eff^(S) for the same weights.")
+        print("    more sensitive to a few large weights. With uniform initial")
+        print("    weights it is always ≤ N_eff^(S); with non-uniform initial")
+        print("    weights the two are not ordered.")
 
         print("=" * 60)
 
@@ -330,8 +348,25 @@ class ThetaScanResult:
         Plot theta-scan diagnostics.
 
         Panels (1 x 2):
-          [0]  Chi squared vs N_eff (effective frames), colored by log10(theta)
-          [1]  Weight distribution at optimal theta
+
+        - [0] Chi squared vs phi (effective fraction of frames, between 0
+          and 1), colored by log10(theta)
+        - [1] Weight distribution at optimal theta
+
+        Parameters
+        ----------
+        figsize : tuple[int, int], optional
+            Figure size (width, height) in inches. Default (10, 4).
+        save_path : str, optional
+            If given, the figure is saved to this path. Default None.
+        show : bool, optional
+            If True, display the figure; otherwise it is closed after
+            (optionally) saving. Default True.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The created figure.
         """
         import matplotlib.pyplot as plt
         import numpy as np
@@ -371,7 +406,7 @@ class ThetaScanResult:
             zorder=5,
         )
 
-        ax1.set_xlabel(rf"$N_{{eff}}$ (effective fraction)", fontsize=11)
+        ax1.set_xlabel(r"$\phi$ (effective fraction of frames)", fontsize=11)
         ax1.set_ylabel(rf"$\chi^2$", fontsize=11)
         # ax1.grid(True, alpha=0.3)
         ax1.legend(frameon=False)
@@ -415,6 +450,13 @@ class ThetaScanResult:
     def print_summary(self, n_show: int = 5):
         """
         Print a formatted summary of theta scan results.
+
+        Parameters
+        ----------
+        n_show : int, optional
+            Number of evenly spaced theta values (always including the first
+            and last scanned value) to list in the summary table. Set to 0 to
+            omit the table. Default 5.
         """
         print("\n" + "=" * 60)
         print("THETA SCAN SUMMARY")
@@ -429,48 +471,134 @@ class ThetaScanResult:
         print(f"RECOMMENDED THETA: {self.optimal_theta:.4f}")
         opt_idx = self.optimal_idx
         print(f"Chi squared: {self.chi_squared_values[opt_idx]:.4f}")
-        print(f"N_eff:   {self.phi_values[opt_idx]:.4f}")
+        print(f"phi (effective fraction):   {self.phi_values[opt_idx]:.4f}")
         print(f"Relative Entropy:   {self.kl_divergence_values[opt_idx]:.4f}")
 
-        # # Aligned table header
-        # print("\n Sample of theta values:")
-        # h_theta = "Theta"
-        # h_chi = "Chi squared"
-        # h_neff = "N_eff"
-        # h_kl = "Rel. Entropy"
-        # h_status = "Status"
-        # print(f"{h_theta:>10}  {h_chi:>14}  {h_neff:>12}  {h_kl:>14}  {h_status:^8}")
-        # print("-" * 60)
+        # an evenly spaced sample of the scan, so failed fits (excluded from
+        # the theta selection) are visible as well
+        n_rows = min(n_show, len(self.theta_values))
+        if n_rows > 0:
+            print("\nSample of theta values:")
+            h_theta = "Theta"
+            h_chi = "Chi squared"
+            h_phi = "phi"
+            h_kl = "Rel. Entropy"
+            h_status = "Status"
+            print(f"{h_theta:>10}  {h_chi:>14}  {h_phi:>12}  {h_kl:>14}  {h_status:^8}")
+            print("-" * 66)
 
-        # indices = np.linspace(0, len(self.theta_values) - 1, n_show, dtype=int)
-        # for idx in indices:
-        #     status = "✓" if self.results[idx].success else "✗"
-        #     marker = " <- OPTIMAL" if idx == opt_idx else ""
-        #     print(
-        #         f"{self.theta_values[idx]:>10.4f}  "
-        #         f"{self.chi_squared_values[idx]:>14.4f}  "
-        #         f"{self.phi_values[idx]:>12.4f}  "
-        #         f"{self.kl_divergence_values[idx]:>14.4f}  "
-        #         f"{status:^8}{marker}"
-        #     )
+            indices = np.linspace(0, len(self.theta_values) - 1, n_rows, dtype=int)
+            for idx in indices:
+                status = "✓" if self.results[idx].success else "✗"
+                marker = " <- OPTIMAL" if idx == opt_idx else ""
+                print(
+                    f"{self.theta_values[idx]:>10.4f}  "
+                    f"{self.chi_squared_values[idx]:>14.4f}  "
+                    f"{self.phi_values[idx]:>12.4f}  "
+                    f"{self.kl_divergence_values[idx]:>14.4f}  "
+                    f"{status:^8}{marker}"
+                )
+            print("")
 
         print(
             "  • L-curve shows trade-off between fit quality (Chi squared) "
-            "and effective sample size (N_eff)"
+            "and the effective fraction of frames (phi)"
         )
         print("  • Optimal theta balances these competing objectives")
-        print("  • N_eff < 0.5 indicates significant loss of ensemble diversity")
-        print("  • Consider increasing theta if N_eff is too low at optimum")
+        print("  • phi < 0.5 indicates significant loss of ensemble diversity")
+        print("  • Consider increasing theta if phi is too low at optimum")
         print("=" * 60)
 
 
 # ----------------------------------------------------------------------
 # Theta scan driver + knee finding
 # ----------------------------------------------------------------------
+def build_theta_grid(
+    theta_range: Union[Tuple[float, float], List[float], np.ndarray],
+    n_points: int,
+    log_scale: bool = True,
+) -> np.ndarray:
+    """
+    Turn a theta_range specification into the grid of theta values to scan.
+
+    A tuple is always read as a range and a list or numpy array as an explicit
+    grid, so the two cannot be confused (a list used to be treated as a range
+    built from its first two values, silently ignoring the rest).
+
+    Parameters
+    ----------
+    theta_range : tuple[float, float] | list[float] | np.ndarray
+        - A tuple of length 2, ``(min_theta, max_theta)``: ``n_points`` values
+          between the two endpoints (inclusive) are generated, log-spaced if
+          ``log_scale`` is True and linearly spaced otherwise. Both endpoints
+          must be finite and positive.
+        - A list or 1D numpy array: used directly as the explicit grid of theta
+          values, in the order given. It must contain at least 2 values, all
+          finite and positive.
+    n_points : int
+        Number of theta values generated when ``theta_range`` is a tuple. Must
+        be >= 1. Ignored for an explicit grid.
+    log_scale : bool, optional
+        If True and ``theta_range`` is a tuple, space the values
+        logarithmically. Ignored for an explicit grid. Default True.
+
+    Returns
+    -------
+    np.ndarray
+        1D float array of theta values, in the order they will be scanned.
+
+    Raises
+    ------
+    TypeError
+        If theta_range is not a tuple, list or numpy array.
+    ValueError
+        If a tuple does not have exactly 2 entries, if n_points < 1, if a tuple
+        endpoint is not finite and positive, or if an explicit grid is not 1D,
+        has fewer than 2 values, or contains a value that is not finite and
+        positive.
+    """
+    if isinstance(theta_range, tuple):
+        if len(theta_range) != 2:
+            raise ValueError(
+                "A tuple theta_range must be (min_theta, max_theta); pass a list or numpy "
+                f"array for an explicit grid of theta values. Received: {theta_range}"
+            )
+        if n_points < 1:
+            raise ValueError(
+                f"n_points must be >= 1 when theta_range is a tuple. Received: {n_points}"
+            )
+        theta_min, theta_max = float(theta_range[0]), float(theta_range[1])
+        if not (np.isfinite(theta_min) and np.isfinite(theta_max)) or theta_min <= 0 or theta_max <= 0:
+            raise ValueError(
+                f"theta_range endpoints must be finite and positive. Received: {theta_range}"
+            )
+        if log_scale:
+            return np.logspace(np.log10(theta_min), np.log10(theta_max), n_points)
+        return np.linspace(theta_min, theta_max, n_points)
+
+    if not isinstance(theta_range, (list, np.ndarray)):
+        raise TypeError(
+            "theta_range must be a tuple (min_theta, max_theta) or a list/numpy array "
+            f"of explicit theta values. Received type: {type(theta_range).__name__}"
+        )
+
+    theta_values = np.asarray(theta_range, dtype=float)
+    if theta_values.ndim != 1 or len(theta_values) < 2:
+        raise ValueError(
+            "An explicit theta grid (list or numpy array) must be 1D with at least 2 values. "
+            f"Received: {theta_range}"
+        )
+    if not np.all(np.isfinite(theta_values)) or np.any(theta_values <= 0):
+        raise ValueError(
+            f"All values in an explicit theta grid must be finite and positive. Received: {theta_range}"
+        )
+    return theta_values
+
+
 def theta_scan(
     observables: List[ExperimentalObservable],
     calculated_values: np.ndarray,
-    theta_range: Union[Tuple[float, float], np.ndarray] = (0.01, 10.0),
+    theta_range: Union[Tuple[float, float], List[float], np.ndarray] = (0.01, 10.0),
     n_points: int = 15,
     log_scale: bool = True,
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
@@ -489,9 +617,11 @@ def theta_scan(
         Experimental observables to use for reweighting.
     calculated_values : np.ndarray
         Calculated values from the ensemble. Shape typically (n_models, n_observables).
-    theta_range : tuple or np.ndarray, optional
-        If a tuple (min, max) is given, a grid of `n_points` thetas is created;
-        if an array is supplied it is used directly. Default (0.01, 10.0).
+    theta_range : tuple, list or np.ndarray, optional
+        If a tuple (min, max) of length 2 is given, a grid of `n_points` thetas
+        is created between the two endpoints; if a list or numpy array is
+        supplied it is used directly as the explicit grid (at least 2 values,
+        all positive). See :func:`build_theta_grid`. Default (0.01, 10.0).
     n_points : int, optional
         Number of theta samples when `theta_range` is a tuple. Default 15.
     log_scale : bool, optional
@@ -514,41 +644,30 @@ def theta_scan(
     -------
     ThetaScanResult
         Object containing theta grid, metric arrays, individual BMEResult objects,
-        and the selected optimal theta and index.
+        and the selected optimal theta and index. Fits that failed are kept in
+        the arrays (chi-squared, phi and KL divergence are NaN) but are never
+        selected as the optimum.
 
     Raises
     ------
     ValueError
-        If n_points < 1 when a tuple theta_range is provided, or if log_scale is True
-        and theta_range tuple contains non-positive endpoints.
+        If theta_range is invalid (see :func:`build_theta_grid`).
+    RuntimeError
+        If every fit in the scan failed, so no optimal theta can be selected.
+
+    Warns
+    -----
+    RuntimeWarning
+        If some (but not all) fits failed; these are excluded from the optimal
+        theta selection and the warning lists their theta values.
     """
     from starling.structure.bme import BME
-
-    if isinstance(theta_range, (tuple, list)):
-        if n_points < 1:
-            raise ValueError(
-                f"n_points must be >= 1 when theta_range is a tuple/list. Received: {n_points}"
-            )
-        if log_scale:
-            if theta_range[0] <= 0 or theta_range[1] <= 0:
-                raise ValueError(
-                    "theta_range endpoints must be positive when log_scale=True, Received: "
-                    f"{theta_range}"
-                )
 
     if progress_callback is not None and not callable(progress_callback):
         raise TypeError("progress_callback must be callable or None")
 
-    # Generate theta values
-    if isinstance(theta_range, (tuple, list)):
-        if log_scale:
-            theta_values = np.logspace(
-                np.log10(theta_range[0]), np.log10(theta_range[1]), n_points
-            )
-        else:
-            theta_values = np.linspace(theta_range[0], theta_range[1], n_points)
-    else:
-        theta_values = np.asarray(theta_range)
+    # Generate theta values (a tuple is a range, a list/array an explicit grid)
+    theta_values = build_theta_grid(theta_range, n_points, log_scale)
 
     chi_squared_vals: List[float] = []
     phi_vals: List[float] = []
@@ -584,9 +703,34 @@ def theta_scan(
     phi_vals_arr = np.array(phi_vals)
     kl_vals_arr = np.array(kl_vals)
 
-    optimal_idx, method = find_optimal_theta(
-        chi_squared_vals_arr, kl_vals_arr, method=method
+    # A failed fit has chi-squared = NaN, which turns the min/max normalisation
+    # in the knee finders into NaN and makes them return index 0 whatever the
+    # curve looks like, so the knee is located on the successful fits only.
+    successful_indices = np.flatnonzero([res.success for res in bme_results])
+    if len(successful_indices) == 0:
+        raise RuntimeError(
+            f"All {len(bme_results)} BME fits in the theta scan failed, so no optimal theta "
+            f"can be selected (optimizer message for the first theta: {bme_results[0].message}). "
+            "Try increasing max_iterations, changing theta_range, or checking that the "
+            "observables are compatible with the ensemble."
+        )
+
+    n_failed = len(bme_results) - len(successful_indices)
+    if n_failed > 0:
+        failed_thetas = [float(theta_values[i]) for i, res in enumerate(bme_results) if not res.success]
+        warnings.warn(
+            f"{n_failed} of {len(bme_results)} BME fits in the theta scan failed and were "
+            f"excluded from the optimal theta selection (theta = {failed_thetas})",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    successful_optimal_idx, method = find_optimal_theta(
+        chi_squared_vals_arr[successful_indices],
+        kl_vals_arr[successful_indices],
+        method=method,
     )
+    optimal_idx = int(successful_indices[successful_optimal_idx])
     optimal_theta = float(theta_values[optimal_idx])
 
     return ThetaScanResult(
@@ -608,7 +752,34 @@ def find_optimal_theta(
 ) -> Tuple[int, str]:
     """
     Find optimal theta value using L-curve analysis.
+
+    Parameters
+    ----------
+    chi_squared_values : np.ndarray
+        Final chi-squared for each scanned theta (successful fits only).
+    kl_divergence_values : np.ndarray
+        KL divergence for each scanned theta (successful fits only).
+    method : str, optional
+        'perpendicular' (default) or 'curvature'.
+
+    Returns
+    -------
+    tuple[int, str]
+        Index of the knee point and a human-readable name of the method.
+
+    Raises
+    ------
+    ValueError
+        If any value is NaN or infinite (e.g. from a failed fit), since the
+        min/max normalisation would turn every point into NaN and the knee
+        finders would silently return index 0; or if method is unknown.
     """
+    if not (np.all(np.isfinite(chi_squared_values)) and np.all(np.isfinite(kl_divergence_values))):
+        raise ValueError(
+            "chi_squared_values and kl_divergence_values must be finite; exclude failed "
+            "fits (NaN chi-squared) before locating the L-curve knee"
+        )
+
     if method == "curvature":
         idx = _find_knee_curvature(chi_squared_values, kl_divergence_values)
         return idx, "Menger curvature"

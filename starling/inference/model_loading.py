@@ -15,6 +15,37 @@ if TYPE_CHECKING:
     from starling.models.vae import VAE
 
 
+def weights_references(
+    encoder_path: str | os.PathLike[str] | None,
+    ddpm_path: str | os.PathLike[str] | None,
+) -> tuple[str, str]:
+    """
+    Return the encoder and DDPM weight references ModelManager loads.
+
+    ModelManager falls back on the default weight references that were in
+    ``starling.configs`` when this module was imported, so this (not the
+    current value of ``configs.DEFAULT_*_WEIGHTS_PATH``) is what should be
+    recorded as the weights an ensemble was generated with.
+
+    Parameters
+    ----------
+    encoder_path : str, os.PathLike or None
+        Custom encoder checkpoint path or URL, or None for the default.
+    ddpm_path : str, os.PathLike or None
+        Custom diffusion model checkpoint path or URL, or None for the default.
+
+    Returns
+    -------
+    tuple of (str, str)
+        The encoder and DDPM weight references (local paths or URLs) that
+        get_models() loads for these arguments.
+    """
+    return (
+        os.fspath(encoder_path or DEFAULT_ENCODER_WEIGHTS_PATH),
+        os.fspath(ddpm_path or DEFAULT_DDPM_WEIGHTS_PATH),
+    )
+
+
 class ModelManager:
     def __init__(self):
         self.encoder_model: VAE | None = None
@@ -28,8 +59,8 @@ class ModelManager:
 
     def load_models(
         self,
-        encoder_path: str | None,
-        ddpm_path: str | None,
+        encoder_path: str | os.PathLike[str] | None,
+        ddpm_path: str | os.PathLike[str] | None,
         device: str | torch.device,
     ) -> tuple[VAE, DiffusionModel]:
         """Load the models from local files or URLs."""
@@ -51,27 +82,37 @@ class ModelManager:
         from starling.models.vae import VAE
         from starling.models.vit import ViT
 
-        # Load the diffusion model
+        # Load on the CPU and only then move to the device. With
+        # map_location=device the whole Lightning checkpoint lands on the GPU
+        # first, including about 1 GB of optimizer state inference never uses,
+        # which can run a small or shared GPU out of memory while loading.
         sequence_encoder = SequenceEncoder(12, 512, 8)
         diffusion_model = DiffusionModel.load_from_checkpoint(
             ddpm_path,
             model=ViT(12, 512, 8, 512),
             sequence_encoder=sequence_encoder,
             distance_map_encoder=encoder_path,
-            map_location=device,
+            map_location="cpu",
         )
         encoder_model = VAE.load_from_checkpoint(
             encoder_path,
-            map_location=device,
+            map_location="cpu",
         )
-        diffusion_model.eval()
-        encoder_model.eval()
+
+        # The diffusion model keeps its own copy of the VAE so training can
+        # encode distance maps on the fly. Inference decodes with
+        # encoder_model instead, so drop the copy rather than carry it onto
+        # the device.
+        diffusion_model.distance_map_encoder = None
+
+        diffusion_model.to(device).eval()
+        encoder_model.to(device).eval()
         return encoder_model, diffusion_model
 
     def get_models(
         self,
-        encoder_path: str | None = DEFAULT_ENCODER_WEIGHTS_PATH,
-        ddpm_path: str | None = DEFAULT_DDPM_WEIGHTS_PATH,
+        encoder_path: str | os.PathLike[str] | None = DEFAULT_ENCODER_WEIGHTS_PATH,
+        ddpm_path: str | os.PathLike[str] | None = DEFAULT_DDPM_WEIGHTS_PATH,
         device: str | torch.device = "cpu",
     ) -> tuple[VAE, DiffusionModel]:
         """
@@ -81,11 +122,14 @@ class ModelManager:
 
         Parameters
         ----------
-        encoder_path : str
-            The path to the encoder model.
-            Default is
-        ddpm_path : str
-            The path to the DDPM model.
+        encoder_path : str, os.PathLike or None
+            The path (or URL) to the encoder model. Default (and None) is
+            configs.DEFAULT_ENCODER_WEIGHTS_PATH as it was when this module
+            was imported.
+        ddpm_path : str, os.PathLike or None
+            The path (or URL) to the DDPM model. Default (and None) is
+            configs.DEFAULT_DDPM_WEIGHTS_PATH as it was when this module
+            was imported.
         device : str
             The device on which to load the models. Default is CPU,
             but this changes depending on whatever we want to use
@@ -97,15 +141,18 @@ class ModelManager:
         encoder_model, diffusion_model
             The loaded encoder and diffusion models.
         """
+        encoder_reference, ddpm_reference = weights_references(encoder_path, ddpm_path)
         key = (
-            encoder_path or DEFAULT_ENCODER_WEIGHTS_PATH,
-            ddpm_path or DEFAULT_DDPM_WEIGHTS_PATH,
+            encoder_reference,
+            ddpm_reference,
             str(torch.device(device)),
             repr((configs.TORCH_COMPILATION["enabled"], configs.TORCH_COMPILATION["options"])),
         )
         if self.encoder_model is None or self.diffusion_model is None or self._cache_key != key:
-            self._cache_key = None
-            self.encoder_model, self.diffusion_model = self.load_models(encoder_path, ddpm_path, device)
+            # drop the old pair first, so replacing it never holds two pairs
+            # of models in (GPU) memory at once
+            self.clear()
+            self.encoder_model, self.diffusion_model = self.load_models(encoder_reference, ddpm_reference, device)
             if configs.TORCH_COMPILATION["enabled"]:
                 # Compile the models if requested
                 self.encoder_model, self.diffusion_model = self.compile()

@@ -192,8 +192,8 @@ def fire_minimize(
     Raises
     ------
     ValueError
-        If the coordinates are not (batch, n, 3), or the tolerance or step
-        limit are not positive.
+        If the coordinates are not (batch, n, 3), the tolerance is not
+        positive, or the step limit is not a nonnegative integer.
     """
     if coordinates.ndim != 3 or coordinates.shape[-1] != 3:
         raise ValueError(f"coordinates must have shape (batch, n, 3), got {tuple(coordinates.shape)}")

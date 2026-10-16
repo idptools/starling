@@ -10,6 +10,14 @@ starling.inference.model\_loading
 
    
    
+   .. rubric:: Functions
+
+   .. autosummary::
+      :toctree:
+      :nosignatures:
+   
+      weights_references
+   
    
 
    

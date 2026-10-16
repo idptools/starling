@@ -23,7 +23,7 @@ The ScoreConverter handles conversions between FAISS raw scores and user-facing 
 **For Cosine Similarity:**
 
 * FAISS returns inner product scores (higher = more similar)
-* ``return_similarity=True``: Output as-is [0, 1]
+* ``return_similarity=True``: Output as-is (cosine similarity of normalized vectors, in [-1, 1])
 * ``return_similarity=False``: Convert to distance (1 - similarity)
 
 **For L2 Distance:**
@@ -34,7 +34,7 @@ The ScoreConverter handles conversions between FAISS raw scores and user-facing 
 Usage::
 
     >>> converter = ScoreConverter(metric="cosine", return_similarity=True)
-    >>> output_score = converter.convert(raw_faiss_score=0.95)
+    >>> output_score = converter.convert(raw_score=0.95)
     >>> output_score
     0.95
 
@@ -140,10 +140,11 @@ Built-in Filters
         passes = filter.apply(candidate, query_seq)  # False if exact match
 
 **SequenceIdentityFilter**
-    Filters by maximum sequence identity.
+    Filters by maximum sequence identity. The threshold is inclusive: a candidate
+    whose identity equals ``max_identity`` is kept, consistent with CosineSimFilter.
 
     Parameters:
-        max_identity (float): Maximum identity threshold (0-1)
+        max_identity (float): Maximum allowed identity (0-1, inclusive)
         denominator (str): Identity denominator ("query", "target", "min", "max", "avg")
         seq_store (SequenceStore): Database for sequence lookup
         identity_func (callable): Function computing identity
@@ -160,7 +161,7 @@ Built-in Filters
             seq_store=seq_store,
             identity_func=compute_identity
         )
-        passes = filter.apply(candidate, query_seq)  # True if identity < 0.95
+        passes = filter.apply(candidate, query_seq)  # True if identity <= 0.95
 
 Filter Pipeline
 ---------------
@@ -196,7 +197,8 @@ SearchEngine automatically builds and applies filters based on search parameters
         length_min=50,              # -> LengthFilter
         length_max=500,             # -> LengthFilter
         max_cosine_similarity=0.99, # -> CosineSimFilter
-        exclude_exact_sequence=True,# -> ExactMatchFilter (per-query)
+        query_sequences=seqs,       # required by the two filters below
+        exclude_exact=True,         # -> ExactMatchFilter (per-query)
         sequence_identity_max=0.95  # -> SequenceIdentityFilter (per-query)
     )
 
@@ -331,7 +333,7 @@ class ExactMatchFilter(CandidateFilter):
 
 
 class SequenceIdentityFilter(CandidateFilter):
-    """Filter by maximum sequence identity."""
+    """Filter by maximum sequence identity (inclusive: identity <= max_identity passes)."""
 
     def __init__(
         self,
@@ -352,7 +354,8 @@ class SequenceIdentityFilter(CandidateFilter):
         if seq_val is None:
             return True
         ident = self.identity_func(query_seq, seq_val, denom=self.denominator)
-        return ident < self.max_identity
+        # max_identity is the maximum *allowed* identity, so the boundary passes
+        return ident <= self.max_identity
 
     def get_name(self) -> str:
         return "ident"

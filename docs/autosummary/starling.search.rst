@@ -40,6 +40,5 @@
    builder
    search_engine
    search_utils
-   similarity_search
    store
 

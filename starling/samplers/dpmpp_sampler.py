@@ -100,6 +100,7 @@ class DPMppSampler(BaseSampler):
         encoder_model: VAE,
         n_steps: int,
         ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
+        generator: torch.Generator | None = None,
     ) -> None:
         """
         Set up a DPM++ sampler.
@@ -114,6 +115,10 @@ class DPMppSampler(BaseSampler):
             Number of steps (network evaluations).
         ionic_strength : float, optional
             Ionic strength in mM. Default configs.DEFAULT_IONIC_STRENGTH.
+        generator : torch.Generator or None, optional
+            Generator on the model's device that every random number the
+            sampler draws comes from. Default None, which draws from torch's
+            global generator.
 
         Raises
         ------
@@ -121,7 +126,7 @@ class DPMppSampler(BaseSampler):
             If n_steps is not an integer between 1 and the number of training
             timesteps, or the schedule is unusable.
         """
-        super().__init__(ddpm_model, encoder_model, ionic_strength)
+        super().__init__(ddpm_model, encoder_model, ionic_strength, generator)
         check_step_count(n_steps, self.num_timesteps)
 
         # signal scale, noise scale and half-log-SNR of every timestep

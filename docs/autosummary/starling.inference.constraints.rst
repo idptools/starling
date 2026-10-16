@@ -10,14 +10,6 @@ starling.inference.constraints
 
    
    
-   .. rubric:: Functions
-
-   .. autosummary::
-      :toctree:
-      :nosignatures:
-   
-      symmetrize_distance_maps
-   
    
 
    

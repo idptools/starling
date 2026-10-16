@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 """
-starling_search CLI
+starling-search CLI
 Usage:
-  starling_search build --root ROOT --index INDEX.faiss --tokens TOKENS_DIR [options]
-  starling_search query [--index INDEX.faiss|default] --metric cosine --seq SEQ [--seq SEQ ...] [options]
+  starling-search build --root ROOT --index INDEX.faiss --tokens TOKENS_DIR [options]
+  starling-search query [--index INDEX.faiss|default] [--metric cosine|l2] --seq SEQ [SEQ ...] [options]
+
+Several query sequences can be given either after one --seq (--seq SEQ1 SEQ2)
+or by repeating the flag (--seq SEQ1 --seq SEQ2).
 """
 
 from __future__ import annotations
@@ -19,13 +22,14 @@ import torch
 
 from starling.configs import ensure_search_artifacts
 from starling.search import IndexBuilder, SearchEngine
+from starling.utilities import check_device
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="starling_search",
+        prog="starling-search",
         description=(
-            "starling_search: build and query FAISS indexes for protein sequence similarity.\n\n"
+            "starling-search: build and query FAISS indexes for protein sequence similarity.\n\n"
             "Commands:\n"
             "  build   Build a FAISS index from pretokenized sequence data.\n"
             "  query   Query a FAISS index with one or more sequences and return nearest neighbors.\n"
@@ -34,9 +38,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         epilog=(
             "Examples:\n"
             "  Build an index:\n"
-            "    starling_search build --root /data/starling --tokens /data/tokens --index myindex.faiss\n\n"
-            "  Query the index:\n"
-            "    starling_search query --index myindex.faiss --seq MKT... --seq HLL... --k 20\n\n"
+            "    starling-search build --root /data/starling --tokens /data/tokens --index myindex.faiss\n\n"
+            "  Query the index (both forms give two queries):\n"
+            "    starling-search query --index myindex.faiss --seq MKT... HLL... --k 20\n"
+            "    starling-search query --index myindex.faiss --seq MKT... --seq HLL... --k 20\n\n"
             "Notes:\n"
             "  - Use 'starling-pretokenize' to create the tokens directory required by 'build'.\n"
             "  - Passing --index default or a missing path will attempt to fetch/cache the default index.\n"
@@ -59,17 +64,43 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     b.add_argument("--add-batch-size", type=int, default=100000)
     b.add_argument("--nprobe", type=int, default=16)
     gpu = b.add_mutually_exclusive_group()
-    gpu.add_argument("--use-gpu", dest="use_gpu", action="store_true")
-    gpu.add_argument("--no-gpu", dest="use_gpu", action="store_false")
-    b.set_defaults(use_gpu=True)
+    gpu.add_argument(
+        "--use-gpu",
+        dest="use_gpu",
+        action="store_true",
+        help="Train on GPU (default: auto, i.e. only if FAISS reports a GPU)",
+    )
+    gpu.add_argument(
+        "--no-gpu", dest="use_gpu", action="store_false", help="Train on CPU"
+    )
+    b.set_defaults(use_gpu=None)
     b.add_argument("--gpu-device", type=int, default=0)
     fp16_lut = b.add_mutually_exclusive_group()
     fp16_lut.add_argument("--gpu-fp16-lut", dest="gpu_fp16_lut", action="store_true")
     fp16_lut.add_argument("--no-gpu-fp16-lut", dest="gpu_fp16_lut", action="store_false")
     b.set_defaults(gpu_fp16_lut=True)
-    b.add_argument("--opq", action="store_true")
+    opq = b.add_mutually_exclusive_group()
+    opq.add_argument(
+        "--opq",
+        dest="opq",
+        action="store_true",
+        help="Learn an OPQ rotation before IVF-PQ (default)",
+    )
+    opq.add_argument(
+        "--no-opq", dest="opq", action="store_false", help="Plain IVF-PQ without OPQ"
+    )
+    b.set_defaults(opq=True)
     b.add_argument("--compress", action="store_true")
-    b.add_argument("--shard-regex", default=None)
+    b.add_argument(
+        "--shard-regex",
+        default=None,
+        help=(
+            "Regex whose first capture group is the numeric shard id, matched against each "
+            "ROOT/**/sequence_features.pt path (default: 'uniref50_idrs_only_(\\d{6})'). "
+            "The tokens file for a shard must be TOKENS_DIR/<shard dir name>.tokens.pt, where "
+            "the shard dir name is the path component containing the matched id."
+        ),
+    )
     verbosity = b.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", dest="verbose", action="store_true")
     verbosity.add_argument("--quiet", dest="verbose", action="store_false")
@@ -81,8 +112,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default="default",
         help="Path to a FAISS index (default: 'default' to auto-fetch/cache)",
     )
-    q.add_argument("--metric", choices=["cosine", "l2"], default="cosine")
-    q.add_argument("--seq", nargs="*", default=None, help="Sequences")
+    q.add_argument(
+        "--metric",
+        choices=["cosine", "l2"],
+        default=None,
+        help="Query metric (default: the metric the index was built with; a mismatch is an error)",
+    )
+    q.add_argument(
+        "--seq",
+        action="extend",
+        nargs="+",
+        default=None,
+        help="Query sequence(s); give several after one --seq or repeat the flag",
+    )
     q.add_argument("--k", type=int, default=10)
     q.add_argument("--nprobe", type=int, default=64)
     similarity = q.add_mutually_exclusive_group()
@@ -99,9 +141,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         choices=["query", "target", "max", "min", "avg"],
         default="query",
     )
-    q.add_argument("--device", default="cuda:0")
+    q.add_argument(
+        "--device",
+        default=None,
+        help="Device for encoding queries: cpu, mps, cuda or cuda:N (default: auto)",
+    )
     q.add_argument("--batch-size", type=int, default=256)
-    q.add_argument("--ionic-strength", type=int, default=150)
+    q.add_argument(
+        "--ionic-strength",
+        type=int,
+        default=150,
+        help="Ionic strength (mM) used to encode the queries (default: %(default)s)",
+    )
     q.add_argument("--max-cosine-similarity", type=float, default=None)
     q.add_argument("--min-l2-distance", type=float, default=None)
     q.add_argument("--length-min", type=int, default=None)
@@ -112,7 +163,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     q.set_defaults(rerank=True)
     q.add_argument("--rerank-batch-size", type=int, default=64)
     q.add_argument("--rerank-device", type=str, default=None)
-    q.add_argument("--rerank-ionic-strength", type=int, default=None)
+    q.add_argument(
+        "--rerank-ionic-strength",
+        type=int,
+        default=None,
+        help=(
+            "Ionic strength (mM) at which candidates AND queries are re-encoded for the rerank "
+            "(default: same as --ionic-strength)"
+        ),
+    )
     q.add_argument(
         "--out",
         default="nearest_neighbors",
@@ -296,6 +355,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             elif a.index == "default":
                 print(f"[search] Using default cached index '{idx_path}'")
             a.index = idx_path
+        # metric=None means "use the index's metric"; an explicit mismatch raises
         engine = SearchEngine.load(
             index_path=a.index, metric=a.metric, verbose=a.verbose
         )
@@ -305,10 +365,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         from starling.inference.generation import sequence_encoder_backend
 
+        # Resolve the device (auto: cuda, then mps, then cpu) and fail clearly on a bad one
+        device = str(check_device(a.device))
+
+        # Rerank re-encodes candidates and queries; by default at the query ionic strength
+        rerank_ionic_strength = (
+            a.ionic_strength
+            if a.rerank_ionic_strength is None
+            else a.rerank_ionic_strength
+        )
+
         seq_dict = {f"q{i}": s for i, s in enumerate(seqs)}
         embs = sequence_encoder_backend(
             sequence_dict=seq_dict,
-            device=a.device,
+            device=device,
             batch_size=a.batch_size,
             ionic_strength=a.ionic_strength,
             aggregate=True,
@@ -333,16 +403,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             length_max=a.length_max,
             rerank=a.rerank,
             rerank_batch_size=a.rerank_batch_size,
-            rerank_device=a.rerank_device or a.device,
-            rerank_ionic_strength=a.rerank_ionic_strength,
+            rerank_device=a.rerank_device or device,
+            rerank_ionic_strength=rerank_ionic_strength,
         )
         if a.out:
             base, _old_ext = os.path.splitext(a.out)
             if not base:  # edge case like '.results'
                 base = a.out.lstrip(".") or "output"
             out_path = base + (".csv" if a.out_format == "csv" else ".jsonl")
-            _write(out_path, a.out_format, seqs, res, engine, a.return_sim, a.metric)
-            _write_fasta(base, seqs, res, engine, a.return_sim, a.metric)
+            _write(out_path, a.out_format, seqs, res, engine, a.return_sim, engine.metric)
+            _write_fasta(base, seqs, res, engine, a.return_sim, engine.metric)
             print(f"wrote {out_path}")
         else:
             for qi, row in enumerate(res):

@@ -17,6 +17,7 @@
       :nosignatures:
    
       get_checkpoint_path
+      get_effective_batch_size
       save_config
       setup_checkpoints
       setup_data_module

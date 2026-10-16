@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 
 AA_COLOR = {'Y': '#ff9d00',
             'W': '#ff9d00',
@@ -35,14 +36,14 @@ def plot_matrices(original, computed, difference, filename):
 
     # Plot the computed distance matrix
     im1 = axs[1].imshow(computed, cmap="viridis")
-    axs[1].set_title("Computed Distance Matrix (GD)")
+    axs[1].set_title("Computed Distance Matrix (MDS/SMACOF)")
     axs[1].set_xlabel("Residue Index")
     axs[1].set_ylabel("Residue Index")
     fig.colorbar(im1, ax=axs[1])
 
     # Plot the difference matrix
     im2 = axs[2].imshow(difference, cmap="viridis")
-    axs[2].set_title("Difference Matrix (GD)")
+    axs[2].set_title("Difference Matrix (MDS/SMACOF)")
     axs[2].set_xlabel("Residue Index")
     axs[2].set_ylabel("Residue Index")
     fig.colorbar(im2, ax=axs[2])
@@ -50,10 +51,6 @@ def plot_matrices(original, computed, difference, filename):
     # Save the plot to disk
     plt.savefig(filename)
     plt.close()
-
-import matplotlib.pyplot as plt
-import numpy as np
-from sparrow.data.amino_acids import VALID_AMINO_ACIDS
 
 
 def plot_protein_arcs(sequence, 
@@ -81,6 +78,11 @@ def plot_protein_arcs(sequence,
         typically the ratio of the actual distances normalized by some limiting
         theoretical model distance.
 
+    color_dict : dict, optional
+        Mapping from one-letter amino acid code to the color used to draw that
+        residue. Residues missing from the dictionary are drawn in black.
+        Default is AA_COLOR.
+
     contacts : bool, optional
         If True, the contact scores are interpreted as contact scores. If False,
         the contact scores are interpreted as distances. Default is False.
@@ -90,6 +92,10 @@ def plot_protein_arcs(sequence,
 
     number_freq : int
         The frequency of the number labels on the x-axis. Default is 10.
+
+    filename : str, optional
+        If provided, the plot is saved to this path; otherwise it is shown
+        with plt.show(). Default is None.
 
     Returns
     -------
@@ -136,12 +142,13 @@ def plot_protein_arcs(sequence,
             min_val = min(values)
             max_val = max(values)
         
-            # Avoid division by zero in case all values are the same 
+            # Avoid division by zero in case all values are the same (including
+            # a single link): map them all to the midpoint and still draw them
             if max_val == min_val:
-                return [0.7] * len(values)  # If all values are the same, map them to the midpoint
-        
-            # Normalize values to [0, 1], then invert and scale to [0.5, 0.9]
-            recoded_links_vals = [0.5 + 0.4 * (max_val - v) / (max_val - min_val) for v in values]
+                recoded_links_vals = [0.7] * len(values)
+            else:
+                # Normalize values to [0, 1], then invert and scale to [0.5, 0.9]
+                recoded_links_vals = [0.5 + 0.4 * (max_val - v) / (max_val - min_val) for v in values]
     
             # finally, re-assign in the links list
             for i in range(len(links)):

@@ -16,8 +16,7 @@
       :toctree:
       :nosignatures:
    
-      dynamic_thresholding_fn
-      make_ddim_sampling_parameters
+      pseudo_linear_multistep_noise
    
    
 

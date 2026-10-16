@@ -68,7 +68,7 @@ Index Configuration
 
 **GPU Options:**
 
-* ``use_gpu``: Train on GPU
+* ``use_gpu``: Train on GPU (default: auto, i.e. only if FAISS can see a GPU)
 * ``gpu_device``: CUDA device ID
 * ``gpu_fp16_lut``: Use float16 lookup tables (to address 48KB SMEM limit)
 
@@ -88,6 +88,33 @@ The builder expects sharded feature files in this structure::
     │   └── sequence_features.pt
     └── ...
 
+Feature files are found recursively under ``root``. Each shard directory name
+must match ``shard_id_regex`` (default ``uniref50_idrs_only_(\\d{6})``), whose
+first capture group is the numeric shard id. Shard ids must be unique: two
+copies of the same shard anywhere under ``root`` is an error. Shards are
+indexed in increasing shard-id order, and global ids (gids) are assigned
+consecutively in that order.
+
+If ``tokens_dir`` is given, it must contain one tokens file per shard, named
+after the shard directory (i.e. the path component in which the shard id was
+matched)::
+
+    tokens_dir/
+    ├── uniref50_idrs_only_000000.tokens.pt
+    ├── uniref50_idrs_only_000001.tokens.pt
+    └── ...
+
+This is exactly what ``starling-pretokenize`` writes for a FASTA file named
+``<shard directory name>.fasta``. Each tokens file is a list of
+``{"header", "sequence", ...}`` records.
+
+Vectors and sequences are paired by header, not by position, so every feature
+shard must carry headers that match its tokens file one-to-one. Supported
+feature layouts that carry headers are ``{"features": {header: vector}}``,
+``{"features": (N, D) tensor, "headers": [...]}``, ``{header: vector}``, or a
+list of ``{"header": ..., "embedding": vector}`` records. All tokens files are
+checked (existence, record count and headers) before any training starts.
+
 And produces these outputs::
 
     my_index.faiss              # FAISS index
@@ -99,7 +126,7 @@ See Also
 --------
 * :class:`SearchEngine`: Query the built index
 * :class:`SequenceStore`: Direct database access
-* :mod:`starling.search.cli`: Command-line interface
+* :mod:`starling.scripts.starling_search`: Command-line interface (``starling-search build``)
 
 Notes
 -----
@@ -127,13 +154,17 @@ try:
     import faiss
 except Exception as e:
     raise ImportError(
-        "FAISS is required. Install with 'pip install faiss-gpu' (CUDA) or 'pip install faiss-cpu'."
+        "FAISS is required. Install with 'pip install faiss-cpu', or a GPU build of FAISS from conda."
     ) from e
 
 logger = logging.getLogger(__name__)
 
 # Default shard ID regex (captures 6-digit zero-padded numeric id)
 _SHARD_ID_RE_DEFAULT = re.compile(r"uniref50_idrs_only_(\d{6})")
+
+# Suffix of the per-shard tokens files. This matches what starling-pretokenize writes
+# (<FASTA basename>.tokens.pt), so a shard directory called X pairs with X.tokens.pt.
+_TOKENS_SUFFIX = ".tokens.pt"
 
 
 def _parse_shard_id_from_path(path: str) -> int:
@@ -183,6 +214,7 @@ class IndexBuilder:
 
         self.files: List[str] = []
         self.shard_ids: List[int] = []
+        self.shard_dirs: List[str] = []
         self.counts: List[int] = []
         self.feature_headers: dict[int, list[str] | None] = {}
         self.total: int = 0
@@ -204,6 +236,48 @@ class IndexBuilder:
             raise ValueError(
                 f"Shard id capture group not numeric in path: {path}"
             ) from e
+
+    def _shard_dir_name(self, path: str) -> str:
+        """
+        Return the name of the path component in which the shard id was matched.
+
+        The tokens file for a shard is named after this directory
+        (``<shard dir name>.tokens.pt``), so a custom ``shard_id_regex`` works
+        for both the feature shards and their tokens files.
+
+        Parameters
+        ----------
+        path : str
+            Path to a ``sequence_features.pt`` file.
+
+        Returns
+        -------
+        str
+            The shard directory name, e.g. ``uniref50_idrs_only_000123`` for the
+            default pattern.
+
+        Raises
+        ------
+        ValueError
+            If the pattern does not match the path, or if the shard id was matched
+            in the file name rather than in a directory name.
+        """
+        m = self._shard_id_re.search(path)
+        if not m:
+            raise ValueError(
+                f"Could not parse shard id with pattern '{self._shard_id_regex_str}' from path: {path}"
+            )
+
+        # Find the path component that contains the captured shard id
+        id_start = m.start(1)
+        component_start = path.rfind(os.sep, 0, id_start) + 1
+        component_end = path.find(os.sep, id_start)
+        if component_end == -1:
+            raise ValueError(
+                f"Shard id pattern '{self._shard_id_regex_str}' matched the file name rather than a "
+                f"shard directory in: {path}"
+            )
+        return path[component_start:component_end]
 
     def _extract_features_from_data(self, data: Any, *, path: str) -> torch.Tensor:
         """Accepts various formats; returns (N, D) float32."""
@@ -375,7 +449,8 @@ class IndexBuilder:
         pattern = os.path.join(self.root, "**", "sequence_features.pt")
         found_paths = glob.glob(pattern, recursive=True)
 
-        records = []
+        # Parse shard ids first so duplicates are caught before loading any features
+        paths_by_sid: dict[int, List[str]] = {}
         for p in found_paths:
             try:
                 sid = self._parse_shard_id(p)
@@ -383,11 +458,28 @@ class IndexBuilder:
                 if self.verbose:
                     self._log(f"[DISCOVER][SKIP] Could not parse shard id: {p}")
                 continue
+            paths_by_sid.setdefault(sid, []).append(p)
+
+        # Two feature files with the same shard id (e.g. an old and a new copy picked up by
+        # the recursive glob) would both be indexed but share one header list and one tokens
+        # file, which mislabels rows. We refuse rather than guess which copy is the right one.
+        duplicates = {sid: ps for sid, ps in paths_by_sid.items() if len(ps) > 1}
+        if duplicates:
+            details = "; ".join(
+                f"shard {sid}: {sorted(ps)}" for sid, ps in sorted(duplicates.items())
+            )
+            raise ValueError(
+                f"Duplicate shard ids found under {self.root} (each shard id must appear once): {details}"
+            )
+
+        records = []
+        for sid, (p,) in paths_by_sid.items():
+            shard_dir = self._shard_dir_name(p)
             data = torch.load(p, map_location="cpu")
             arr = self._extract_features_from_data(data, path=p)
             n, d = arr.shape
             headers = self._feature_headers(data, int(n))
-            records.append((sid, p, int(n), int(d), headers))
+            records.append((sid, p, shard_dir, int(n), int(d), headers))
 
         # Sort strictly by numeric shard id to keep pairing stable
         records.sort(key=lambda t: t[0])
@@ -396,15 +488,16 @@ class IndexBuilder:
             self._log(f"[DISCOVER] {len(records)} shard files")
 
         # Populate class fields in the sorted order
-        self.files, self.shard_ids, self.counts = [], [], []
+        self.files, self.shard_ids, self.shard_dirs, self.counts = [], [], [], []
         self.dim = None
-        for sid, p, n, d, headers in records:
+        for sid, p, shard_dir, n, d, headers in records:
             if self.dim is None:
                 self.dim = d
             elif self.dim != d:
                 raise ValueError(f"Dim mismatch {self.dim} vs {d} in {p}")
             self.files.append(p)
             self.shard_ids.append(sid)
+            self.shard_dirs.append(shard_dir)
             self.counts.append(n)
             self.feature_headers[sid] = headers
 
@@ -438,7 +531,9 @@ class IndexBuilder:
         self._log(f"[SAMPLE] target={sample_size}")
         import random
 
-        random.seed(seed)
+        # a local generator, so building an index never reseeds the caller's
+        # global random module; it draws exactly what random.seed(seed) did
+        rng = random.Random(seed)
         picks = []
         remaining = sample_size
 
@@ -454,7 +549,7 @@ class IndexBuilder:
             if take >= n:
                 picks.append(arr)
             else:
-                idxs = random.sample(range(n), take)
+                idxs = rng.sample(range(n), take)
                 picks.append(arr[idxs])
 
             remaining -= take
@@ -466,7 +561,9 @@ class IndexBuilder:
 
         # Shuffle if we over-sampled
         if out.size(0) > sample_size:
-            perm = torch.randperm(out.size(0))[:sample_size]
+            # seeded too, so the whole training sample is reproducible
+            generator = torch.Generator().manual_seed(seed)
+            perm = torch.randperm(out.size(0), generator=generator)[:sample_size]
             out = out[perm]
 
         self._log(f"[SAMPLE] actual={out.size(0)}")
@@ -547,7 +644,7 @@ class IndexBuilder:
         nlist: int = 16384,
         m: int = 64,
         nbits: int = 8,
-        use_gpu: bool = True,
+        use_gpu: Optional[bool] = None,
         add_batch_size: int = 100_000,
         nprobe: int = 16,
         gpu_device: int = 0,
@@ -557,6 +654,14 @@ class IndexBuilder:
         compress_sequences: bool = False,
     ) -> faiss.Index:
         """Build an OPQ+IVF-PQ index.
+
+        If ``tokens_dir`` is given, every shard's tokens file is checked
+        (existence, record count, and one-to-one header match with the feature
+        rows) before any sampling or training, so a bad tokens directory fails
+        in seconds rather than after the index has been trained. Tokens files are
+        expected at ``<tokens_dir>/<shard dir name>.tokens.pt``, where the shard
+        directory name is the path component matched by ``shard_id_regex`` (see
+        the module docstring for the full layout).
 
         Parameters
         ----------
@@ -571,7 +676,9 @@ class IndexBuilder:
         nbits : int, optional
             Number of bits per subvector, by default 8
         use_gpu : bool, optional
-            Whether to use GPU for training, by default True
+            Whether to use GPU for training. By default (None) a GPU is used only
+            if FAISS reports one (``faiss.get_num_gpus() > 0``), so the CPU-only
+            ``faiss-cpu`` build works out of the box.
         add_batch_size : int, optional
             Batch size for adding vectors to the index, by default 100_000
         nprobe : int, optional
@@ -583,7 +690,9 @@ class IndexBuilder:
         use_opq : bool, optional
             Whether to use Optimized Product Quantization (OPQ), by default True
         tokens_dir : Optional[str], optional
-            Directory containing tokenized sequences, by default None
+            Directory containing one ``<shard dir name>.tokens.pt`` file per shard
+            (as written by ``starling-pretokenize``). If given, a sequence store is
+            written next to the index. By default None.
         compress_sequences : bool, optional
             Whether to compress sequences, by default False
 
@@ -595,10 +704,31 @@ class IndexBuilder:
         Raises
         ------
         RuntimeError
-            If the index cannot be built.
+            If the index cannot be built, or if ``use_gpu=True`` but FAISS reports
+            no GPUs.
+        FileNotFoundError
+            If a shard's tokens file is missing.
+        ValueError
+            If a tokens file does not align one-to-one (by header) with its
+            feature shard.
         """
         if self.dim is None or self.total == 0:
             raise RuntimeError("No vectors discovered under root; cannot build")
+
+        # Resolve GPU use: auto-detect by default, fail clearly if a GPU was requested
+        # but this FAISS build cannot see one (e.g. faiss-cpu)
+        n_faiss_gpus = cast(Any, faiss).get_num_gpus()
+        if use_gpu is None:
+            use_gpu = n_faiss_gpus > 0
+        elif use_gpu and n_faiss_gpus == 0:
+            raise RuntimeError(
+                "use_gpu=True but FAISS reports no GPUs (is faiss-cpu installed?). "
+                "Use use_gpu=False (CLI: --no-gpu) or install a GPU build of FAISS."
+            )
+
+        # Validate the tokens for every shard before spending time on training
+        if tokens_dir:
+            self.validate_tokens(tokens_dir)
 
         self._log(
             f"[BUILD] start total={self.total} dim={self.dim} sample={sample_size} "
@@ -683,13 +813,14 @@ class IndexBuilder:
 
         # Save index and manifest
         self._log("[BUILD] Saving index to disk...")
-        self.save_index(index, index_path)
+        self.save_index(index, index_path, on_gpu=use_gpu)
         self.save_manifest(
             index_path + ".manifest.json",
             nlist=nlist,
             m=m,
             nbits=nbits,
             sample_size=sample_size,
+            use_opq=use_opq,
         )
 
         if tokens_dir:
@@ -702,21 +833,68 @@ class IndexBuilder:
         self._log(f"[BUILD] done in {time.time() - t0:.1f}s")
         return index
 
-    def save_index(self, index: faiss.Index, index_path: str) -> None:
-        """Save index to disk (converts GPU to CPU if needed)."""
-        try:
-            cpu_index = cast(Any, faiss).index_gpu_to_cpu(index)
-        except Exception:
-            cpu_index = index
+    def save_index(self, index: faiss.Index, index_path: str, on_gpu: Optional[bool] = None) -> None:
+        """
+        Save an index to disk, copying it to the CPU first if it lives on a GPU.
+
+        Parameters
+        ----------
+        index : faiss.Index
+            The index to save.
+        index_path : str
+            Output file.
+        on_gpu : bool, optional
+            Whether the index lives on a GPU. None (the default) assumes it
+            might whenever this FAISS build supports GPUs. Passing False
+            avoids index_gpu_to_cpu, which deep-copies a CPU index (doubling
+            its memory) when given one.
+
+        Raises
+        ------
+        RuntimeError
+            If copying a GPU index to the CPU fails. The error is raised
+            rather than swallowed, which used to surface as an unrelated
+            "cannot serialize" error from write_index.
+        """
+        # CPU builds of FAISS have no index_gpu_to_cpu, and their indexes are
+        # always on the CPU already
+        index_gpu_to_cpu = getattr(faiss, "index_gpu_to_cpu", None)
+        if on_gpu is None:
+            on_gpu = index_gpu_to_cpu is not None
+        cpu_index = index_gpu_to_cpu(index) if on_gpu and index_gpu_to_cpu is not None else index
         t0 = time.time()
         faiss.write_index(cpu_index, index_path)
         if self.verbose:
             self._log(f"[SAVE] Wrote {index_path} in {time.time() - t0:.2f}s")
 
     def save_manifest(
-        self, path: str, *, nlist: int, m: int, nbits: int, sample_size: int
+        self,
+        path: str,
+        *,
+        nlist: int,
+        m: int,
+        nbits: int,
+        sample_size: int,
+        use_opq: bool = True,
     ) -> None:
-        """Save a JSON manifest with index metadata."""
+        """Save a JSON manifest with index metadata.
+
+        Parameters
+        ----------
+        path : str
+            Output path for the JSON manifest.
+        nlist : int
+            Number of IVF partitions actually used (after any reduction).
+        m : int
+            Number of PQ subquantizers (also the OPQ subspace count when OPQ is used).
+        nbits : int
+            Bits per PQ subquantizer.
+        sample_size : int
+            Requested number of training samples.
+        use_opq : bool, optional
+            Whether the index was built with an OPQ rotation. When False the
+            manifest records ``"opq": null``. By default True.
+        """
         data = {
             "version": 1,
             "faiss_version": getattr(faiss, "__version__", "unknown"),
@@ -724,7 +902,7 @@ class IndexBuilder:
             "dim": int(self.dim) if self.dim is not None else None,
             "total": int(self.total),
             "ivfpq": {"nlist": nlist, "m": m, "nbits": nbits},
-            "opq": {"m": m},
+            "opq": {"m": m} if use_opq else None,
             "train": {"sample_size": sample_size},
             "build_date": time.strftime("%Y-%m-%d"),
         }
@@ -733,73 +911,141 @@ class IndexBuilder:
         if self.verbose:
             self._log(f"[MANIFEST] Wrote {path}")
 
-    def build_sequence_store(
-        self, db_path: str, tokens_dir: str, compress: bool = False, batch: int = 50_000
-    ) -> None:
-        """Build a SequenceStore SQLite database from tokenized sequence files.
+    def _tokens_path(self, tokens_dir: str, shard_index: int) -> str:
+        """
+        Return the expected tokens file path for one shard.
 
         Parameters
         ----------
-        db_path : str
-            The path to the SQLite database file to create.
         tokens_dir : str
-            The directory containing the tokenized sequence files.
-        compress : bool, optional
-            Whether to compress the stored sequences, by default False.
-        batch : int, optional
-            The number of rows to insert in each batch, by default 50_000.
+            Directory containing the per-shard tokens files.
+        shard_index : int
+            Position of the shard in ``self.files`` (not the shard id).
+
+        Returns
+        -------
+        str
+            ``<tokens_dir>/<shard dir name>.tokens.pt``.
+        """
+        return os.path.join(tokens_dir, self.shard_dirs[shard_index] + _TOKENS_SUFFIX)
+
+    def _load_aligned_token_records(self, tokens_dir: str, shard_index: int) -> List[dict]:
+        """
+        Load one shard's token records, reordered to match its feature rows.
+
+        Vectors and sequences are paired by header, so the tokens file must
+        contain exactly one record per feature row, with the same set of headers.
+
+        Parameters
+        ----------
+        tokens_dir : str
+            Directory containing the per-shard tokens files.
+        shard_index : int
+            Position of the shard in ``self.files`` (not the shard id).
+
+        Returns
+        -------
+        list of dict
+            Token records in feature-row order.
 
         Raises
         ------
         FileNotFoundError
-            If a tokenized sequence file is missing.
+            If the tokens file is missing.
         ValueError
-            If there is a length mismatch between tokens and features.
+            If the record count differs from the feature count, if the feature
+            shard has no headers, or if the headers are missing, duplicated or
+            do not match one-to-one.
         """
-        store = SequenceStore.open_writer(db_path)
+        feat_path = self.files[shard_index]
+        feat_count = self.counts[shard_index]
+        shard_id = self.shard_ids[shard_index]
+        tok_path = self._tokens_path(tokens_dir, shard_index)
 
+        if not os.path.exists(tok_path):
+            raise FileNotFoundError(f"Tokens file missing: {tok_path}")
+
+        recs = torch.load(tok_path, map_location="cpu")
+        tok_count = len(recs)
+
+        if tok_count != feat_count:
+            raise ValueError(
+                f"Length mismatch for {tok_path}: tokens={tok_count} vs features={feat_count} (shard {shard_id:06d})"
+            )
+
+        feature_headers = self.feature_headers[shard_id]
+        if feature_headers is None:
+            raise ValueError(
+                f"Feature shard {feat_path} has no stable sequence identifiers; "
+                "cannot safely align vectors with token records. Store headers "
+                "alongside features or provide a keyed feature mapping."
+            )
+        token_by_header = {}
+        for record in recs:
+            header = record.get("header")
+            if header is None or header in token_by_header:
+                raise ValueError(
+                    f"Missing or duplicate token header in {tok_path}; "
+                    "feature-to-sequence alignment must be one-to-one."
+                )
+            token_by_header[header] = record
+        if set(token_by_header) != set(feature_headers):
+            raise ValueError(
+                f"Feature and token identifiers do not match for shard {shard_id:06d}."
+            )
+        return [token_by_header[header] for header in feature_headers]
+
+    def validate_tokens(self, tokens_dir: str) -> None:
+        """
+        Check that every shard has a tokens file that aligns with its features.
+
+        This runs the same checks as ``build_sequence_store`` (file exists, record
+        count matches, headers match one-to-one) without writing anything, so
+        ``build_index`` can fail before training rather than after.
+
+        Parameters
+        ----------
+        tokens_dir : str
+            Directory containing one ``<shard dir name>.tokens.pt`` file per shard.
+
+        Raises
+        ------
+        FileNotFoundError
+            If any shard's tokens file is missing.
+        ValueError
+            If any shard's tokens do not align with its feature rows.
+        """
+        for shard_index in range(len(self.files)):
+            self._load_aligned_token_records(tokens_dir, shard_index)
+        self._log(f"[SEQSTORE] Validated tokens for {len(self.files)} shards in {tokens_dir}")
+
+    def _insert_sequence_rows(
+        self, store: SequenceStore, tokens_dir: str, compress: bool, batch: int
+    ) -> int:
+        """
+        Insert one row per indexed vector into an open writer store.
+
+        Parameters
+        ----------
+        store : SequenceStore
+            Writer store opened with ``SequenceStore.open_writer``.
+        tokens_dir : str
+            Directory containing one ``<shard dir name>.tokens.pt`` file per shard.
+        compress : bool
+            Whether to zstd-compress sequences and headers.
+        batch : int
+            Number of rows per ``insert_rows`` call.
+
+        Returns
+        -------
+        int
+            Total number of rows written (equal to the number of indexed vectors).
+        """
         gid_base = 0
         rows = []
 
-        for feat_path, feat_count, shard_id in zip(
-            self.files, self.counts, self.shard_ids
-        ):
-            tok_path = os.path.join(
-                tokens_dir, f"uniref50_idrs_only_{shard_id:06d}.tokens.pt"
-            )
-
-            if not os.path.exists(tok_path):
-                raise FileNotFoundError(f"Tokens file missing: {tok_path}")
-
-            recs = torch.load(tok_path, map_location="cpu")
-            tok_count = len(recs)
-
-            if tok_count != feat_count:
-                raise ValueError(
-                    f"Length mismatch for {tok_path}: tokens={tok_count} vs features={feat_count} (shard {shard_id:06d})"
-                )
-
-            feature_headers = self.feature_headers[shard_id]
-            if feature_headers is None:
-                raise ValueError(
-                    f"Feature shard {feat_path} has no stable sequence identifiers; "
-                    "cannot safely align vectors with token records. Store headers "
-                    "alongside features or provide a keyed feature mapping."
-                )
-            token_by_header = {}
-            for record in recs:
-                header = record.get("header")
-                if header is None or header in token_by_header:
-                    raise ValueError(
-                        f"Missing or duplicate token header in {tok_path}; "
-                        "feature-to-sequence alignment must be one-to-one."
-                    )
-                token_by_header[header] = record
-            if set(token_by_header) != set(feature_headers):
-                raise ValueError(
-                    f"Feature and token identifiers do not match for shard {shard_id:06d}."
-                )
-            recs = [token_by_header[header] for header in feature_headers]
+        for shard_index, (feat_count, shard_id) in enumerate(zip(self.counts, self.shard_ids)):
+            recs = self._load_aligned_token_records(tokens_dir, shard_index)
 
             for local_idx, r in enumerate(recs):
                 seq = r["sequence"]
@@ -824,6 +1070,42 @@ class IndexBuilder:
 
         if rows:
             store.insert_rows(rows)
+        return gid_base
+
+    def build_sequence_store(
+        self, db_path: str, tokens_dir: str, compress: bool = False, batch: int = 50_000
+    ) -> None:
+        """Build a SequenceStore SQLite database from tokenized sequence files.
+
+        Tokens files are expected at ``<tokens_dir>/<shard dir name>.tokens.pt``
+        (see the module docstring). If anything fails, the writer's temporary
+        ``*.building.<pid>.<ts>`` file is deleted before the error is re-raised.
+
+        Parameters
+        ----------
+        db_path : str
+            The path to the SQLite database file to create.
+        tokens_dir : str
+            The directory containing the tokenized sequence files.
+        compress : bool, optional
+            Whether to compress the stored sequences, by default False.
+        batch : int, optional
+            The number of rows to insert in each batch, by default 50_000.
+
+        Raises
+        ------
+        FileNotFoundError
+            If a tokenized sequence file is missing.
+        ValueError
+            If there is a length mismatch between tokens and features.
+        """
+        store = SequenceStore.open_writer(db_path)
+        try:
+            n_rows = self._insert_sequence_rows(store, tokens_dir, compress, batch)
+        except BaseException:
+            # Don't leave an orphaned temp database behind on failure
+            store.close_discard()
+            raise
 
         store.close_publish()
-        self._log(f"[SEQSTORE] Wrote {db_path} with {gid_base} entries")
+        self._log(f"[SEQSTORE] Wrote {db_path} with {n_rows} entries")

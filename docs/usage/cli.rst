@@ -10,32 +10,72 @@ end-to-end workflow.
 ------------
 
 Generate conformational ensembles directly from the shell. The CLI mirrors the
-:func:`starling.generate` signature and accepts sequences, FASTA/TSV files, or
-lists of sequences.
+:func:`starling.generate` signature and accepts a single sequence or a
+FASTA/TSV/``.seq.in`` file.
 
 .. code-block:: bash
 
+   mkdir -p outputs
    starling my_sequences.fasta \
        -c 200 \
        --ionic_strength 150 \
-       --return_structures \
        --output_directory outputs \
-	   -r
-	   
+       -r
 
 Key options:
 
 * ``-c`` / ``--conformations`` - number of conformers to sample (default 400)
-* ``-r``/``--return_structures`` – Flag which, if provided, means STARLING returns 3D coordinates alongside distance maps as a .pdb file (single topology file) and a .xtc file (compressed trajectory format).
-* ``--ionic_strength`` - choose 20, 150, or 300 mM solvent environments
-* ``--steps`` - diffusion steps for the sampler (default 25)
+* ``-r``/``--return_structures`` – Flag which, if provided, means STARLING returns 3D coordinates alongside distance maps as a .pdb file (single topology file) and a .xtc file (compressed trajectory format). The structures are relaxed with Mpipi-GG by default (see below).
+* ``--relax [standard|fast]`` / ``--no-relax`` - relax the ``-r`` structures
+  with Mpipi-GG (``standard`` is the default whenever ``-r`` is given, and what
+  ``--relax`` alone means); ``--relax fast`` runs a shorter MDS step before
+  relaxing, and ``--no-relax`` keeps the raw reconstructed structures.
+  ``--relax`` without ``-r`` is an error
+* ``--compile-forces`` - fuse the CUDA thermalization forces for faster
+  relaxation of large jobs (adds compilation time; needs ``-r``, relaxation and
+  a CUDA device)
+* ``--seed`` - random seed; the same seed reproduces the same ensembles on the
+  same hardware and settings (default: unseeded)
+* ``--ionic_strength`` - ionic strength in mM (default 150; STARLING was
+  trained at 20, 150 and 300 mM)
+* ``-s`` / ``--steps`` - sampler steps (default 30; DDIM warns below 10 steps,
+  PLMS needs at least 20, and DDPM always uses all 1000 timesteps)
+* ``--sampler`` - ``ddim`` (default), ``ddpm``, ``plms`` or ``dpmpp``
+* ``-b`` / ``--batch_size`` - conformations sampled per batch (default 100)
 * ``--device`` - force CPU, CUDA (``cuda:0``), or Apple MPS
+* ``-o`` / ``--output_directory`` - where to write results (default ``.``; the
+  directory must already exist)
 * ``--outname`` - override the output prefix when providing a single sequence
 * ``--remove-errors`` - discard physically impossible conformations and regenerate replacements (see below)
+* ``--disable_progress_bar`` - hide both progress bars
 
+Outputs live under the requested directory: ``<name>.starling`` archives plus
+``<name>_STARLING.pdb`` and ``<name>_STARLING.xtc`` when ``--return_structures``
+is set. ``<name>`` is the full sequence name (dots included); names containing
+``/`` are rejected before sampling starts.
 
-Outputs live under the requested directory and includes ``.starling`` archives
-plus optional PDB/XTC trajectories when ``--return_structures`` is set.
+Relaxing structures
+~~~~~~~~~~~~~~~~~~~
+
+STARLING predicts distance maps, and ``-r`` reconstructs 3D structures from
+them by classical MDS followed by weighted SMACOF. This gets the global shape
+right but leaves bonds compressed and beads too close together, so by default
+each structure is then relaxed with the Mpipi-GG force field while restrained
+to its STARLING distance map: a FIRE energy minimization followed by 250 steps
+of Langevin thermalization at 300 K. Local geometry ends up close to that of
+Mpipi-GG simulations while global dimensions are essentially unchanged. Use
+``--no-relax`` for the raw reconstructed structures.
+
+``--relax fast`` computes the MDS starting point from only the eigenvectors it
+needs and runs 100 rather than 300 SMACOF iterations before relaxing, which
+makes the reconstruction about 4x faster for long sequences. The relaxed
+ensembles match the standard ones in fit to the distance maps, Rg, bond
+lengths and closest contacts, though individual conformations differ (see
+:ref:`relaxing-structures`).
+
+Structures built later from an archive (for example by ``starling2xtc``) are
+not relaxed; see :ref:`relaxing-existing-ensembles` for relaxing an existing
+ensemble from Python.
 
 Removing erroneous conformations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -54,10 +94,12 @@ Screening happens in two stages:
 
 1. The raw STARLING distance maps are screened with
    :meth:`~starling.structure.ensemble.Ensemble.check_for_errors`.
-2. When ``-r``/``--return_structures`` is also set, the reconstructed 3D
-   conformations are screened with
+2. When ``-r``/``--return_structures`` is also set, the reconstructed (and,
+   by default, relaxed) 3D conformations are screened with
    :meth:`~starling.structure.ensemble.Ensemble.check_for_errors_trajectory`,
-   which catches artefacts introduced by the MDS embedding itself.
+   which catches artefacts introduced by the MDS embedding itself. Relaxation
+   runs before this screen, so conformations broken by MDS are repaired rather
+   than discarded.
 
 The cheap distance-map screen runs first, so 3D reconstruction is only spent on
 conformations that already look plausible. Discarded conformations are replaced
@@ -120,11 +162,23 @@ All converters operate on ``.starling`` archives created by the generator.
      - Print the amino-acid sequence associated with an archive.
    * - ``starling2info``
      - Display metadata such as version, conformer count, and default weights.
-   * - ``starling2starling`` / ``numpy2starling`` / ``xtc2starling``
-     - Regenerate archives from alternative representations. 
+   * - ``starling2starling``
+     - Error-check an archive (``--error-check``); with ``--remove-errors``
+       (which implies ``--error-check``) write ``fixed_<name>.starling`` with
+       the erroneous conformations removed. Nothing is written if no errors
+       are found.
+   * - ``numpy2starling`` / ``xtc2starling``
+     - Build archives from a NumPy distance-map array or an XTC trajectory.
+       ``numpy2starling`` checks that an attached XTC has one frame per
+       distance map; ``xtc2starling`` keeps the trajectory's coordinates as
+       the archive's structures.
 
-By default outputs are written next to the source file; pass ``-o`` to choose a
-new directory or filename prefix.
+By default outputs are written to the current directory and named after the
+input file; pass ``-o`` with an existing directory (the output keeps the
+input's name) or a filename prefix. ``starling2sequence`` has no ``-o``; it
+prints to stdout, so redirect it with ``>``. The converters never re-save the
+input archive, and structures that ``starling2pdb``/``starling2xtc``
+reconstruct from the distance maps are not relaxed.
 
 .. _removing-erroneous-frames:
 
@@ -142,12 +196,21 @@ geometry.
 
 .. code-block:: bash
 
-   starling2xtc my_ensemble.starling -o cleaned.xtc --remove-errors
+   starling2xtc my_ensemble.starling -o cleaned --remove-errors
 
-The equivalent distance-map check (operating on the raw STARLING distance maps
-rather than the reconstructed coordinates) is available via ``starling2starling
---error-check --remove-errors`` and the
-:meth:`starling.structure.ensemble.Ensemble.check_for_errors` method.
+This writes ``cleaned.pdb`` and ``cleaned.xtc``. The equivalent distance-map
+check (operating on the raw STARLING distance maps rather than the
+reconstructed coordinates) is available via ``starling2starling
+--remove-errors`` and the
+:meth:`starling.structure.ensemble.Ensemble.check_for_errors` method:
+
+.. code-block:: bash
+
+   # writes ./fixed_my_ensemble.starling if any erroneous conformations are found
+   starling2starling my_ensemble.starling --remove-errors
+
+   # ...or into an existing directory
+   starling2starling my_ensemble.starling --remove-errors -o cleaned_archives
 
 Search tooling
 --------------
@@ -175,8 +238,8 @@ needed to generate or analyse ensembles.
 
 .. important::
 
-   The training tools require Hydra, OmegaConf and Weights & Biases, which are
-   **not** installed by default. Install the ``train`` extra first, otherwise
+   The training tools require Hydra, OmegaConf, Weights & Biases, WebDataset
+   and tabulate, which are **not** installed by default. Install the ``train`` extra first, otherwise
    these commands fail at startup with a ``ModuleNotFoundError``:
 
    .. code-block:: bash
@@ -192,7 +255,11 @@ for example:
 
 .. code-block:: bash
 
-    starling-ddpm-train trainer.max_epochs=100
+    starling-ddpm-train trainer.num_epochs=100
+
+Diffusion training resumes automatically from ``last.ckpt`` if an earlier run
+left one in the output directory. Only the WebDataset (tar shard) dataloaders
+are supported; the ``h5`` dataloader type raises an error.
 
 Tips
 ----
@@ -201,5 +268,8 @@ Tips
   paths without launching a generation run.
 * All CLI commands respect the ``CUDA_VISIBLE_DEVICES`` environment variable—set
   it ahead of time for multi-GPU systems.
-* Each converter lazily reconstructs structures the first time they are needed
-  and caches the trajectory in the ``.starling`` archive for subsequent use.
+* ``starling2pdb`` and ``starling2xtc`` reconstruct (unrelaxed) structures when
+  the archive has none, but they do not save them back into the ``.starling``
+  archive, so the reconstruction is repeated on every call. To keep structures
+  with an archive, generate with ``-r`` or save an ensemble that has structures
+  from Python.

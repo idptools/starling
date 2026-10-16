@@ -28,6 +28,7 @@
       :toctree:
       :nosignatures:
    
+      DiffusionBatch
       DiffusionModel
    
    

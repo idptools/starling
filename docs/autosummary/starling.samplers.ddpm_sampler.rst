@@ -10,14 +10,6 @@
 
    
    
-   .. rubric:: Functions
-
-   .. autosummary::
-      :toctree:
-      :nosignatures:
-   
-      extract
-   
    
 
    

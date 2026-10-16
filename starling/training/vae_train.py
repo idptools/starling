@@ -14,6 +14,7 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
 from starling.models.vae import VAE
+from starling.utilities import MODEL_FLOAT32_MATMUL_PRECISION
 
 
 @rank_zero_only
@@ -22,7 +23,7 @@ def wandb_init(project: str = "starling", id=None):
 
 
 def setup_directories(output_path):
-    """Create necessary directories and save the configuration file."""
+    """Create the output directory if it does not already exist."""
     os.makedirs(output_path, exist_ok=True)
 
 
@@ -55,13 +56,52 @@ def get_checkpoint_path(output_path):
     return "last" if checkpoint_files else None
 
 
+def get_effective_batch_size(trainer: pl.Trainer, batch_size: int) -> int:
+    """
+    Compute the number of samples consumed per training step across all processes.
+
+    The world size is read from the Trainer after construction because Lightning has
+    already resolved trainer.cuda (an int, -1 for all available devices, or a list of
+    device indices) and num_nodes into the number of processes it will launch.
+
+    Parameters
+    ----------
+    trainer : pl.Trainer
+        The constructed Trainer that will run training.
+    batch_size : int
+        The per-process batch size from the dataloader config.
+
+    Returns
+    -------
+    int
+        world_size * batch_size.
+
+    Raises
+    ------
+    ValueError
+        If the world size or batch size is not a positive integer.
+    """
+    world_size = trainer.world_size
+    if world_size < 1 or batch_size < 1:
+        raise ValueError(
+            f"Expected a positive world size and batch size, got world_size={world_size} "
+            f"and batch_size={batch_size}"
+        )
+    return world_size * batch_size
+
+
 def setup_data_module(cfg, effective_batch_size=None):
     """Set up the data module for VAE training."""
 
     if cfg.dataloader.type == "h5":
-        dataloader_config = cfg.dataloader.h5
-        dataset = instantiate(dataloader_config)
-        dataset.setup(stage="fit")
+        # The h5 block in configs/dataloader/vae_dataloader.yaml targets
+        # starling.data.VAE_loader.MatrixDataModule, which no longer exists, so only
+        # tar shards are supported
+        raise NotImplementedError(
+            "dataloader.type 'h5' is not supported for VAE training; "
+            "set dataloader.type to 'tar' and point dataloader.tar.dataset at "
+            "webdataset tar shards"
+        )
 
     elif cfg.dataloader.type == "tar":
         from starling.data.VAE_loader_tar import VAEdataloader
@@ -77,7 +117,13 @@ def setup_data_module(cfg, effective_batch_size=None):
 
 
 def setup_vae_model(cfg):
-    """Set up the VAE model, with support for resuming from checkpoint or fine-tuning with custom args."""
+    """Set up the VAE model, optionally initialized from checkpoint weights for fine-tuning.
+
+    When fine-tuning, the model is built from cfg.vae_model and the checkpoint's
+    weights are loaded strictly, so cfg.vae_model must describe the same architecture
+    as the checkpoint. Only settings that do not change the weights (e.g. learning
+    rate, scheduler, KLD weighting) can differ from the original run.
+    """
     model_path = cfg.trainer.get("checkpoint", None)
 
     if cfg.trainer.get("fine_tune", False) and model_path:
@@ -89,7 +135,7 @@ def setup_vae_model(cfg):
         checkpoint = torch.load(model_path, map_location="cpu")
         state_dict = checkpoint["state_dict"]
 
-        # Load only the weights, ignoring missing or extra keys
+        # Load the weights strictly, so any missing or unexpected key raises
         vae.load_state_dict(state_dict, strict=True)
         print("Loaded checkpoint weights with custom model configuration")
     else:
@@ -114,6 +160,10 @@ def train_vae(cfg: DictConfig):
     Args:
         cfg: The configuration object loaded by Hydra
     """
+    # Training owns the whole process, so the models' TF32 matmul precision
+    # is set process-wide here; library code only ever scopes it
+    torch.set_float32_matmul_precision(MODEL_FLOAT32_MATMUL_PRECISION)
+
     # Setup directories and save config
     output_path = cfg.trainer.output_path
     os.makedirs(output_path, exist_ok=True)
@@ -146,17 +196,6 @@ def train_vae(cfg: DictConfig):
             ckpt_path = last_checkpoint
             print(f"Resuming from last checkpoint: {ckpt_path}")
 
-    # Setup data module
-
-    if cfg.dataloader.type == "tar":
-        effective_batch_size = (
-            cfg.trainer.cuda * cfg.trainer.num_nodes * cfg.dataloader.tar.batch_size
-        )
-    else:
-        effective_batch_size = None
-
-    dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
-
     # Setup VAE model
     vae = setup_vae_model(cfg)
 
@@ -179,9 +218,21 @@ def train_vae(cfg: DictConfig):
             save_last_checkpoint,
             LearningRateMonitor(logging_interval="step"),
         ],
+        gradient_clip_val=cfg.trainer.gradient_clip_val,
         precision=cfg.trainer.precision,
         logger=wandb_logger,
     )
+
+    # Setup data module after the Trainer so the effective batch size uses the
+    # world size Lightning resolved from trainer.cuda and num_nodes
+    if cfg.dataloader.type == "tar":
+        effective_batch_size = get_effective_batch_size(
+            trainer, cfg.dataloader.tar.batch_size
+        )
+    else:
+        effective_batch_size = None
+
+    dataset = setup_data_module(cfg, effective_batch_size=effective_batch_size)
 
     # Start training (don't pass checkpoint path when fine-tuning)
     trainer.fit(

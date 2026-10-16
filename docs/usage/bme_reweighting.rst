@@ -20,7 +20,7 @@ BME works by solving the constrained optimisation problem:
 
 .. math::
 
-   \min_{\boldsymbol{w}} \; \chi^2(\boldsymbol{w})
+   \min_{\boldsymbol{w}} \; \tfrac{1}{2} \chi^2(\boldsymbol{w})
    + \theta \, D_{\mathrm{KL}}(\boldsymbol{w} \| \boldsymbol{w}_0)
 
 where :math:`\chi^2` measures how well the reweighted ensemble matches
@@ -35,7 +35,7 @@ Defining Experimental Observables
 ---------------------------------
 
 Wrap each measurement in an
-:class:`~starling.structure.bme.ExperimentalObservable`:
+:class:`~starling.structure.bme_utils.ExperimentalObservable`:
 
 .. code-block:: python
 
@@ -105,15 +105,51 @@ The simplest path is to call
 
    print(f"χ² initial: {result.chi_squared_initial:.3f}")
    print(f"χ² final:   {result.chi_squared_final:.3f}")
+   weights = result.weights  # one weight per conformation
 
-After reweighting, ensemble analysis methods accept ``use_bme_weights=True``
-to compute weighted averages:
+If you leave ``theta=None`` (the default), :math:`\theta` is chosen
+automatically by an L-curve scan. ``theta_range`` sets the values scanned: a
+``(min, max)`` tuple scans ``theta_n_points`` (default 15) log-spaced values
+between the two, while a list or array is used as the exact grid. The knee of
+the L-curve is found with ``theta_method`` (``"perpendicular"``, the default,
+or ``"curvature"``), and the scan is stored in
+``result.metadata['theta_scan_result']`` (also available as
+``ensemble.theta_scan_result``):
+
+.. code-block:: python
+
+   result = ensemble.reweight_bme(
+       observables=observables,
+       calculated_values=calculated,
+       theta_range=(0.01, 10.0),
+       theta_n_points=15,
+   )
+   scan = result.metadata["theta_scan_result"]
+   print(f"Selected theta: {scan.optimal_theta:.3g}")
+
+A successful fit is cached on the ensemble and reused only when
+``reweight_bme`` is called again with identical inputs; any change to the
+observables, calculated values, theta settings, optimizer settings or initial
+weights triggers a new fit. If a fit fails, a ``RuntimeWarning`` is issued and
+the result is not cached.
+
+After reweighting, ``rij()``, ``end_to_end_distance()``,
+``radius_of_gyration()``, ``local_radius_of_gyration()`` and
+``distance_maps()`` accept ``use_bme_weights=True`` to compute weighted
+averages:
 
 .. code-block:: python
 
    weighted_rg = ensemble.radius_of_gyration(
        return_mean=True, use_bme_weights=True
    )
+
+Other per-conformation values, such as ``hydrodynamic_radius()``, do not take
+``use_bme_weights``; weight them yourself:
+
+.. code-block:: python
+
+   weighted_rh = np.average(ensemble.hydrodynamic_radius(), weights=result.weights)
 
 Via the low-level BME class
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -131,7 +167,7 @@ For more control, instantiate :class:`~starling.structure.bme.BME` directly:
    )
 
    result = bme.fit(verbose=True)
-   optimised_weights = bme.weights
+   optimised_weights = result.weights  # also available as bme.result.weights
 
    # Predict reweighted values for new calculated data
    predicted = bme.predict(calculated)
@@ -140,35 +176,49 @@ Theta Scanning
 --------------
 
 Choosing the right :math:`\theta` is critical. Use
-:func:`~starling.structure.bme.theta_scan` to sweep a range and inspect the
+:func:`~starling.structure.bme_utils.theta_scan` to sweep a range and inspect the
 trade-off:
 
 .. code-block:: python
 
    from starling.structure.bme import theta_scan
 
+   # an explicit grid of theta values...
    scan_result = theta_scan(
        observables=observables,
        calculated_values=calculated,
-       theta_values=[0.01, 0.1, 0.5, 1.0, 5.0, 10.0],
+       theta_range=[0.01, 0.1, 0.5, 1.0, 5.0, 10.0],
+   )
+
+   # ...or a (min, max) range scanned at n_points log-spaced values
+   scan_result = theta_scan(
+       observables=observables,
+       calculated_values=calculated,
+       theta_range=(0.01, 10.0),
+       n_points=15,
    )
 
 The returned :class:`~starling.structure.bme_utils.ThetaScanResult` contains
-per-theta :math:`\chi^2`, effective sample sizes, and KL divergence values so
-you can select the best balance between fitting and diversity.
+the scanned ``theta_values`` with the per-theta :math:`\chi^2`
+(``chi_squared_values``), :math:`\phi` (``phi_values``, the effective fraction
+of frames) and KL divergence (``kl_divergence_values``), plus the automatically
+selected ``optimal_theta``, so you can select the best balance between fitting
+and diversity.
 
 Interpreting Results
 --------------------
 
-:class:`~starling.structure.bme.BMEResult` provides several diagnostic helpers:
+:class:`~starling.structure.bme_utils.BMEResult` provides several diagnostic helpers:
 
 .. code-block:: python
 
    # Run diagnostics – warns if effective sample size is low
    result.diagnostics(warn_threshold=0.5)
 
-   # Effective sample size (fraction of the original ensemble retained)
-   n_eff = result.phi
+   # Effective fraction of frames (0-1); multiply by the number of
+   # conformations for the effective sample size
+   phi = result.phi
+   n_eff = phi * len(result.weights)
 
    # KL divergence from the prior
    kl = result.kl_divergence

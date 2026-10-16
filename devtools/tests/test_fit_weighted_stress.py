@@ -103,3 +103,29 @@ def test_family_grouped_validation_excludes_related_calibration_sequences():
     assert folds[0]["fit_sequences"] == ["b", "c"]
     assert folds[1]["fit_sequences"] == ["b", "c"]
     assert folds[0]["held_out_group"] == "a"
+
+
+@pytest.mark.parametrize("too_short", [5, 7])
+def test_fit_error_model_rejects_sequences_without_long_range_separations(too_short):
+    """A 7-residue sequence has separations 1-6 only, so its long-range slice is empty
+    and the plateau fit would silently become NaN; it must be rejected instead."""
+    records = [
+        {"length": too_short, "error_by_separation": [1.0] * (too_short - 1)},
+        {"length": 20, "error_by_separation": [3] * 6 + [4] * 13},
+    ]
+
+    with pytest.raises(ValueError, match="at least 8 residues"):
+        fit_error_model(records)
+
+
+def test_fit_error_model_accepts_shortest_sequence_with_a_long_range_separation():
+    """An 8-residue sequence has one long-range separation, which is enough to fit."""
+    records = [
+        {"length": FIT.MIN_RESIDUES, "error_by_separation": [1.0] * 6 + [2.0]},
+        {"length": 20, "error_by_separation": [3] * 6 + [4] * 13},
+    ]
+
+    fit = fit_error_model(records)
+
+    assert np.isfinite(fit["plateau_intercept"])
+    assert np.isfinite(fit["plateau_slope"])

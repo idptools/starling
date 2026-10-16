@@ -30,6 +30,13 @@ if TYPE_CHECKING:
 # (fourth-order Adams-Bashforth)
 MAX_PREVIOUS_PREDICTIONS: Final[int] = 3
 
+# Fewest steps PLMS accepts. With fewer, its first steps are huge jumps from
+# pure noise and the multistep combination amplifies their error: with an
+# exact noise predictor the ensemble spread came out 1.2-1.3x too wide at
+# 7-10 steps and over 100x too wide at 1-2 steps, but within 2% from 20 steps
+# on (see starling/tests/sampler_tests/test_exact_denoiser_bias.py)
+PLMS_MIN_STEPS: Final[int] = 20
+
 
 def pseudo_linear_multistep_noise(
     predicted_noise: torch.Tensor,
@@ -91,6 +98,7 @@ class PLMSSampler(BaseSampler):
         n_steps: int,
         ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
         ddim_discretize: str = UNIFORM_DISCRETIZATION,
+        generator: torch.Generator | None = None,
     ) -> None:
         """
         Set up a PLMS sampler.
@@ -107,15 +115,23 @@ class PLMSSampler(BaseSampler):
             Ionic strength in mM. Default configs.DEFAULT_IONIC_STRENGTH.
         ddim_discretize : str, optional
             Spacing of the timestep grid, 'uniform' (default) or 'quad'.
+        generator : torch.Generator or None, optional
+            Generator on the model's device that every random number the
+            sampler draws comes from. Default None, which draws from torch's
+            global generator.
 
         Raises
         ------
         ValueError
-            If n_steps is not an integer between 1 and the number of training
-            timesteps.
+            If n_steps is not an integer between PLMS_MIN_STEPS (20) and the
+            number of training timesteps.
         """
-        super().__init__(ddpm_model, encoder_model, ionic_strength)
+        super().__init__(ddpm_model, encoder_model, ionic_strength, generator)
         check_step_count(n_steps, self.num_timesteps)
+        if n_steps < PLMS_MIN_STEPS:
+            raise ValueError(
+                f"PLMS needs at least {PLMS_MIN_STEPS} steps (got {n_steps}); use DDIM or DPM++ for fewer steps"
+            )
         self.timesteps, self.next_timesteps = ddim_timesteps(self.alphas_cumprod, n_steps, ddim_discretize)
 
     def denoising_step(

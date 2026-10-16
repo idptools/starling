@@ -21,6 +21,7 @@ starling.search.builder.IndexBuilder
       ~IndexBuilder.sample_vectors
       ~IndexBuilder.save_index
       ~IndexBuilder.save_manifest
+      ~IndexBuilder.validate_tokens
    
    
 

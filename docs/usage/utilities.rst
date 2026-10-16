@@ -24,8 +24,8 @@ File and Path Helpers
    # Expand ~ in a path
    full_path = fix_ref_to_home("~/projects/starling/output")
 
-   # Check whether a file exists (raises on missing)
-   check_file_exists("ensemble.starling")
+   # Check whether a file exists (returns True or False)
+   exists = check_file_exists("ensemble.starling")
 
    # Strip the extension from a filename
    stem = remove_extension("ensemble.starling")  # "ensemble"
@@ -35,23 +35,23 @@ Device Management
 
 :func:`~starling.utilities.check_device` normalises a user-supplied device
 string into a :class:`torch.device` object, automatically selecting the best
-available accelerator when the input is ``"gpu"``:
+available accelerator when the input is ``None``. It accepts ``None``,
+``"cpu"``, ``"mps"``, ``"cuda"``, ``"cuda:N"`` or a :class:`torch.device`, and
+raises a ``ValueError`` for anything else (including ``"gpu"``) or for a
+device that is not available:
 
 .. code-block:: python
 
    from starling.utilities import check_device
 
-   # Automatically pick GPU (CUDA or MPS) if available, else CPU
-   device = check_device("gpu")
+   # Automatically pick CUDA, then MPS, if available, else CPU
+   device = check_device(None)
 
    # Force a specific CUDA device
    device = check_device("cuda:1")
 
    # Use CPU explicitly
    device = check_device("cpu")
-
-On macOS, :func:`~starling.utilities.get_macOS_version` is used internally
-to determine MPS availability.
 
 Ensemble File I/O
 -----------------
@@ -68,14 +68,19 @@ are exposed for advanced use:
    write_starling_ensemble(
        ensemble_object,
        "my_ensemble",
-       compress=True,
-       reduce_precision=2,           # decimal places to keep
-       compression_algorithm="lzma", # or "gzip"
+       compress=True,                # writes my_ensemble.starling.xz
+       reduce_precision=True,        # round to 0.1 Å and store as float16
+       compression_algorithm="lzma", # or "gzip" (my_ensemble.starling.gzip)
        verbose=True,
    )
 
-   # Load the archive back
-   data = read_starling_ensemble("my_ensemble.starling")
+   # Load the archive back (returns a dict with the sequence, distance maps,
+   # trajectory and metadata)
+   data = read_starling_ensemble("my_ensemble.starling.xz")
+
+``reduce_precision`` is a flag (it defaults to the value of ``compress``).
+float16 resolves 0.1 Å only below 128 Å; larger distances are stored with
+coarser spacing (0.125 Å up to 256 Å, 0.25 Å up to 512 Å).
 
 In most cases you should prefer the higher-level
 :meth:`~starling.structure.ensemble.Ensemble.save` and

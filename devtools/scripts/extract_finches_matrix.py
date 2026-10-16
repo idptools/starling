@@ -24,7 +24,7 @@ def load_hdf5(filename):
 
 
 def get_interaction_matrix(sequence, IMC):
-    """Calculate the interaction matrix from distance maps."""
+    """Calculate the pairwise homotypic FINCHES interaction matrix from the sequence."""
     interaction_matrix = IMC.calculate_pairwise_homotypic_matrix(sequence)
 
     # Zero out the diagonal

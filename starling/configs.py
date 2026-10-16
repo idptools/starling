@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import warnings
 from typing import TypedDict
 
 from starling.utilities import fix_ref_to_home
@@ -22,6 +23,16 @@ CONVERT_ANGSTROM_TO_NM = 10
 MAX_SEQUENCE_LENGTH = 380  # set longest sequence the model can work on
 DEFAULT_IONIC_STRENGTH = 150  # default ionic strength in mM
 DEFAULT_SAMPLER = "ddim"  # default sampler for diffusion model
+
+# Number of conformations the VAE decodes at once, both when a sampler turns
+# its final latents into distance maps and at every constraint-guided step.
+# Decoding a 384 x 384 map takes about 90 MB of GPU memory per conformation
+# (about 320 MB with the gradients constraint guidance needs), so decoding a
+# whole sampling batch at once needed about 9 GB at the default batch size of
+# 100, and about 30 GB with a constraint. Chunking caps this at about 1.5 GB
+# (about 5 GB with a constraint) without changing what is computed. Lower it
+# on small GPUs.
+VAE_DECODE_CHUNK_SIZE = 16
 
 # Model compilation settings
 class TorchCompilationOptions(TypedDict):
@@ -47,8 +58,13 @@ TORCH_COMPILATION: TorchCompilationConfig = {
 }
 
 
-# model model-kernel-epoch=47-epoch_val_loss=0.03.ckpt has  a UNET_LABELS_DIM of 512
-# model model-kernel-epoch=47-epoch_val_loss=0.03.ckpt has a UNET_LABELS_DIM of 384
+# Label (conditioning) dimension of the old UNet-based diffusion models; e.g.
+# model-kernel-epoch=47-epoch_val_loss=0.03.ckpt used 512 and
+# model-kernel-epoch=08-epoch_val_loss=0.03.ckpt used 384. Nothing in STARLING
+# reads this any more (the v2 ViT model's dimensions are set where it is built
+# in inference/model_loading.py), nor DEFAULT_STRUCTURE_GEN above; both are
+# kept only so existing ~/.starling_weights/configs.py files that set them
+# still load without warnings.
 UNET_LABELS_DIM = 512
 
 # Path to user config file
@@ -63,30 +79,61 @@ USER_CONFIG_PATH = os.path.expanduser(
 ##
 
 
-def load_user_config():
-    """Load user configuration if the file exists and override default values."""
-    if os.path.exists(USER_CONFIG_PATH):
-        spec = importlib.util.spec_from_file_location("user_config", USER_CONFIG_PATH)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load STARLING configuration from {USER_CONFIG_PATH}")
-        user_config = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(user_config)
+def load_user_config() -> set[str]:
+    """
+    Override default settings with those in the user config file, if it exists.
 
-        for key, value in vars(user_config).items():
-            if not key.startswith("__") and key in globals():
-                old_value = globals()[key]
-                globals()[key] = value
-                print(f"[Starling Config] Overriding {key}: {old_value} → {value}")
+    This is called at the very end of this module, once every default has
+    been defined, and the settings derived from others are then rebuilt by
+    :func:`_recompute_derived_settings`. Every UPPER_CASE name the user config
+    defines that matches a STARLING setting replaces that setting. Any other
+    UPPER_CASE name is most likely a typo or a setting that no longer exists,
+    so it is ignored with a warning; lower-case names (imports, helper
+    variables) are ignored.
+
+    Returns
+    -------
+    set of str
+        Names of the settings that were overridden (empty if there is no
+        user config file).
+
+    Raises
+    ------
+    ImportError
+        If the user config file exists but cannot be loaded.
+    """
+    overridden: set[str] = set()
+    if not os.path.exists(USER_CONFIG_PATH):
+        return overridden
+
+    spec = importlib.util.spec_from_file_location("user_config", USER_CONFIG_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load STARLING configuration from {USER_CONFIG_PATH}")
+    user_config = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(user_config)
+
+    for key, value in vars(user_config).items():
+        if not key.isupper() or key.startswith("_"):
+            continue
+        if key not in globals():
+            warnings.warn(
+                f"[Starling Config] {USER_CONFIG_PATH} sets {key}, which is not a STARLING setting; ignoring it.",
+                stacklevel=2,
+            )
+            continue
+        old_value = globals()[key]
+        globals()[key] = value
+        overridden.add(key)
+        print(f"[Starling Config] Overriding {key}: {old_value} → {value}")
+    return overridden
 
 
-# Load user-defined config if available
-load_user_config()
-
-### Derived default values
+### Derived default values (rebuilt by _recompute_derived_settings() once the user config has been applied)
 
 # Github Releases URLs for model weights
-GITHUB_ENCODER_URL = f"https://github.com/idptools/starling/releases/download/v2.0.0/{DEFAULT_ENCODE_WEIGHTS}"
-GITHUB_DDPM_URL = f"https://github.com/idptools/starling/releases/download/v2.0.0/{DEFAULT_DDPM_WEIGHTS}"
+GITHUB_WEIGHTS_RELEASE_URL = "https://github.com/idptools/starling/releases/download/v2.0.0"
+GITHUB_ENCODER_URL = f"{GITHUB_WEIGHTS_RELEASE_URL}/{DEFAULT_ENCODE_WEIGHTS}"
+GITHUB_DDPM_URL = f"{GITHUB_WEIGHTS_RELEASE_URL}/{DEFAULT_DDPM_WEIGHTS}"
 
 
 def _env_flag(name: str) -> bool:
@@ -173,7 +220,7 @@ def candidate_weights_paths(filename: str) -> list[str]:
     ]
 
 
-def resolve_weights_path(path_or_url: str | None, default_url: str) -> str:
+def resolve_weights_path(path_or_url: str | os.PathLike[str] | None, default_url: str) -> str:
     """
     Resolve a model weights reference to a local file, downloading if allowed.
 
@@ -192,9 +239,9 @@ def resolve_weights_path(path_or_url: str | None, default_url: str) -> str:
 
     Parameters
     ----------
-    path_or_url : str or None
-        A local filesystem path, an ``http(s)`` URL, or None (in which case
-        ``default_url`` is used).
+    path_or_url : str, os.PathLike or None
+        A local filesystem path (str or e.g. ``pathlib.Path``), an
+        ``http(s)`` URL, or None (in which case ``default_url`` is used).
     default_url : str
         URL to fall back to when ``path_or_url`` is None.
 
@@ -209,7 +256,8 @@ def resolve_weights_path(path_or_url: str | None, default_url: str) -> str:
         If the weights cannot be located locally and downloading is not
         permitted (``STARLING_OFFLINE`` set) or fails.
     """
-    ref = path_or_url or default_url
+    # os.fspath turns a pathlib.Path into the str the checks below need
+    ref = os.fspath(path_or_url or default_url)
 
     if not ref.startswith("http"):
         return fix_ref_to_home(ref)
@@ -504,3 +552,70 @@ def ensure_search_artifacts(download: bool = True) -> tuple[str, str, str]:
         DEFAULT_SEQSTORE_DB_PATH,
         DEFAULT_FAISS_MANIFEST_PATH,
     )
+
+
+def _recompute_derived_settings(overridden: set[str]) -> None:
+    """
+    Rebuild the settings computed from other settings, after user overrides.
+
+    Overriding a base setting in the user config (for example
+    DEFAULT_ENCODE_WEIGHTS or DEFAULT_SEARCH_DIR) must carry through to every
+    setting built from it, so these are recomputed with the same formulas as
+    their definitions above. For each setting the order of precedence is:
+    its STARLING_* environment variable (where it has one and it is set),
+    then a value set directly in the user config, then the value built from
+    the other (possibly overridden) settings.
+
+    Parameters
+    ----------
+    overridden : set of str
+        Names of the settings the user config set directly, as returned by
+        :func:`load_user_config`.
+    """
+    settings = globals()
+
+    def derive(name: str, derived_value: str, env_var: str | None = None) -> None:
+        if env_var is not None and os.environ.get(env_var):
+            settings[name] = os.environ[env_var]
+        elif name not in overridden:
+            settings[name] = derived_value
+
+    # each line reads the settings rebuilt by the lines before it
+    derive("GITHUB_ENCODER_URL", f"{GITHUB_WEIGHTS_RELEASE_URL}/{DEFAULT_ENCODE_WEIGHTS}")
+    derive("GITHUB_DDPM_URL", f"{GITHUB_WEIGHTS_RELEASE_URL}/{DEFAULT_DDPM_WEIGHTS}")
+    derive("DEFAULT_ENCODER_WEIGHTS_PATH", GITHUB_ENCODER_URL, "STARLING_ENCODER_PATH")
+    derive("DEFAULT_DDPM_WEIGHTS_PATH", GITHUB_DDPM_URL, "STARLING_DDPM_PATH")
+    derive("DEFAULT_SEQSTORE_NAME", DEFAULT_FAISS_INDEX_NAME + ".seqs.sqlite")
+    derive("DEFAULT_MANIFEST_NAME", DEFAULT_FAISS_INDEX_NAME + ".manifest.json")
+    derive(
+        "DEFAULT_FAISS_INDEX_PATH",
+        os.path.join(DEFAULT_SEARCH_DIR, DEFAULT_FAISS_INDEX_NAME),
+        "STARLING_FAISS_INDEX_PATH",
+    )
+    derive(
+        "DEFAULT_SEQSTORE_DB_PATH",
+        os.path.join(DEFAULT_SEARCH_DIR, DEFAULT_SEQSTORE_NAME),
+        "STARLING_SEQSTORE_PATH",
+    )
+    derive(
+        "DEFAULT_FAISS_MANIFEST_PATH",
+        os.path.join(DEFAULT_SEARCH_DIR, DEFAULT_MANIFEST_NAME),
+        "STARLING_FAISS_MANIFEST_PATH",
+    )
+
+    # these are not built from other settings, but their environment
+    # variables must still take precedence over the user config
+    for name, env_var in (
+        ("ZENODO_FAISS_INDEX_URL", "STARLING_ZENODO_FAISS_URL"),
+        ("ZENODO_SEQSTORE_URL", "STARLING_ZENODO_SEQSTORE_URL"),
+        ("ZENODO_MANIFEST_URL", "STARLING_ZENODO_MANIFEST_URL"),
+        ("FAISS_INDEX_MD5", "STARLING_FAISS_INDEX_MD5"),
+        ("SEQSTORE_MD5", "STARLING_SEQSTORE_MD5"),
+        ("MANIFEST_MD5", "STARLING_FAISS_MANIFEST_MD5"),
+    ):
+        derive(name, settings[name], env_var)
+
+
+# Apply the user config last, so it can override any default above, then
+# rebuild the settings derived from the ones it changed
+_recompute_derived_settings(load_user_config())

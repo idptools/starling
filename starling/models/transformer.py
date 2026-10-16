@@ -1,4 +1,5 @@
 import math
+from typing import Final
 
 import torch
 import torch.nn as nn
@@ -10,15 +11,25 @@ from starling.data.positional_encodings import (
 )
 from starling.models.attention import MultiHeadAttention
 
+# The DiT blocks' LayerNorms were originally built as
+# nn.LayerNorm(embed_dim, context_dim), which passes context_dim (512 in the
+# released model) as LayerNorm's second positional argument, eps. Every DiT
+# LayerNorm has therefore always run with eps = 512 rather than the default
+# 1e-5. This is a historical accident, but the released weights were trained
+# with it and eps is not stored in checkpoints, so changing it would change the
+# shipped model's predictions. Keep it at 512.
+DIT_LAYER_NORM_EPS: Final[float] = 512.0
+
 
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim: int, theta: int = 10000):
         """
         Generates sinusoidal positional embeddings that are used in the denoising-diffusion
-        models to encode the timestep information. The positional embeddings are generated
-        using sine and cosine functions. It takes in time in the shape of (batch_size, 1)
-        and returns the positional embeddings in the shape of (batch_size, dim). The positional
-        encodings are later used in each of the ResNet blocks to encode the timestep information.
+        models to encode the timestep information (in the ViT) and the ionic strength (in the
+        SequenceEncoder). The positional embeddings are generated using sine and cosine
+        functions. A new last dimension of size dim is appended to the input, so time of shape
+        (batch_size,) gives embeddings of shape (batch_size, dim) and time of shape
+        (batch_size, 1) gives (batch_size, 1, dim).
 
         Parameters
         ----------
@@ -38,12 +49,15 @@ class SinusoidalPosEmb(nn.Module):
         Parameters
         ----------
         time : torch.Tensor
-            Timestep information in the shape of (batch_size, 1).
+            Timestep information in the shape of (batch_size,) or (batch_size, 1).
 
         Returns
         -------
         torch.Tensor
-            Positional (timestep) embeddings in the shape of (batch_size, dim).
+            Positional (timestep) embeddings in the shape of (batch_size, dim) for
+            input of shape (batch_size,), or (batch_size, 1, dim) for input of shape
+            (batch_size, 1). The ionic-strength embedding relies on the latter to get
+            a context of one token per sequence.
         """
         device = time.device
 
@@ -60,11 +74,11 @@ class SinusoidalPosEmb(nn.Module):
 class MLP(nn.Module):
     def __init__(self, input_dim: int, output_dim: int, expansion_factor: int = 4):
         """
-        A simple Multi-Layer Perceptron with a single hidden layer and layer normalization.
+        A simple Multi-Layer Perceptron with a single hidden layer.
 
         The MLP first projects the input to a higher dimension (output_dim * expansion_factor),
-        applies a ReLU activation, then projects back to the output dimension. Finally,
-        layer normalization is applied to the output.
+        applies a ReLU activation, then projects back to the output dimension. There is no
+        normalization inside the MLP (the SequenceEncoder applies a LayerNorm after it).
 
         Parameters
         ----------
@@ -168,10 +182,10 @@ class FeedForward(nn.Module):
     def __init__(self, embed_dim: int):
         """
         Feed forward layer in the transformer architecture. The feed forward layer consists of
-        two linear layers with a GELU activation function in between. The linear layers first
-        expand the number of dimensions by a factor of 4 and then reduce the number of dimensions
-        back to the original number of dimensions. The GELU activation function is used to introduce
-        non-linearity in the network.
+        a GeGLU layer, which projects the input to 4 times the number of dimensions and gates
+        it with a GELU of a second projection, followed by a linear layer that reduces the number
+        of dimensions back to the original number of dimensions. The gated GELU is used to
+        introduce non-linearity in the network.
 
         Parameters
         ----------
@@ -192,10 +206,12 @@ class FeedForward(nn.Module):
 class TransformerEncoder(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int):
         """
-        Transformer encoder layer. The transformer encoder layer consists of a self attention layer
-        and a feed forward layer. The self attention layer is used to capture the relationships
-        between different elements in the input data. The feed forward layer is used to introduce
-        non-linearity in the network.
+        Transformer encoder layer. The transformer encoder layer consists of a self attention layer,
+        a cross attention layer to the ionic strength embedding and a feed forward layer, each
+        prenormalized and added back to its input. The self attention layer is used to capture the
+        relationships between different elements in the input data. The cross attention layer lets
+        every residue attend to the embedding of the ionic strength (a context of a single token).
+        The feed forward layer is used to introduce non-linearity in the network.
 
         Parameters
         ----------
@@ -232,10 +248,12 @@ class TransformerEncoder(nn.Module):
 class SequenceEncoder(nn.Module):
     def __init__(self, num_layers: int, embed_dim: int, num_heads: int):
         """
-        Sequence encoder layer. The sequence encoder layer consists of a transformer encoder
-        and a feed forward layer. The transformer encoder layer is used to capture the relationships
-        between different elements in the input data. The feed forward layer is used to introduce
-        non-linearity in the network.
+        Sequence encoder. Residues are embedded with a learned embedding plus sinusoidal positional
+        encodings and passed through a stack of transformer encoder layers, followed by a final
+        LayerNorm. The ionic strength (in mM) is embedded with sinusoidal embeddings, an MLP and
+        a LayerNorm, and every encoder layer cross-attends to it. During training only, the
+        ionic-strength embedding of a random 20% of the sequences in each batch is replaced by
+        zeros, so the model also learns to work without it; in eval mode it is always used.
 
         Parameters
         ----------
@@ -274,7 +292,10 @@ class SequenceEncoder(nn.Module):
                 torch.rand(ionic_strengths.shape[0], device=ionic_strengths.device)
                 < 0.2
             )
-            ionic_strengths[mask_ionic] = torch.zeros_like(ionic_strengths[mask_ionic])
+            # masked_fill rather than boolean indexing, which has to count the
+            # selected rows on the CPU and so synchronized with the GPU every step
+            dropped_rows = mask_ionic.reshape(-1, *[1] * (ionic_strengths.dim() - 1))
+            ionic_strengths = ionic_strengths.masked_fill(dropped_rows, 0.0)
 
         # Convert input sequence to embeddings
         x = self.sequence_learned_embedding(x)
@@ -311,9 +332,10 @@ class DiTBlock(nn.Module):
         """
         super().__init__()
 
-        self.norm1 = nn.LayerNorm(embed_dim, context_dim)
-        self.norm2 = nn.LayerNorm(embed_dim, context_dim)
-        self.norm3 = nn.LayerNorm(embed_dim, context_dim)
+        # see DIT_LAYER_NORM_EPS for why these run with eps = 512
+        self.norm1 = nn.LayerNorm(embed_dim, eps=DIT_LAYER_NORM_EPS)
+        self.norm2 = nn.LayerNorm(embed_dim, eps=DIT_LAYER_NORM_EPS)
+        self.norm3 = nn.LayerNorm(embed_dim, eps=DIT_LAYER_NORM_EPS)
 
         self.self_attention = MultiHeadAttention(embed_dim, num_heads)
         self.cross_attention = MultiHeadAttention(embed_dim, num_heads, context_dim)

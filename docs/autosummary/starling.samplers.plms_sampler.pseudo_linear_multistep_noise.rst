@@ -1,6 +1,6 @@
-starling.samplers.plms\_sampler.make\_ddim\_sampling\_parameters
+starling.samplers.plms\_sampler.pseudo\_linear\_multistep\_noise
 ================================================================
 
 .. currentmodule:: starling.samplers.plms_sampler
 
-.. autofunction:: make_ddim_sampling_parameters
+.. autofunction:: pseudo_linear_multistep_noise

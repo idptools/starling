@@ -163,6 +163,23 @@ class VAEdataloader(pl.LightningDataModule):
         # BFloat16 conversion can happen on GPU during training
         return distance_maps
 
+    def _worker_kwargs(self) -> dict:
+        """
+        Return the loader keyword arguments that are only valid with worker processes.
+
+        PyTorch raises a ValueError if prefetch_factor is passed while num_workers
+        is 0, so it is only included when the loader actually uses workers.
+
+        Returns
+        -------
+        dict
+            {"prefetch_factor": self.prefetch_factor} if num_workers > 0,
+            otherwise an empty dict.
+        """
+        if self.num_workers > 0:
+            return {"prefetch_factor": self.prefetch_factor}
+        return {}
+
     def train_dataloader(self):
         return (
             wds.WebLoader(
@@ -170,7 +187,7 @@ class VAEdataloader(pl.LightningDataModule):
                 batch_size=None,  # Already batched
                 num_workers=self.num_workers,
                 pin_memory=True,
-                prefetch_factor=self.prefetch_factor,
+                **self._worker_kwargs(),
                 collate_fn=self._collate_fn,
             )
             .with_epoch(self.n_train_batches)
@@ -184,7 +201,7 @@ class VAEdataloader(pl.LightningDataModule):
                 batch_size=None,
                 num_workers=self.num_workers,
                 pin_memory=True,
-                prefetch_factor=self.prefetch_factor,
+                **self._worker_kwargs(),
                 collate_fn=self._collate_fn,
             )
             .with_epoch(self.n_val_batches)

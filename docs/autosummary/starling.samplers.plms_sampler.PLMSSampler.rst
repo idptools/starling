@@ -16,12 +16,21 @@ starling.samplers.plms\_sampler.PLMSSampler
       :nosignatures:
    
       ~PLMSSampler.__init__
-      ~PLMSSampler.generate_labels
-      ~PLMSSampler.p_sample_plms
+      ~PLMSSampler.denoising_step
+      ~PLMSSampler.encode_sequence
+      ~PLMSSampler.predict_noise
       ~PLMSSampler.sample
    
    
 
    
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~PLMSSampler.n_steps
+      ~PLMSSampler.name
+      ~PLMSSampler.supports_constraints
    
    

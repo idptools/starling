@@ -28,6 +28,7 @@
       read_starling_ensemble
       remove_extension
       symmetrize_distance_maps
+      symmetrize_tensor_distance_maps
       write_starling_ensemble
    
    

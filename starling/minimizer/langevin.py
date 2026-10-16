@@ -56,12 +56,16 @@ DEFAULT_TEMPERATURE_K: Final[float] = 300.0
 DEFAULT_BEAD_MASS: Final[float] = 110.0
 
 # 20 fs, the Mpipi-GG simulation timestep. The stiffest routine motion is the
-# bond vibration (period ~0.74 ps at this mass), so this is ~37 steps a period
+# bond vibration: a bond between two beads of this mass vibrates at
+# sqrt(2k/m) ~ 12 ps^-1 (period ~0.52 ps, ~26 steps) and the fastest chain
+# mode at sqrt(4k/m) ~ 17 ps^-1 (period ~0.37 ps, ~18 steps), so each
+# vibration is still resolved by well over ten steps
 DEFAULT_TIMESTEP_PS: Final[float] = 0.02
 
 # strong coupling to the heat bath: bond vibrations (angular frequency
-# ~8.5 ps^-1) are close to critically damped, so local degrees of freedom
-# thermalize within a few ps while large-scale motions stay slow
+# ~12-17 ps^-1) are underdamped (damping ratio gamma / 2 omega ~ 0.3-0.4),
+# so local degrees of freedom thermalize within a few ps while large-scale
+# motions stay slow
 DEFAULT_FRICTION_PER_PS: Final[float] = 10.0
 
 

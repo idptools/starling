@@ -10,6 +10,7 @@ import starling
 from starling import configs
 from starling._version import __version__
 from starling.frontend.ensemble_generation import generate
+from starling.inference.generation import RELAX_MODES, RELAX_STANDARD
 from starling.utilities import check_device
 
 
@@ -72,7 +73,7 @@ def main():
     parser.add_argument(
         "user_input",
         type=str,
-        help="Input sequences in various formats (file, string, list, or dict)",
+        help="Input: a single amino acid sequence, or a .fasta, .tsv or .in file (name<TAB>sequence per line)",
         nargs="?",
         default=None,
     )
@@ -121,14 +122,17 @@ def main():
         "--outname",
         type=str,
         default=None,
-        help="If provided and a single sequence is provided, defines the prefix ahead of .pdb/.xtc/.npy extensions (default: None)",
+        help=(
+            "If provided and a single sequence is provided, names the output files: <outname>.starling, "
+            "plus <outname>_STARLING.pdb and <outname>_STARLING.xtc with -r (default: sequence_1)"
+        ),
     )
     parser.add_argument(
         "-r",
         "--return_structures",
         action="store_true",
         default=False,
-        help="Return the 3D structures (default: False)",
+        help="Return the 3D structures, relaxed with Mpipi-GG (see --relax) unless --no-relax is given (default: False)",
     )
     parser.add_argument(
         "-v",
@@ -140,7 +144,7 @@ def main():
     parser.add_argument(
         "--ionic_strength",
         dest="ionic_strength",
-        type=int,
+        type=float,
         default=configs.DEFAULT_IONIC_STRENGTH,
         help=f"Ionic strength (in mM) for the prediction. Default: {configs.DEFAULT_IONIC_STRENGTH} mM.",
     )
@@ -149,7 +153,7 @@ def main():
         dest="progress_bar",
         action="store_false",
         default=True,
-        help="Disable progress bar during generation (default: False)",
+        help="Disable the progress bars during generation (default: False)",
     )
     parser.add_argument(
         "--remove-errors",
@@ -169,23 +173,48 @@ def main():
     parser.add_argument(
         "--relax",
         dest="relax",
-        action="store_true",
-        default=False,
+        nargs="?",
+        const=RELAX_STANDARD,
+        choices=RELAX_MODES,
+        default=None,
         help=(
-            "Relax the reconstructed 3D conformations with the Mpipi-GG force "
-            "field, restrained to their STARLING distance maps, then thermalize "
-            "them briefly at 300 K. This fixes the compressed bonds and close "
-            "contacts left by MDS reconstruction, giving local geometry close "
-            "to Mpipi-GG simulations while keeping global dimensions. Requires "
-            "-r/--return_structures. "
-            "With --remove-errors, relaxation runs before the 3D error screen "
-            "(default: False)"
+            "Relax the reconstructed 3D conformations with the Mpipi-GG force field, "
+            "restrained to their STARLING distance maps, then thermalize them briefly "
+            "at 300 K. This fixes the compressed bonds and close contacts left by MDS "
+            "reconstruction, giving local geometry close to Mpipi-GG simulations while "
+            "keeping global dimensions. 'standard' (the default, and what --relax alone "
+            "means) reconstructs each structure as STARLING always has before relaxing "
+            "it; 'fast' runs a shorter MDS step first and leaves relaxation to finish "
+            "the fit, giving ensembles that match the standard ones in fit, Rg, bonds "
+            "and closest contacts, though individual conformations differ. Relaxation acts on "
+            "the 3D structures, so --relax requires -r/--return_structures. With "
+            "--remove-errors, relaxation runs before the 3D error screen (default: "
+            "'standard' whenever -r is given, as starling.generate() does)"
         ),
+    )
+    parser.add_argument(
+        "--no-relax",
+        dest="relax",
+        action="store_const",
+        const=False,
+        help="Return the raw MDS structures without relaxing them",
     )
     parser.add_argument(
         "--compile-forces",
         action="store_true",
-        help="Fuse CUDA thermalization forces for sustained throughput; adds compilation startup time. Requires --relax -r.",
+        help=(
+            "Fuse CUDA thermalization forces for sustained throughput; adds compilation "
+            "startup time. Requires -r and relaxation (so cannot be used with --no-relax)."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Random seed (a non-negative integer); the same seed reproduces the same "
+            "ensembles on the same hardware and settings (default: unseeded)"
+        ),
     )
 
     # will need to update this default...
@@ -228,10 +257,17 @@ def main():
         )
         sys.exit(1)
 
-    if args.compile_forces and (not args.relax or not args.return_structures):
-        parser.error("--compile-forces requires --relax and -r/--return_structures")
+    # relax ("standard") by default whenever structures are made, matching
+    # starling.generate(); without -r there is nothing to relax
+    if args.relax is None:
+        relax = RELAX_STANDARD if args.return_structures else False
+    else:
+        relax = args.relax
 
-    # relaxation acts on 3D structures, so without -r it would silently do nothing
+    if args.compile_forces and (not relax or not args.return_structures):
+        parser.error("--compile-forces requires relaxation and -r/--return_structures (it cannot be used with --no-relax)")
+
+    # relaxation acts on 3D structures, so without -r an explicit --relax would silently do nothing
     if args.relax and not args.return_structures:
         print(
             "ERROR: --relax relaxes the 3D structures, so it requires -r/--return_structures.",
@@ -257,9 +293,11 @@ def main():
         return_data=False,
         verbose=args.verbose,
         show_progress_bar=args.progress_bar,
+        show_per_step_progress_bar=args.progress_bar,
         remove_errors=args.remove_errors,
-        relax=args.relax,
+        relax=relax,
         compile_forces=args.compile_forces,
+        seed=args.seed,
     )
 
 
@@ -289,7 +327,7 @@ def measure_runtime(
         Protein sequence to process.
 
     steps : int
-        Number of steps to run the DDPM model.
+        Number of denoising steps for the sampler (DDIM by default).
 
     batch_size : int
         Batch size for processing.
@@ -383,7 +421,7 @@ def starling_benchmark():
         "--steps",
         type=int,
         default=configs.DEFAULT_STEPS,
-        help=f"Number of steps to run the DDPM model (default: {configs.DEFAULT_STEPS})",
+        help=f"Number of denoising steps for the sampler (default: {configs.DEFAULT_STEPS})",
     )
     parser.add_argument(
         "--sequence",

@@ -1,36 +1,17 @@
-# Sample Package Data
+# starling.data
 
-This directory contains sample additional data you may want to include with your package.
-This is a place where non-code related additional information (such as data files, molecular structures,  etc.) can 
-go that you want to ship alongside your code.
-
-Please note that it is not recommended to place large files in your git directory. If your project requires files larger
-than a few megabytes in size it is recommended to host these files elsewhere. This is especially true for binary files
-as the `git` structure is unable to correctly take updates to these files and will store a complete copy of every version
-in your `git` history which can quickly add up. As a note most `git` hosting services like GitHub have a 1 GB per repository
-cap.
-
-## Including package data
-
-Modify your package's `pyproject.toml` file.
-Update the [tool.setuptools.package_data](https://setuptools.pypa.io/en/latest/userguide/datafiles.html#package-data)
-and point it at the correct files.
-Paths are relative to `package_dir`.
-
-Package data can be accessed at run time with `importlib.resources` or the `importlib_resources` back port.
-See https://setuptools.pypa.io/en/latest/userguide/datafiles.html#accessing-data-files-at-runtime
-for suggestions.
-
-If modules within your package will access internal data files using
-[the recommended approach](https://setuptools.pypa.io/en/latest/userguide/datafiles.html#accessing-data-files-at-runtime),
-you may need to include `importlib_resources` in your package dependencies.
-In `pyproject.toml`, include the following in your `[project]` table.
-```
-dependencies = [
-    "importlib-resources;python_version<'3.10'",
-]
-```
+Despite its name, this directory mostly holds code rather than data: the tokenizer, the distributions and noise schedules used by the models, and the data loaders and helpers used for training.
 
 ## Manifest
 
-* `look_and_say.dat`: first entries of the "Look and Say" integer series, sequence [A005150](https://oeis.org/A005150)
+* `tokenizer.py`: `StarlingTokenizer`, which maps amino-acid sequences to and from the integer tokens the models use (0 is the padding token).
+* `distributions.py`: `DiagonalGaussianDistribution`, the VAE posterior over latents (`sample()` draws from it, `mode()` returns its mean, `kl()` gives the KL divergence).
+* `schedulers.py`: linear, cosine and sigmoid beta (noise) schedules for the diffusion model.
+* `positional_encodings.py`: fixed sinusoidal and learnable 1D/2D positional encodings.
+* `VAE_loader_tar.py`: `VAEdataloader`, the PyTorch Lightning data module that streams distance maps from webdataset tar shards for VAE training (`starling-vae-train`).
+* `ddpm_loader_tar.py`: `DDPMDataLoader`, the PyTorch Lightning data module that streams latents (or distance maps), tokenized sequences and ionic strengths from webdataset tar shards for diffusion training (`starling-ddpm-train`). If `train_size` or `val_size` is not set in the config, it is read from `metadata.json` in the dataset directory.
+* `data_wrangler.py`: small helpers for one-hot encoding sequences, padding and symmetrizing distance maps, and reading HDF5 and TSV files.
+* `argument_parser.py`: helpers that read a YAML configuration file into a dict (no defaults are merged in).
+* `look_and_say.dat`: first entries of the "Look and Say" integer series, sequence [A005150](https://oeis.org/A005150). This is leftover sample data from the project template; nothing in STARLING uses it.
+
+Both tar loaders expect a dataset directory containing `train/` and `validation/` subdirectories of `*.tar*` shards. Sample keys must end in the ionic strength, e.g. `<name>_150mM`, for the diffusion loader.

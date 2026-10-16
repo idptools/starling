@@ -51,8 +51,8 @@ Installing the training dependencies
 
 The default install contains everything needed to generate and analyse
 ensembles. The model-training entry points (``starling-vae-train`` and
-``starling-ddpm-train``) additionally need Hydra, OmegaConf and Weights &
-Biases, which are kept out of the default install. If you intend to train
+``starling-ddpm-train``) additionally need Hydra, OmegaConf, Weights &
+Biases, WebDataset and tabulate, which are kept out of the default install. If you intend to train
 models, install the ``train`` extra.
 
 From PyPI:
@@ -96,12 +96,15 @@ immediately with a ``ModuleNotFoundError``. Nothing else in STARLING is
 affected — ensemble generation, analysis, the conversion utilities and search
 all work with the default install.
 
+.. _gpu-installation-cuda:
+
 GPU Installation (CUDA)
 -----------------------
 
 For GPU-accelerated search with FAISS, you need to install PyTorch and FAISS-GPU 
 via conda to match your CUDA version. As of October 14th, 2025, the pip package 
-for ``faiss-gpu`` is not available, so conda is required. There is currently a 
+for ``faiss-gpu`` is not available, so conda is required (STARLING therefore has
+no pip extra for GPU FAISS; the default install uses ``faiss-cpu``). There is currently a 
 roadmap to bring support for faiss-gpu wheels back to PyPi you can see more at 
 the following `GitHub issue <https://github.com/facebookresearch/faiss/issues/3152#issuecomment-3172876462>`_.
 Until then, we must use conda for the GPU components.
@@ -137,8 +140,8 @@ Install the remaining dependencies via conda (preferred) or pip:
 
 .. code-block:: bash
 
-    conda install -y -c conda-forge lightning numpy scipy cython matplotlib \
-      jupyter ipython scikit-learn einops tqdm hdf5plugin mdtraj
+    conda install -y -c conda-forge pytorch-lightning numpy scipy cython matplotlib \
+      jupyter ipython einops tqdm pyyaml h5py pandas hdf5plugin mdtraj zstandard
 
 **Step 5: Install Pure-Python Packages**
 
@@ -250,7 +253,7 @@ directory to retrieve them:
       -c 200 \
       --ionic_strength 150
 
-    # With 3D structures (PDB + XTC)
+    # With 3D structures (PDB + XTC), relaxed with Mpipi-GG by default
     docker run --rm --gpus all \
       -v $(pwd)/output:/work \
       starling MQDRVKRPMNAFIVWSRDQRRKMALENPRMRNSEISKQLGYQWKMLTEK \
@@ -348,7 +351,7 @@ Offline / air-gapped installation
 ---------------------------------
 
 STARLING downloads two model weight files (the VAE encoder/decoder and the DDPM
-weights) the first time it runs, and — if you use ``starling_search`` — three
+weights) the first time it runs, and — if you use ``starling-search`` — three
 FAISS search artifacts. On a machine with no outbound internet access you can
 pre-place all of these by hand and tell STARLING never to attempt a download.
 
@@ -373,6 +376,26 @@ them. Note the files must keep their released names:
 
     STARLING_v2.0.0_ViT_VAE_2025_10_14.ckpt
     STARLING_v2.0.0_ViT_DDPM_2025_10_14.ckpt
+
+User configuration file
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Any setting in :mod:`starling.configs` (an UPPER_CASE name such as
+``DEFAULT_MODEL_DIR``, ``DEFAULT_ENCODER_WEIGHTS_PATH``,
+``DEFAULT_DDPM_WEIGHTS_PATH``, ``DEFAULT_SEARCH_DIR`` or
+``DEFAULT_BATCH_SIZE``) can be overridden by defining it in
+``~/.starling_weights/configs.py``, for example:
+
+.. code-block:: python
+
+    # ~/.starling_weights/configs.py
+    DEFAULT_MODEL_DIR = "/opt/starling/weights"
+    DEFAULT_SEARCH_DIR = "/opt/starling/search"
+
+Settings built from an overridden one (such as the search artifact paths
+inside ``DEFAULT_SEARCH_DIR``) follow it. The ``STARLING_*`` environment
+variables below take precedence over this file, and an UPPER_CASE name that is
+not a STARLING setting is ignored with a warning.
 
 Forcing offline behaviour
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -423,7 +446,7 @@ Search artifacts
 ~~~~~~~~~~~~~~~~
 
 Ensemble generation needs nothing beyond the two checkpoints above. The
-``starling_search`` command additionally needs three FAISS artifacts (~2.4 GB
+``starling-search`` command additionally needs three FAISS artifacts (~2.4 GB
 total), which are fetched from `Zenodo <https://zenodo.org/records/17342150>`_.
 Pre-place these in ``~/.starling_search/``, keeping their released names:
 
@@ -436,12 +459,8 @@ Pre-place these in ``~/.starling_search/``, keeping their released names:
 or point ``STARLING_FAISS_INDEX_PATH``, ``STARLING_SEQSTORE_PATH`` and
 ``STARLING_FAISS_MANIFEST_PATH`` at them individually.
 
-.. note::
-
-   The protein language model used by the sequence encoder is downloaded by
-   ``torch.hub`` into ``$TORCH_HOME/hub/checkpoints/`` and is **not** covered by
-   ``STARLING_OFFLINE``. If you use the sequence-encoder features, copy that
-   cache directory across from an online machine as well.
+The sequence encoder is part of the two STARLING checkpoints above, so it needs
+no further downloads.
 
 Docker
 ~~~~~~
@@ -474,7 +493,7 @@ Summary of environment variables
      - Root of the torch cache; weights are read from/written to
        ``$TORCH_HOME/hub/checkpoints/``.
    * - ``STARLING_FAISS_INDEX_PATH``
-     - Explicit path to the FAISS index for ``starling_search``.
+     - Explicit path to the FAISS index for ``starling-search``.
    * - ``STARLING_SEQSTORE_PATH``
      - Explicit path to the sequence store SQLite database.
    * - ``STARLING_FAISS_MANIFEST_PATH``

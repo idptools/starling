@@ -3,18 +3,30 @@
 # to avoid circular imports.
 #
 
+import contextlib
 import gzip
 import lzma
 import os
 import pickle
 import platform
 import warnings
+from collections.abc import Iterator
+from typing import Any, Final
 
 import numpy as np
 import torch
 
 # code that allows access to the data directory
 _ROOT = os.path.abspath(os.path.dirname(__file__))
+
+# float32 matmul precision the diffusion model and VAE run at during inference
+# (and training). "high" lets CUDA use TF32 tensor cores on Ampere and newer
+# GPUs. STARLING's models have always been run this way, so keeping it keeps
+# the distance maps sampled for a given seed identical to earlier releases.
+# It is only ever applied around model code (see float32_matmul_precision), so
+# anything else the caller runs stays at the caller's precision. SMACOF pins
+# its own (starling.structure.coordinates.SMACOF_FLOAT32_MATMUL_PRECISION).
+MODEL_FLOAT32_MATMUL_PRECISION: Final[str] = "high"
 
 
 def get_data(path):
@@ -151,12 +163,15 @@ def check_device(use_device, default_device="gpu"):
 
     Parameters
     ---------------
-    use_device : str
+    use_device : str, torch.device or None
         Identifier for the device to be used for predictions.
-        Possible inputs: 'cpu', 'mps', 'cuda', 'cuda:int', where the int corresponds to
+        Possible inputs: None (use default_device, which by default picks
+        the best available accelerator), 'cpu', 'mps', 'cuda', 'cuda:int', where the int corresponds to
         the index of a specific cuda-enabled GPU. If 'cuda' is specified and
         cuda.is_available() returns False, this will raise an Exception
         If 'mps' is specified and mps is not available, an exception will be raised.
+        'gpu' is not accepted here (it is only a default_device option); pass
+        None to auto-select a GPU.
 
     default_device : str
         The default device to use if device=None.
@@ -245,6 +260,120 @@ def check_device(use_device, default_device="gpu"):
     )
 
 
+def _per_backend_matmul_settings() -> list[Any]:
+    """
+    Return the per-backend float32 matmul settings objects this PyTorch has.
+
+    PyTorch 2.9 added per-backend settings (torch.backends.cuda.matmul and
+    torch.backends.mkldnn.matmul, each with an ``fp32_precision`` attribute)
+    alongside the legacy torch.set_float32_matmul_precision(). Older versions
+    have neither, in which case the list is empty.
+
+    Returns
+    -------
+    list
+        The settings objects that expose ``fp32_precision``.
+    """
+    candidates = [
+        torch.backends.cuda.matmul,
+        getattr(torch.backends.mkldnn, "matmul", None),
+    ]
+    return [backend for backend in candidates if hasattr(backend, "fp32_precision")]
+
+
+@contextlib.contextmanager
+def float32_matmul_precision(precision: str) -> Iterator[None]:
+    """
+    Set PyTorch's float32 matmul precision for a block of code, then restore it.
+
+    torch.set_float32_matmul_precision() changes a setting for the whole
+    process. STARLING used to call it when its model modules were imported,
+    which silently switched every float32 matmul the caller ran afterwards to
+    TF32 (including SMACOF reconstruction, so structures rebuilt from saved
+    distance maps in a fresh process came out different). This context manager
+    confines the change to the code inside the ``with`` block (or the decorated
+    function) and puts the caller's exact settings back on exit, including when
+    an exception is raised.
+
+    PyTorch >= 2.9 keeps the legacy setting and per-backend settings side by
+    side, and the legacy getter raises a RuntimeError if a caller has set the
+    two to disagree. So the precision is always set with the legacy API, which
+    keeps both layers consistent inside the block, and on exit:
+
+    * the legacy setting is restored, if the caller's could be read;
+    * the per-backend settings are then restored on top. This is needed even
+      when the legacy setting was restored, because the legacy setter writes
+      the per-backend settings too (turning "none", meaning "inherit", into
+      "ieee").
+
+    The per-backend settings are the ones PyTorch uses to choose kernels, so
+    the caller's numerics always come back exactly. The one thing that cannot
+    be restored is a legacy setting that could not be read: a caller whose
+    legacy getter raised before the block will find it reports ``precision``
+    afterwards.
+
+    Parameters
+    ----------
+    precision : str
+        One of "highest", "high" or "medium", as accepted by
+        torch.set_float32_matmul_precision(). "high" lets CUDA matmuls use TF32
+        on Ampere and newer GPUs.
+
+    Yields
+    ------
+    None
+        Control returns to the ``with`` block with the precision applied.
+    """
+    try:
+        previous_precision: str | None = torch.get_float32_matmul_precision()
+    except RuntimeError:
+        # the caller set the legacy and per-backend APIs to disagree, so
+        # PyTorch will not report a single legacy value; only the per-backend
+        # settings can (and need to) be restored
+        previous_precision = None
+
+    backends = _per_backend_matmul_settings()
+    previous_backend_precisions = [backend.fp32_precision for backend in backends]
+
+    torch.set_float32_matmul_precision(precision)
+    try:
+        yield
+    finally:
+        if previous_precision is not None:
+            torch.set_float32_matmul_precision(previous_precision)
+        for backend, previous_backend_precision in zip(backends, previous_backend_precisions):
+            backend.fp32_precision = previous_backend_precision
+
+
+@contextlib.contextmanager
+def deterministic_cudnn() -> Iterator[None]:
+    """
+    Make cuDNN use deterministic algorithms for a block of code, then restore the setting.
+
+    By default cuDNN may pick convolution algorithms (notably for the
+    backward pass) that accumulate with atomics, so the same inputs give
+    slightly different results from run to run. Constraint guidance
+    backpropagates through the VAE decoder at every step, and 30 guided
+    steps amplify those differences into distance maps that differed by up
+    to 12 Angstroms between identically seeded runs. Deterministic
+    algorithms made them identical at no measurable cost. Like
+    float32_matmul_precision, this changes torch.backends.cudnn.deterministic
+    only inside the block and puts the caller's value back on exit, including
+    when an exception is raised.
+
+    Yields
+    ------
+    None
+        Control returns to the ``with`` block with deterministic cuDNN.
+    """
+    previous_setting = torch.backends.cudnn.deterministic
+    torch.backends.cudnn.deterministic = True
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.deterministic = previous_setting
+
+
 def write_starling_ensemble(
     ensemble_object,
     filename,
@@ -273,8 +402,15 @@ def write_starling_ensemble(
         Whether to compress the file or not. Default is False.
 
     reduce_precision : bool
-        Whether to reduce the precision of the distance map to a
-        single decimal point and cast to float16 if possible.
+        Whether to round the distance maps to a single decimal point
+        (0.1 Å) and cast them to float16 if possible. float16 cannot
+        hold every 0.1 Å value at larger distances: the gap between
+        adjacent float16 values is 0.0625 Å from 64 to 128 Å, 0.125 Å
+        from 128 to 256 Å, 0.25 Å from 256 to 512 Å and 0.5 Å from
+        512 to 1024 Å. Stored distances are therefore 0.1 Å-resolved
+        only below 128 Å; above that the resolution is the float16
+        gap, and each stored value can differ from the rounded one by
+        up to half that gap.
         Default is None. Sets to False if compression is False,
         but True if compression is True.
 
@@ -370,13 +506,21 @@ def read_starling_ensemble(filename):
     Parameters
     ---------------
     filename : str
-        The filename to read the ensemble from; note this should
-        not include a file extenison and if it does this will
-        be removed
+        The filename to read the ensemble from, including its
+        extension, which must be .starling, .starling.gzip or
+        .starling.xz.
 
     Returns
     ---------------
-    starling.structure.Ensemble: The STARLING ensemble object
+    dict
+        The saved dictionary: the sequence, distance maps, trajectory
+        (or None) and metadata.
+
+    Raises
+    ---------------
+    ValueError
+        If the extension is not one of the above or the file cannot be
+        read.
     """
 
     if filename.endswith(".starling.gzip"):
@@ -435,15 +579,19 @@ def symmetrize_distance_maps(dist_maps):
     Symmetrizes a stack of distance maps along an axis by reflecting the upper triangle
     onto the lower triangle and setting the diagonal values to zero.
 
+    Note this modifies ``dist_maps`` in place (and returns the same array);
+    pass a copy if the original maps are still needed.
+
     Parameters
     ----------
     dist_maps : np.ndarray
         A 3D NumPy array of shape (N, M, M), where N is the number of distance maps.
+        Overwritten with the symmetrized maps.
 
     Returns
     -------
     np.ndarray
-        A symmetrized stack of distance maps.
+        A symmetrized stack of distance maps (the input array itself).
     """
     # Ensure input is a 3D array
     assert dist_maps.ndim == 3, "Input must be a 3D array of shape (N, M, M)."

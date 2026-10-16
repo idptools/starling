@@ -189,9 +189,9 @@ class LearnablePositionalEncoding1D(nn.Module):
         )
 
     def forward(self, x):
-        if self.positional_encoding.device != x.device:
-            self.positional_encoding = self.positional_encoding.to(x.device)
-
+        # positional_encoding is a Parameter, so it moves with the module's .to();
+        # it must not be reassigned here (a moved copy is a plain tensor, which
+        # cannot replace a Parameter attribute)
         return x + self.positional_encoding
 
 
@@ -206,7 +206,7 @@ class LearnablePositionalEncoding2D(nn.Module):
         )
 
     def forward(self, x):
-        if self.positional_encoding.device != x.device:
-            self.positional_encoding = self.positional_encoding.to(x.device)
-
+        # positional_encoding is a Parameter, so it moves with the module's .to();
+        # it must not be reassigned here (a moved copy is a plain tensor, which
+        # cannot replace a Parameter attribute)
         return x + self.positional_encoding

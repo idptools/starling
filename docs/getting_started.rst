@@ -34,6 +34,7 @@ ensembles.
 
 .. code-block:: bash
 
+	 mkdir -p results
 	 starling MQDRVKRPMNAFIVWSRDQRRKMALENPRMRNSEISKQLGYQWKMLTEAEKWPFFQEAQKLQAMHREKYPNYKYRPRRKAKMLPK \
 			 -c 100 \
 			 --outname example_ensemble \
@@ -43,11 +44,11 @@ ensembles.
 Key flags:
 
 * ``-c``/``--conformations`` – number of structures to sample (default 400)
-* ``--ionic_strength`` – pick from 20, 150, or 300 mM conditions (default 150)
-* ``-r``/``--return_structures`` – Flag which, if provided, means STARLING returns 3D coordinates alongside distance maps as a .pdb file (single topology file) and a .xtc file (compressed trajectory format).
+* ``--ionic_strength`` – ionic strength in mM (default 150; STARLING was trained at 20, 150 and 300 mM)
+* ``-r``/``--return_structures`` – Flag which, if provided, means STARLING returns 3D coordinates alongside distance maps as a .pdb file (single topology file) and a .xtc file (compressed trajectory format). These structures are relaxed with the Mpipi-GG force field by default; add ``--no-relax`` to skip this.
 
-The CLI writes ``.starling`` archives and (if ``r-`` is provided PDB/XTC files into the
-selected output directory. A more detailed walkthrough lives in
+The CLI writes ``.starling`` archives and (if ``-r`` is provided) PDB/XTC files into the
+selected output directory, which must already exist. A more detailed walkthrough lives in
 :doc:`usage/cli`.
 
 Quickstart: Python API
@@ -75,7 +76,8 @@ available on the ``Ensemble`` class.
 Where to go next
 ----------------
 
-* :doc:`usage/constraints` – steer sampling with experimental restraints and enable PyTorch compilation for repeat jobs.	
+* :doc:`usage/constraints` – steer sampling with experimental restraints.
+* :doc:`usage/performance` – enable PyTorch compilation for repeat jobs.
 * :doc:`usage/sequence_encoder` – extract ensemble-aware sequence embeddings for downstream analysis.	
 * :doc:`usage/search` – index large databases and retrieve related sequences with FAISS-powered search.
 * :doc:`usage/possible_issues` – troubleshoot installation or runtime hiccups.

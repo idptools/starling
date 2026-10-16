@@ -40,8 +40,26 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, query, context, query_mask=None, context_mask=None):
         """
-        query:   (B, N, Dq) — tokens to be conditioned
-        context: (B, S, Dc) — conditioning source (or None for self-attention)
+        Attend from the query tokens to the context tokens.
+
+        Parameters
+        ----------
+        query : torch.Tensor
+            Tokens to be conditioned, shape (B, N, Dq).
+        context : torch.Tensor
+            Conditioning source, shape (B, S, Dc). For self-attention pass the
+            query tensor again (None is not accepted).
+        query_mask : torch.Tensor or None, optional
+            Shape (B, N); True for real query tokens. The attention output of
+            padded query tokens is set to zero, so they leave this layer as
+            out_proj's bias.
+        context_mask : torch.Tensor or None, optional
+            Shape (B, S); True for context tokens that may be attended to.
+
+        Returns
+        -------
+        torch.Tensor
+            Attention output, shape (B, N, Dq).
         """
 
         B, N, _ = query.shape
@@ -57,23 +75,26 @@ class MultiHeadAttention(nn.Module):
         K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
         V = rearrange(V, "b s (h d) -> b h s d", h=self.num_heads)
 
-        # Build attention mask (broadcasted)
-        if query_mask is not None or context_mask is not None:
-            if query_mask is None:
-                query_mask = torch.ones(B, N, device=query.device, dtype=torch.bool)
-            if context_mask is None:
-                context_mask = torch.ones(B, S, device=query.device, dtype=torch.bool)
-
-            attn_mask = rearrange(query_mask, "b n -> b 1 n 1") & rearrange(
-                context_mask, "b s -> b 1 1 s"
-            )  # (B, 1, N, S)
-            attn_mask = repeat(attn_mask, "b 1 n s -> b h n s", h=self.num_heads)
-            attn_mask = attn_mask.bool()
+        # Build attention mask over the keys only (broadcasted). Masking padded
+        # queries here as well would leave their rows with no key to attend to;
+        # torch >= 2.5 returns 0 for such rows, but older versions return NaN,
+        # which later layers spread into the real tokens through 0 * NaN.
+        # The mask is left as (B, 1, 1, S) for SDPA to broadcast: expanding it to
+        # (B, H, N, S) made the memory-efficient kernel build a full-size float
+        # copy of it (about 300 MB extra per call at B=64, L=384).
+        if context_mask is not None:
+            attn_mask = rearrange(context_mask.bool(), "b s -> b 1 1 s")
         else:
             attn_mask = None
 
         # Scaled dot-product attention (Fused version in PyTorch ≥2.0)
         out = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask)
+
+        # Zero the outputs of padded queries instead, which is what torch >= 2.5
+        # returned for their fully masked rows, so real tokens are unchanged
+        if query_mask is not None:
+            padded_queries = ~rearrange(query_mask.bool(), "b n -> b 1 n 1")
+            out = out.masked_fill(padded_queries, 0.0)
 
         # Merge heads
         out = rearrange(out, "b h n d -> b n (h d)")

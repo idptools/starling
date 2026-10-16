@@ -1,3 +1,9 @@
+# UNUSED LEGACY CONFIG, kept for reference only.
+# The training entry points (starling-vae-train, starling-ddpm-train) are Hydra apps
+# that read their configs from starling/configs/ (vae_configs.yaml and configs.yaml),
+# never this file. Its keys (data, device, unet, training) describe an older UNet-based
+# diffusion setup and do not match the current training code.
+
 data:
   batch_size: 256
   test_data: null

@@ -1,4 +1,6 @@
 import math
+from typing import Final
+
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -14,7 +16,12 @@ from starling.data.distributions import DiagonalGaussianDistribution
 from starling.models import vae_components
 from starling.utilities import symmetrize_tensor_distance_maps
 
-torch.set_float32_matmul_precision("high")
+# Fraction of all training steps over which LinearWarmupCosineAnnealingLR
+# ramps the learning rate up linearly before the cosine decay starts
+WARMUP_FRACTION: Final[float] = 0.01
+
+# Ways KLDWeightScheduler can ramp up the KLD weight
+KLD_SCHEDULER_TYPES: Final[tuple[str, ...]] = ("linear", "cyclical")
 
 
 class KLDWeightScheduler:
@@ -29,6 +36,10 @@ class KLDWeightScheduler:
         self.current_step = 0
         self.total_warmup_steps = None
         self._current_weight = None
+        if scheduler_type not in KLD_SCHEDULER_TYPES:
+            raise ValueError(
+                f"unknown KLD scheduler_type {scheduler_type!r}; use one of {KLD_SCHEDULER_TYPES}"
+            )
         self.scheduler_type = scheduler_type
 
     def configure(self, total_training_steps: int):
@@ -47,23 +58,37 @@ class KLDWeightScheduler:
             return self._max_weight
 
         if self.scheduler_type == "linear":
-            weight = min(
-                (step / self.total_warmup_steps) * self._max_weight,
-                self._max_weight,
-            )
+            # with no warmup steps (a warmup_fraction of 0, or too few training
+            # steps) there is nothing to ramp, so the weight starts at its maximum
+            if self.total_warmup_steps == 0:
+                weight = self._max_weight
+            else:
+                weight = min(
+                    (step / self.total_warmup_steps) * self._max_weight,
+                    self._max_weight,
+                )
         elif self.scheduler_type == "cyclical":
             # 1 cycle is 20% of the total steps which amounts to 5 cycles
             cycle_length = int(0.20 * self.total_steps)
 
-            # 50% of the cycle is the warmup-phase
+            # the first warmup_fraction of each cycle is the warmup-phase
             ramp_steps = int(self.warmup_fraction * cycle_length)
 
-            cycle_step = step % cycle_length
-
-            if cycle_step < ramp_steps:
-                weight = (cycle_step / ramp_steps) * self._max_weight
-            else:
+            # with no ramp (a warmup_fraction of 0, or a run too short for a
+            # cycle, where cycle_length is 0) the weight stays at its maximum
+            if ramp_steps == 0:
                 weight = self._max_weight
+            else:
+                cycle_step = step % cycle_length
+
+                if cycle_step < ramp_steps:
+                    weight = (cycle_step / ramp_steps) * self._max_weight
+                else:
+                    weight = self._max_weight
+        else:
+            raise ValueError(
+                f"unknown KLD scheduler_type {self.scheduler_type!r}; use one of {KLD_SCHEDULER_TYPES}"
+            )
 
         self._current_weight = weight
         return weight
@@ -131,22 +156,33 @@ class VAE(pl.LightningModule):
             The size of the image in the height and width dimensions (i.e., distance maps)
         loss_type : str
             The type of loss to use for the reconstruction loss. Options are "mse" and "nll"
-        weights_type : str
-            The type of weights to use for the reconstruction loss. Options are "linear",
-            "reciprocal", and "equal"
         KLD_weight : float
-            The weight to apply to the KLD loss in the ELBO loss function, KLD loss regularizes the latent space
+            The weight to apply to the KLD loss in the ELBO loss function, KLD loss regularizes the latent space.
+            This is the maximum weight the KLD weight scheduler ramps up to
         lr_scheduler : str
-            The learning rate scheduler to use for training the model. Options are "CosineAnnealingWarmRestarts",
-            "OneCycleLR", and "CosineAnnealingLR"
+            The learning rate scheduler to use for training the model. Options are
+            "LinearWarmupCosineAnnealingLR", "CosineAnnealingWarmRestarts", "OneCycleLR", and "CosineAnnealingLR"
         set_lr : float
             The learning rate to use for training the model
         norm : str, optional
-            The normalization layer to use in the ResNet architecture, by default "instance"
+            The normalization layer to use in the ResNet architecture ("batch", "instance", "layer", "rms"
+            or "group"), by default "instance"
         base : int, optional
             The base (starting) number of channels to use in the ResNet architecture, by default 64
         optimizer: str, optional
-            The optimizer to use in the ResNet architecture, by default "SGD"
+            The optimizer to use in the ResNet architecture ("SGD", "AdamW" or "Adam"), by default "SGD"
+        KLD_warmup_fraction : float, optional
+            How long the KLD weight takes to ramp up from 0 to KLD_weight. For the "linear" scheduler this
+            is a fraction of all training steps; for the "cyclical" scheduler it is the fraction of each
+            cycle (20% of all training steps) spent ramping up. By default 0, which uses the full
+            KLD_weight from the start
+        KLD_scheduler_type : str, optional
+            How the KLD weight is ramped up, "linear" (once) or "cyclical" (five times), by default "cyclical"
+        compile_mode : str or None, optional
+            The torch.compile mode used to compile encode, decode and forward when training starts,
+            or None to not compile, by default "max-autotune"
+        weights_type : str or None, optional
+            Not used; only accepted so that older checkpoints and configs that pass it still load
         """
         super().__init__()
 
@@ -373,10 +409,12 @@ class VAE(pl.LightningModule):
         """
         Calculates the loss of the VAE, using the sum between the KLD loss
         of the latent space to N(0, I) and either mean squared error
-        between the reconstructed data and the ground truth or
-        the negative log likelihood of the input data given the latent space
-        under a Gaussian assumption. Additional loss is added to ensure the
-        contacts are reconstructed correctly.
+        between the reconstructed data and the ground truth (weighted by
+        1 / ground-truth distance) or the negative log likelihood of the input
+        data given the latent space under a Gaussian assumption. The
+        reconstruction loss only covers the upper triangle of the distance map.
+        The KLD weight comes from the KLD weight scheduler during training and
+        is its maximum otherwise.
 
         Parameters
         ----------
@@ -388,10 +426,6 @@ class VAE(pl.LightningModule):
             Means of the normal distributions of the latent space
         logvar : torch.Tensor
             Log variances of the normal distributions of the latent space
-        KLD_weight : int, optional
-            How much to weight the importance of the regularization term of the
-            latent space. Setting this to lower than 1 will lead to less regular
-            and interpretable latent space, by default None
 
         Returns
         -------
@@ -401,7 +435,7 @@ class VAE(pl.LightningModule):
         Raises
         ------
         ValueError
-            If the loss type is not mse or elbo
+            If the loss type is not mse or nll
         """
 
         # Find out where 0s are in the data
@@ -579,12 +613,11 @@ class VAE(pl.LightningModule):
     def configure_optimizers(self):
         """
         Configure the optimizer and the learning rate scheduler for the model.
-        Here I am using NVIDIA suggested settings for learning rate and weight
-        decay. For ResNet50 they have seen best performance with CosineAnnealingLR,
-        initial learning rate of 0.256 for batch size of 256 and linearly scaling
-        it down/up for other batch sizes. The weight decay is set to 1/32768 for all
-        parameters except the batch normalization layers. For further information check:
-        https://catalog.ngc.nvidia.com/orgs/nvidia/resources/resnet_50_v1_5_for_pytorch
+        The optimizer is chosen by the optimizer argument: SGD (Nesterov
+        momentum 0.875, no weight decay), AdamW (weight decay 1e-4 on the
+        parameters whose names contain "encoder" and none on the rest) or Adam
+        (no weight decay), all with learning rate set_lr. The learning rate
+        scheduler is chosen by lr_scheduler.
 
         Returns
         -------
@@ -593,6 +626,8 @@ class VAE(pl.LightningModule):
 
         Raises
         ------
+        NotImplementedError
+            If the optimizer is not implemented
         ValueError
             If the scheduler is not implemented
         """
@@ -670,8 +705,8 @@ class VAE(pl.LightningModule):
                 raise RuntimeError("max_epochs must be set for this scheduler")
             total_steps = int(self.trainer.estimated_stepping_batches)
             steps_per_epoch = total_steps // num_epochs
-            # Warmup for 5% of the total steps
-            warmup_steps = int(steps_per_epoch * num_epochs * 0.01)
+            # Warmup for 1% (WARMUP_FRACTION) of the total steps
+            warmup_steps = int(total_steps * WARMUP_FRACTION)
 
             def lr_lambda(current_step):
                 if current_step < warmup_steps:

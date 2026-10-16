@@ -42,7 +42,11 @@ class DDPMDataLoader(pl.LightningDataModule):
             if os.path.exists(metadata_file):
                 with open(metadata_file, "r") as f:
                     metadata = json.load(f)
+                # Only fill in the size(s) missing from the config, so an explicit
+                # train_size or val_size is never overwritten by metadata.json
+                if train_size is None:
                     train_size = np.sum([v.get("train", 0) for v in metadata.values()])
+                if val_size is None:
                     val_size = np.sum(
                         [v.get("validation", 0) for v in metadata.values()]
                     )
@@ -86,9 +90,12 @@ class DDPMDataLoader(pl.LightningDataModule):
     ):
         """Create a WebDataset with appropriate processing"""
         # Configure the options based on training or validation
+        # Split shards across nodes (DDP ranks) here; WebDataset's default
+        # workersplitter then splits each rank's shards across dataloader workers,
+        # so every validation shard is read exactly once per pass
         dataset = wds.WebDataset(
             tar_files,
-            nodesplitter=wds.split_by_worker,
+            nodesplitter=wds.split_by_node,
             resampled=is_training,  # Only enable infinite iteration for training
             shardshuffle=True,
         )
@@ -167,6 +174,23 @@ class DDPMDataLoader(pl.LightningDataModule):
             "ionic_strengths": ionic_strengths,
         }
 
+    def _worker_kwargs(self) -> dict:
+        """
+        Return the loader keyword arguments that are only valid with worker processes.
+
+        PyTorch raises a ValueError if prefetch_factor is passed while num_workers
+        is 0, so it is only included when the loader actually uses workers.
+
+        Returns
+        -------
+        dict
+            {"prefetch_factor": self.prefetch_factor} if num_workers > 0,
+            otherwise an empty dict.
+        """
+        if self.num_workers > 0:
+            return {"prefetch_factor": self.prefetch_factor}
+        return {}
+
     def train_dataloader(self):
         return (
             wds.WebLoader(
@@ -174,7 +198,7 @@ class DDPMDataLoader(pl.LightningDataModule):
                 batch_size=None,  # Already batched
                 num_workers=self.num_workers,
                 pin_memory=True,
-                prefetch_factor=self.prefetch_factor,
+                **self._worker_kwargs(),
                 collate_fn=self._collate_fn,
             )
             .with_epoch(self.n_train_batches)
@@ -188,7 +212,7 @@ class DDPMDataLoader(pl.LightningDataModule):
                 batch_size=None,
                 num_workers=self.num_workers,
                 pin_memory=True,
-                prefetch_factor=self.prefetch_factor,
+                **self._worker_kwargs(),
                 collate_fn=self._collate_fn,
             )
             .with_epoch(self.n_val_batches)

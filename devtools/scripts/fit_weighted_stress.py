@@ -6,6 +6,10 @@ import json
 import numpy as np
 
 SHORT_RANGE = 6
+# A sequence of N residues has N - 1 separations, and the long-range plateau is fit
+# on separations beyond SHORT_RANGE, so at least one long-range separation needs
+# N - 1 > SHORT_RANGE, i.e. N >= SHORT_RANGE + 2 residues
+MIN_RESIDUES = SHORT_RANGE + 2
 
 
 def fit_error_model(records):
@@ -20,9 +24,12 @@ def fit_error_model(records):
         raise ValueError(
             "Each sequence needs one finite error value per residue separation"
         )
+    if any(r["length"] < MIN_RESIDUES for r in records):
+        raise ValueError(
+            f"Every sequence must have at least {MIN_RESIDUES} residues so that it has "
+            f"at least one separation beyond {SHORT_RANGE} for the long-range plateau"
+        )
     short = np.asarray([r["error_by_separation"][:SHORT_RANGE] for r in records])
-    if short.shape[1] != SHORT_RANGE:
-        raise ValueError("Every sequence must have at least seven residues")
     short_error = np.sqrt(np.mean(short**2, axis=0))
 
     lengths = np.asarray([r["length"] for r in records], dtype=float)

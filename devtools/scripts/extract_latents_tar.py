@@ -26,7 +26,9 @@ def load_model(model_path: str) -> VAE:
         Loaded VAE model ready for inference
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = VAE.load_from_checkpoint(model_path)
+    # Load on the CPU, then move: map_location on the GPU would put the whole
+    # checkpoint there first, optimizer state included
+    model = VAE.load_from_checkpoint(model_path, map_location="cpu")
     model.eval()
     model.to(device)
     return model  # Add return statement
@@ -114,7 +116,8 @@ def main():
         wds.WebDataset(tar_files, resampled=False, shardshuffle=False)
         .decode(npz_decoder)
         .map(process_sample)
-        .batched(BATCH_SIZE, collation_fn=collate_fn, partial=False)
+        # partial=True keeps each worker's final, smaller batch so no latents are missing
+        .batched(BATCH_SIZE, collation_fn=collate_fn, partial=True)
     )
 
     dataloader = wds.WebLoader(

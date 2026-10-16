@@ -16,7 +16,6 @@ starling.inference.evaluate\_vae
       :toctree:
       :nosignatures:
    
-      finches_potential_energy
       get_errors
       int_to_seq
       load_hdf5_compressed

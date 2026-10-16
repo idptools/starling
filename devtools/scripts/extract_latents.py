@@ -29,7 +29,7 @@ def load_hdf5_compressed(file_path):
 
 def encode_data(model, data):
     """
-    Encodes data using the provided VAE model in batches of 32.
+    Encodes data using the provided VAE model in batches of 64.
 
     Parameters:
     - model (VAE): The VAE model to use for encoding.
@@ -80,12 +80,13 @@ def save_h5(averange_latent, encoded_data, seq_data, file_path):
 
 
 def main():
-    # Load the VAE model
+    # Load the VAE model on the CPU, then move it: map_location="cuda" would
+    # put the whole checkpoint on the GPU first, optimizer state included
     model = VAE.load_from_checkpoint(
         "/work/j.lotthammer/projects/starling/VAEs/model-kernel-epoch=39-epoch_val_loss=1.82.ckpt",
-        map_location="cuda",
+        map_location="cpu",
     )
-    model.eval()
+    model.to("cuda").eval()
 
     data_paths = sorted(
         glob.glob(
@@ -106,9 +107,11 @@ def main():
         # Encode the data
         try:
             encoded_data, average_latent = encode_data(model, data["dm"])
-        except Exception as e:
-            print(f"Error encoding data from {data_path}: {e}")
-            continue
+        except Exception as error:
+            # Stop rather than skip: after a CUDA error the context is unusable,
+            # so every later file would fail too and the latent set would end
+            # up silently incomplete. Finished files are skipped on a rerun.
+            raise RuntimeError(f"Error encoding data from {data_path}") from error
 
         # Save the encoded data to a new HDF5 file
         save_h5(average_latent, encoded_data, data["seq"], outfile)

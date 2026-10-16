@@ -81,7 +81,9 @@ def load_model(model_path: str) -> VAE:
         Loaded VAE model ready for inference
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = VAE.load_from_checkpoint(model_path)
+    # Load on the CPU, then move: map_location on the GPU would put the whole
+    # checkpoint there first, optimizer state included
+    model = VAE.load_from_checkpoint(model_path, map_location="cpu")
     model.eval()
     model.to(device)
     return model  # Add return statement
@@ -168,7 +170,8 @@ def main():
         wds.WebDataset(tar_files, resampled=False, shardshuffle=False)
         .decode(npz_decoder)
         .map(process_sample)
-        .batched(BATCH_SIZE, collation_fn=collate_fn, partial=False)
+        # partial=True keeps each worker's final, smaller batch so no samples are skipped
+        .batched(BATCH_SIZE, collation_fn=collate_fn, partial=True)
     )
 
     dataloader = wds.WebLoader(
@@ -188,8 +191,9 @@ def main():
             # Move data to appropriate device
             distance_maps = distance_maps.to(device)
 
-            # Process the batch through the VAE model to get latent representations
-            reconstructed, _ = model(distance_maps)
+            # Decode the posterior mean rather than a random posterior sample (which
+            # is what model(distance_maps) decodes) so the losses are deterministic
+            reconstructed = model.decode(model.encode(distance_maps).mode())
 
             mean_losses, max_losses = calc_loss(reconstructed, distance_maps, sequences)
 
@@ -199,8 +203,11 @@ def main():
                 max_loss_by_length[length].append(max_loss.item())
 
             if num % 100 == 0:
-                # Save the loss statistics at the end of normal execution
+                # Save intermediate statistics so a long run can be inspected early
                 save_statistics(loss_by_length, max_loss_by_length)
+
+    # Save the final statistics, which include every batch
+    save_statistics(loss_by_length, max_loss_by_length)
 
 
 if __name__ == "__main__":

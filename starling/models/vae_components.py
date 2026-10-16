@@ -9,6 +9,7 @@ from starling.models.blocks import (
     ResBlockEncBasic,
     ResizeConv2d,
 )
+from starling.models.normalization import RMSNorm
 
 
 class ResNet_Encoder(nn.Module):
@@ -28,11 +29,12 @@ class ResNet_Encoder(nn.Module):
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
+            "rms": RMSNorm,
             "group": nn.GroupNorm,
         })
 
-        # First convolution of the ResNet Encoder reduction in the spatial dimensions / 2
-        # with kernel=7 and stride=2 AvgPool2d reduces spatial dimensions by / 2
+        # First convolution of the ResNet Encoder (kernel=7, stride=2) reduces the
+        # spatial dimensions by / 2; there is no pooling layer after it
         self.first_conv = nn.Sequential(
             nn.Conv2d(
                 in_channels=in_channels,

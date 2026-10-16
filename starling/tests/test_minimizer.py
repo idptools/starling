@@ -793,11 +793,12 @@ def test_thermalization_is_reproducible_with_a_seed(device):
 # ------------------------------------------------------------------------------
 
 
-def test_generate_rejects_non_bool_relax():
+@pytest.mark.parametrize("relax", ["yes", "Fast", "none", None, 1, 0])
+def test_generate_rejects_unknown_relaxation_modes(relax):
     from starling.frontend.ensemble_generation import generate
 
-    with pytest.raises(ValueError, match="relax must be True or False"):
-        generate(SEQ, relax="yes", output_directory=".")
+    with pytest.raises(ValueError, match="relax must be 'standard', 'fast', True"):
+        generate(SEQ, relax=relax, output_directory=".")
 
 
 def test_generate_relaxes_by_default():
@@ -805,7 +806,26 @@ def test_generate_relaxes_by_default():
 
     from starling.frontend.ensemble_generation import generate
 
-    assert inspect.signature(generate).parameters["relax"].default is True
+    assert inspect.signature(generate).parameters["relax"].default == "standard"
+
+
+@pytest.mark.parametrize(
+    "relax,expected_mode", [("standard", "standard"), ("fast", "fast"), (True, "standard"), (False, False)]
+)
+def test_generate_passes_the_relaxation_mode_to_the_backend(monkeypatch, relax, expected_mode):
+    """True is shorthand for "standard", so code written before "fast" existed keeps working."""
+    from starling.frontend import ensemble_generation as frontend
+
+    seen = {}
+
+    def backend(*args, **kwargs):
+        seen.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(frontend.generation, "generate_backend", backend)
+    frontend.generate(SEQ, relax=relax, return_structures=True, device="cpu")
+    assert type(seen["relax"]) is type(expected_mode)
+    assert seen["relax"] == expected_mode
 
 
 @pytest.mark.parametrize("sampler", ["ddpm", "ddim", "dpmpp", "plms"])
@@ -859,7 +879,8 @@ def test_generate_records_and_conditions_on_ionic_strength(monkeypatch, tmp_path
         {"test": sequence},
         conformations=1,
         device=torch.device("cpu"),
-        steps=12,
+        # PLMS needs at least 20 steps
+        steps=20,
         sampler=sampler,
         return_structures=False,
         batch_size=1,
@@ -880,7 +901,8 @@ def test_generate_records_and_conditions_on_ionic_strength(monkeypatch, tmp_path
     assert saved.ionic_strength == salt
     assert conditions, "The real sampler must condition the network"
     for condition in conditions:
-        torch.testing.assert_close(condition, torch.tensor([[salt]]))
+        # float32 whatever type the ionic strength was given as
+        torch.testing.assert_close(condition, torch.tensor([[float(salt)]]))
     np.testing.assert_array_equal(saved.distance_maps(), map_)
 
 
@@ -936,9 +958,10 @@ def test_relax_coordinates_converts_angstrom_inputs_to_nanometre_outputs():
     assert bonds.mean() == pytest.approx(BOND_LENGTH / 10.0, abs=0.02)
 
 
-def test_error_filter_screens_the_relaxed_structures(monkeypatch):
+@pytest.mark.parametrize("relax", ["standard", "fast"])
+def test_error_filter_screens_the_relaxed_structures(monkeypatch, relax):
     """
-    With relax on, the 3D error screen must see the relaxed structures.
+    With relax on (in either mode), the 3D error screen must see the relaxed structures.
 
     In the first round, the stand-in for relaxation stretches every second
     conformer far past the physical bound, so if (and only if) the screen runs
@@ -966,7 +989,7 @@ def test_error_filter_screens_the_relaxed_structures(monkeypatch):
     monkeypatch.setattr(generation, "_sample_distance_maps", fake_sample)
     monkeypatch.setattr(generation, "_relax_coordinates", fake_relax)
 
-    def run(relax):
+    def run(relax_mode):
         return generation._generate_error_filtered_conformers(
             sampler=None,
             sequence=seq,
@@ -977,24 +1000,25 @@ def test_error_filter_screens_the_relaxed_structures(monkeypatch):
             return_structures=True,
             device="cpu",
             show_progress_bar=False,
-            relax=relax,
+            relax=relax_mode,
         )
 
-    maps, coords, discarded = run(relax=True)
+    maps, coords, discarded = run(relax)
     assert len(maps) == len(coords) == 4
     assert discarded == 2
     assert relax_calls == [4, 2], "every reconstructed conformer is relaxed"
     assert sampled == [4, 2]
 
     relax_calls.clear()
-    maps, coords, discarded = run(relax=False)
+    maps, coords, discarded = run(False)
     assert relax_calls == []
     assert discarded == 0
 
 
 @pytest.mark.slow
 @pytest.mark.requires_weights
-def test_generate_relaxes_structures_end_to_end():
+@pytest.mark.parametrize("relax", ["standard", "fast"])
+def test_generate_relaxes_structures_end_to_end(relax):
     from starling import generate
 
     kwargs = dict(
@@ -1003,6 +1027,7 @@ def test_generate_relaxes_structures_end_to_end():
         return_single_ensemble=True,
         show_progress_bar=False,
         show_per_step_progress_bar=False,
+        relax=relax,
     )
     relaxed = generate(SEQ, **kwargs)
 
@@ -1013,6 +1038,27 @@ def test_generate_relaxes_structures_end_to_end():
     # 300 K simulation. Raw weighted SMACOF (~3.73 +/- 0.08 A for this
     # sequence) and minimization alone (+/- ~0.03 A) both fail the spread check
     _assert_thermal_bonds(bonds)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_weights
+@pytest.mark.parametrize("relax", ["standard", "fast"])
+def test_seeded_generate_reproduces_relaxed_structures(relax):
+    """With a seed, either relaxation mode returns exactly the same structures every time."""
+    from starling import generate
+
+    kwargs = {
+        "conformations": 8,
+        "seed": 21,
+        "return_structures": True,
+        "relax": relax,
+        "return_single_ensemble": True,
+        "show_progress_bar": False,
+        "show_per_step_progress_bar": False,
+    }
+    first = generate(SEQ, **kwargs).trajectory.traj.xyz
+    again = generate(SEQ, **kwargs).trajectory.traj.xyz
+    np.testing.assert_array_equal(first, again)
 
 
 @pytest.mark.slow

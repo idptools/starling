@@ -103,7 +103,6 @@ Full Configuration Example
 
    starling.set_compilation_options(
        enabled=True,
-       mode="reduce-overhead",
        backend="inductor",
        fullgraph=False,          # Allow graph breaks
        dynamic=False,            # Fixed tensor shapes
@@ -112,10 +111,14 @@ Full Configuration Example
        }
    )
 
+As with ``torch.compile`` itself, ``mode`` and ``options`` cannot be combined:
+passing both raises a ``ValueError``, and setting one removes the other from
+the stored settings (including the default ``mode="default"``).
+
 Common Options
 ^^^^^^^^^^^^^^
 
-``fullgraph`` : bool, default False
+``fullgraph`` : bool, default True
    If ``True``, requires the entire model to compile as a single graph.
    Compilation may fail if the model contains unsupported operations.
    Set to ``False`` to allow graph breaks.
@@ -126,6 +129,7 @@ Common Options
 
 ``options`` : dict, optional
    Backend-specific configuration. See PyTorch documentation for details.
+   Cannot be combined with ``mode``.
 
 Disabling Compilation
 ---------------------
@@ -137,6 +141,32 @@ To restore eager execution mode:
    starling.set_compilation_options(enabled=False)
 
 This is useful for debugging or when compilation is causing issues.
+
+Faster Structure Relaxation on CUDA
+-----------------------------------
+
+With ``return_structures=True``, :func:`starling.generate` relaxes the 3D
+structures with the Mpipi-GG force field by default (see
+:ref:`relaxing-structures`). On a CUDA device, ``compile_forces=True`` (or
+``--compile-forces`` on the command line) fuses the thermalization forces for
+better sustained throughput on large jobs. It adds compilation time at startup
+but does not change the precision, the force field or the number of
+thermalization steps. It is independent of
+:func:`starling.set_compilation_options`, and requires relaxation (``relax``
+not ``False``) and ``return_structures=True``.
+
+``relax="fast"`` (``--relax fast``) separately speeds up the reconstruction
+before relaxation, which is about 4x faster for long sequences, with relaxed
+ensembles that match the standard ones (see :ref:`relaxing-structures`).
+
+.. code-block:: python
+
+   ensembles = starling.generate(
+       sequences,
+       return_structures=True,
+       compile_forces=True,
+       device="cuda",
+   )
 
 Performance Tips
 ----------------

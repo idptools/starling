@@ -26,6 +26,7 @@ from starling import configs
 from starling.data.tokenizer import StarlingTokenizer
 from starling.inference.constraints import ConstraintLogger
 from starling.samplers.sampler_utilities import check_conformation_count
+from starling.utilities import MODEL_FLOAT32_MATMUL_PRECISION, float32_matmul_precision
 
 if TYPE_CHECKING:
     from starling.inference.constraints import Constraint
@@ -35,6 +36,13 @@ if TYPE_CHECKING:
 # Shape of one conformation's latent (channels, height, width): the VAE
 # compresses a 384 x 384 distance map into a single 24 x 24 channel
 LATENT_SHAPE: Final[tuple[int, int, int]] = (1, 24, 24)
+
+# tqdm rows for the progress bars: generate() draws its per-sequence bar on row
+# 0 and the per-step bar sits below it. ConstraintLogger always draws its
+# "Applying constraints" bar on row 1, so while that bar is shown the per-step
+# bar moves down a row rather than being drawn over it.
+PER_STEP_PROGRESS_BAR_POSITION: Final[int] = 1
+CONSTRAINT_PROGRESS_BAR_POSITION: Final[int] = 1
 
 
 class BaseSampler(ABC):
@@ -63,6 +71,7 @@ class BaseSampler(ABC):
         ddpm_model: DiffusionModel,
         encoder_model: VAE,
         ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
+        generator: torch.Generator | None = None,
     ) -> None:
         """
         Set up the parts every sampler needs.
@@ -77,12 +86,19 @@ class BaseSampler(ABC):
         ionic_strength : float, optional
             Ionic strength in mM to condition the model on. Default
             configs.DEFAULT_IONIC_STRENGTH (150 mM).
+        generator : torch.Generator or None, optional
+            Generator on the model's device that every random number the
+            sampler draws comes from. Default None, which draws from torch's
+            global generator.
         """
         self.ddpm_model = ddpm_model
         self.encoder_model = encoder_model
         self.device = ddpm_model.device
+        self.generator = generator
         self.tokenizer = StarlingTokenizer()
-        self.ionic_strength = torch.tensor([[ionic_strength]], device=self.device)
+        # float32 whatever type it arrives as: a numpy float64 would otherwise
+        # make a float64 tensor, which the float32 model rejects (and MPS lacks)
+        self.ionic_strength = torch.tensor([[float(ionic_strength)]], dtype=torch.float32, device=self.device)
 
         self.num_timesteps: int = ddpm_model.num_timesteps
         self.latent_space_scaling_factor = ddpm_model.latent_space_scaling_factor
@@ -143,11 +159,16 @@ class BaseSampler(ABC):
         -------
         torch.Tensor
             Predicted noise, same shape as latents, in float32 whatever
-            precision the network runs in.
+            precision the network runs in. It is always a new tensor, never
+            the model's own output buffer.
         """
         batched_timesteps = torch.full((latents.shape[0],), timestep, device=latents.device, dtype=torch.long)
         predicted_noise: torch.Tensor = self.ddpm_model.model(latents, batched_timesteps, context, attention_mask)
-        return predicted_noise.float()
+        # Always return a copy. Under torch.compile(mode="reduce-overhead") the
+        # output lives in a CUDA-graph buffer that the model's next call
+        # overwrites without any error, which silently corrupted the earlier
+        # predictions PLMS keeps and averages.
+        return predicted_noise.to(dtype=torch.float32, copy=True)
 
     @abstractmethod
     def denoising_step(
@@ -182,7 +203,12 @@ class BaseSampler(ABC):
             Latents at the end of the step.
         """
 
-    def _start_guidance(self, constraint: Constraint | None, sequence_length: int) -> ConstraintLogger | None:
+    def _start_guidance(
+        self,
+        constraint: Constraint | None,
+        sequence_length: int,
+        show_progress_bar: bool,
+    ) -> ConstraintLogger | None:
         """
         Prepare a constraint for this trajectory and return its logger.
 
@@ -196,6 +222,10 @@ class BaseSampler(ABC):
             Constraint to guide sampling with, if any.
         sequence_length : int
             Number of residues.
+        show_progress_bar : bool
+            Whether per-step progress bars are wanted at all. The logger only
+            shows its "Applying constraints" bar if this is True and the
+            constraint was made with verbose=True.
 
         Returns
         -------
@@ -219,11 +249,12 @@ class BaseSampler(ABC):
             self.num_timesteps,
             sequence_length,
         )
-        logger = ConstraintLogger(n_steps=self.num_timesteps, verbose=True)
+        logger = ConstraintLogger(n_steps=self.num_timesteps, verbose=show_progress_bar and constraint.verbose)
         logger.setup()
         return logger
 
     @torch.no_grad()
+    @float32_matmul_precision(MODEL_FLOAT32_MATMUL_PRECISION)
     def sample(
         self,
         num_conformations: int,
@@ -264,15 +295,19 @@ class BaseSampler(ABC):
             given to a sampler that does not support them.
         """
         check_conformation_count(num_conformations)
-        guidance_logger = self._start_guidance(constraint, len(sequence))
+        guidance_logger = self._start_guidance(constraint, len(sequence), show_per_step_progress_bar)
 
         context, attention_mask = self.encode_sequence(sequence)
-        latents = torch.randn((num_conformations, *LATENT_SHAPE), device=self.device)
+        latents = torch.randn((num_conformations, *LATENT_SHAPE), device=self.device, generator=self.generator)
+
+        progress_bar_position = PER_STEP_PROGRESS_BAR_POSITION
+        if guidance_logger is not None and guidance_logger.verbose:
+            progress_bar_position = CONSTRAINT_PROGRESS_BAR_POSITION + 1
 
         progress_bar = tqdm(
             total=self.n_steps,
             disable=not show_per_step_progress_bar,
-            position=1,
+            position=progress_bar_position,
             leave=False,
             desc=f"{self.name} steps (batch {batch_count} of {max_batch_count})",
         )
@@ -293,5 +328,35 @@ class BaseSampler(ABC):
         if guidance_logger is not None:
             guidance_logger.close()
 
-        # undo the scaling the diffusion model was trained on, then decode
-        return self.encoder_model.decode(latents / self.latent_space_scaling_factor)
+        return self.decode(latents)
+
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        """
+        Decode clean latents into distance maps, a few conformations at a time.
+
+        Decoding is by far the most memory-hungry part of sampling, so it is
+        done configs.VAE_DECODE_CHUNK_SIZE conformations at a time rather
+        than for the whole batch at once. The VAE treats every conformation
+        independently, so this does not change what is computed.
+
+        Parameters
+        ----------
+        latents : torch.Tensor
+            Clean latents in the diffusion model's scaled space, shape
+            (batch, 1, 24, 24).
+
+        Returns
+        -------
+        torch.Tensor
+            Distance maps in Angstroms, shape (batch, 1, 384, 384).
+        """
+        # undo the scaling the diffusion model was trained on
+        scaled_latents = latents / self.latent_space_scaling_factor
+
+        decoded_chunks = []
+        for chunk in torch.split(scaled_latents, configs.VAE_DECODE_CHUNK_SIZE):
+            # copy each chunk out straight away: under torch.compile(mode=
+            # "reduce-overhead") the decoder's output buffer is overwritten by
+            # its next call
+            decoded_chunks.append(self.encoder_model.decode(chunk).clone())
+        return torch.cat(decoded_chunks)

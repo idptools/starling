@@ -39,6 +39,7 @@ class DDPMSampler(BaseSampler):
         encoder_model: VAE,
         n_steps: int | None = None,
         ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
+        generator: torch.Generator | None = None,
     ) -> None:
         """
         Set up a DDPM sampler.
@@ -54,8 +55,12 @@ class DDPMSampler(BaseSampler):
             that every sampler can be constructed the same way.
         ionic_strength : float, optional
             Ionic strength in mM. Default configs.DEFAULT_IONIC_STRENGTH.
+        generator : torch.Generator or None, optional
+            Generator on the model's device that every random number the
+            sampler draws comes from. Default None, which draws from torch's
+            global generator.
         """
-        super().__init__(ddpm_model, encoder_model, ionic_strength)
+        super().__init__(ddpm_model, encoder_model, ionic_strength, generator)
 
         # every timestep, noisiest first
         self.timesteps = list(range(self.num_timesteps - 1, -1, -1))
@@ -105,4 +110,5 @@ class DDPMSampler(BaseSampler):
         if timestep == 0:
             return posterior_mean
 
-        return posterior_mean + self.posterior_variance[timestep].sqrt() * torch.randn_like(latents)
+        noise = torch.randn(latents.shape, device=latents.device, dtype=latents.dtype, generator=self.generator)
+        return posterior_mean + self.posterior_variance[timestep].sqrt() * noise

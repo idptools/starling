@@ -38,20 +38,25 @@ class ViT(nn.Module):
         patch_size: int = 3,
     ):
         """
-        Vision transformer model. The vision transformer model consists of a sequence encoder and a spatial transformer.
-        The sequence encoder is used to process the features of the context data (in our case protein sequences).
-        The spatial transformer is used to capture the relationships between the input data and the context data.
+        Vision transformer (DiT) noise predictor. The 24x24 latent is split into patches, the timestep
+        embedding scales and shifts the patch tokens, and a stack of DiT blocks lets the patch tokens
+        attend to each other and cross-attend to the context. The context (the embedded protein
+        sequence) is computed outside this module by the SequenceEncoder and passed to forward().
 
         Parameters
         ----------
         num_layers : int
-            The number of layers in the sequence encoder.
+            The number of DiT blocks.
         embed_dim : int
-            The input dimension of the data. Used to initialize the sequence encoder and spatial transformer.
+            The dimension of the patch tokens inside the DiT blocks.
         num_heads : int
-            The number of heads in the multi-head attention layer. Used to initialize the sequence encoder and spatial transformer.
+            The number of heads in the multi-head attention layers of the DiT blocks.
         context_dim : int
-            The dimension of the context data. Used to initialize the sequence encoder and spatial transformer.
+            The dimension of the context data (the SequenceEncoder's embed_dim). Used to initialize
+            the cross attention layers of the DiT blocks.
+        patch_size : int, optional
+            Height and width of each square patch of the 24x24 latent, by default 3 (an 8x8 grid
+            of 64 patch tokens). Must divide 24.
         """
         super().__init__()
         BASE = 64  # Base dimension for the model

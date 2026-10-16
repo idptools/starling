@@ -15,12 +15,16 @@ def linear_beta_schedule(timesteps: int) -> torch.Tensor:
     Returns
     -------
     torch.Tensor
-        A tensor containing the beta values.
+        A float32 tensor containing the beta values.
     """
     scale = 1000 / timesteps
     beta_start = scale * 0.0001
     beta_end = scale * 0.02
-    return torch.linspace(beta_start, beta_end, timesteps, dtype=torch.float64)
+    # computed in float64 but returned as float32, like the cosine schedule, so
+    # the buffers DiffusionModel derives from it are float32 (float64 buffers
+    # promote q_sample's noised latents to float64, which the float32 network
+    # rejects, and MPS does not support float64 at all)
+    return torch.linspace(beta_start, beta_end, timesteps, dtype=torch.float64).float()
 
 
 def cosine_beta_schedule(timesteps: int, s: float = 0.008) -> torch.Tensor:
@@ -39,7 +43,7 @@ def cosine_beta_schedule(timesteps: int, s: float = 0.008) -> torch.Tensor:
     Returns
     -------
     torch.Tensor
-        A tensor containing the beta values.
+        A float32 tensor containing the beta values.
     """
     steps = timesteps + 1
     x = torch.linspace(0, timesteps, steps)
@@ -70,7 +74,7 @@ def sigmoid_beta_schedule(
     Returns
     -------
     torch.Tensor
-        A tensor containing the beta values.
+        A float32 tensor containing the beta values.
     """
     if timesteps < 1:
         raise ValueError("timesteps must be a positive integer")
@@ -88,4 +92,5 @@ def sigmoid_beta_schedule(
     )
     alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-    return torch.clip(betas, 0, 0.999)
+    # computed in float64 but returned as float32 (see linear_beta_schedule)
+    return torch.clip(betas, 0, 0.999).float()

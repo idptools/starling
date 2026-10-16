@@ -42,6 +42,8 @@ starling.structure.ensemble.Ensemble
       ~Ensemble.bme_result
       ~Ensemble.has_bme_weights
       ~Ensemble.has_structures
+      ~Ensemble.ionic_strength
+      ~Ensemble.metadata
       ~Ensemble.theta_scan_result
       ~Ensemble.trajectory
    

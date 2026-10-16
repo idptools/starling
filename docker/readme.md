@@ -73,7 +73,7 @@ This generates a `.starling` archive containing 200 distance-map conformations.
 
 ### Single sequence with 3D structures
 
-Add `-r` / `--return_structures` to also produce PDB topology and XTC trajectory files:
+Add `-r` / `--return_structures` to also produce PDB topology and XTC trajectory files. These structures are relaxed with the Mpipi-GG force field (restrained to their STARLING distance maps) by default; add `--no-relax` to get the raw reconstructed structures instead:
 
 ```bash
 docker run --rm --gpus all \
@@ -88,9 +88,11 @@ docker run --rm --gpus all \
 
 | File | Description |
 |------|-------------|
-| `*.starling` | Binary ensemble archive (distance maps + metadata) |
-| `*.pdb` | PDB topology (when `--return_structures` is used) |
-| `*.xtc` | XTC trajectory with all conformations (when `--return_structures` is used) |
+| `<name>.starling` | Binary ensemble archive (distance maps + metadata, plus the structures when `--return_structures` is used) |
+| `<name>_STARLING.pdb` | PDB topology (when `--return_structures` is used) |
+| `<name>_STARLING.xtc` | XTC trajectory with all conformations (when `--return_structures` is used) |
+
+`<name>` is `sequence_1` for a single sequence (or the `--outname` you pass), or the sequence names from your input file.
 
 ### From a FASTA file
 
@@ -111,14 +113,19 @@ docker run --rm --gpus all \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-c, --conformations` | 400 | Number of conformations to generate |
-| `--steps` | 25 | DDPM diffusion steps (lower = faster, higher = more diverse) |
+| `-s, --steps` | 30 | Number of sampler steps (DDIM warns below 10 steps, PLMS needs at least 20, and DDPM ignores this and always uses all 1000 timesteps) |
+| `--sampler` | `ddim` | Sampler: `ddim`, `ddpm`, `plms` or `dpmpp` |
 | `-d, --device` | auto | Device: `cpu`, `cuda:0`, `cuda:1`, etc. |
-| `-b, --batch_size` | auto | Batch size for generation |
-| `-r, --return_structures` | off | Generate PDB + XTC 3D structures |
-| `--ionic_strength` | 150 | Solvent ionic strength: 20, 150, or 300 mM |
-| `-o, --output_directory` | `.` | Output directory |
-| `--outname` | auto | Override output filename prefix (single-sequence mode) |
+| `-b, --batch_size` | 100 | Batch size for generation |
+| `-r, --return_structures` | off | Generate PDB + XTC 3D structures (relaxed with Mpipi-GG by default) |
+| `--relax / --no-relax` | relax with `-r` | Relax the `-r` structures with Mpipi-GG; `--relax` without `-r` is an error |
+| `--compile-forces` | off | Fuse the CUDA thermalization forces for faster relaxation of large jobs (needs `-r`, relaxation and a GPU) |
+| `--ionic_strength` | 150 | Solvent ionic strength in mM (STARLING was trained at 20, 150 and 300 mM) |
+| `--remove-errors` | off | Discard physically impossible conformations and regenerate replacements |
+| `-o, --output_directory` | `.` | Output directory (must already exist) |
+| `--outname` | `sequence_1` | Output filename prefix (single-sequence mode) |
 | `-v, --verbose` | off | Verbose output |
+| `--disable_progress_bar` | off | Hide both progress bars |
 
 ---
 
@@ -177,8 +184,12 @@ docker run --rm \
 docker run --rm \
   -v $(pwd)/output:/work \
   --entrypoint starling2starling \
-  starling /work/my_ensemble.starling --error-check --remove-errors -o /work/fixed_
+  starling /work/my_ensemble.starling --remove-errors -o /work
 ```
+
+`--remove-errors` implies `--error-check`. If any erroneous conformations are found, they are removed and the result is written to `/work/fixed_my_ensemble.starling`; otherwise nothing is written.
+
+Note that structures that `starling2pdb` and `starling2xtc` reconstruct for an archive without structures are not relaxed, and the converters never re-save the input `.starling` file.
 
 ### All conversion commands
 
@@ -189,8 +200,9 @@ docker run --rm \
 | `starling2numpy` | `.starling` | `.npy` | Raw distance maps as NumPy array |
 | `starling2sequence` | `.starling` | stdout | Print amino-acid sequence |
 | `starling2info` | `.starling` | stdout | Print metadata (version, date, Rg, etc.) |
-| `starling2starling` | `.starling` | `.starling` | Re-save with optional error removal |
+| `starling2starling` | `.starling` | `.starling` | Error check; with `--remove-errors`, write `fixed_<name>.starling` |
 | `numpy2starling` | `.npy` | `.starling` | Restore archive from NumPy (legacy) |
+| `xtc2starling` | `.xtc` + `.pdb` | `.starling` | Convert an MD trajectory to STARLING (keeps its coordinates) |
 
 ---
 
@@ -224,23 +236,25 @@ docker run --rm --gpus all \
   --sequence-identity-max 0.9 \
   --length-min 40 \
   --length-max 800 \
-  --rerank \
   --out /work/filtered_results \
   --out-format csv
 ```
+
+Results are written to `<out>.csv` (or `<out>.jsonl`) plus a FASTA file of the hits, `<out>.fasta`.
 
 ### Key search options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--seq` | — | Query sequence(s), can be repeated |
+| `--seq` | — | Query sequence(s); several can follow one `--seq`, and the flag can be repeated |
 | `--k` | 10 | Number of neighbors to return |
 | `--nprobe` | 64 | FAISS probe count (higher = slower but more accurate) |
-| `--exclude-exact` | on | Skip exact sequence matches |
-| `--sequence-identity-max` | — | Filter by max sequence identity |
+| `--exclude-exact` / `--include-exact` | exclude | Skip exact sequence matches |
+| `--sequence-identity-max` | — | Filter by max sequence identity (0–1, inclusive) |
 | `--length-min` / `--length-max` | — | Filter by target sequence length |
-| `--rerank` | off | Re-embed top hits for more accurate ranking |
-| `-o, --out` | `nearest_neighbors` | Output file basename |
+| `--rerank` / `--no-rerank` | rerank | Re-encode the top hits and the queries for exact rescoring |
+| `--device` | auto | Device for encoding queries (`cuda`, then `mps`, then `cpu`) |
+| `--out` | `nearest_neighbors` | Output file basename |
 | `--out-format` | `csv` | Output format: `csv` or `jsonl` |
 
 ---
@@ -255,7 +269,7 @@ docker run --rm --gpus all \
   starling \
   --device cuda:0 \
   --batch-size 512 \
-  --steps 25
+  --steps 30
 ```
 
 ---

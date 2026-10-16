@@ -10,7 +10,7 @@ from starling.models.normalization import RMSNorm
 
 
 class LayerNorm(nn.Module):
-    r"""LayerNorm that supports two data formats: channels_last (default) or channels_first.
+    r"""LayerNorm that supports two data formats: channels_last or channels_first (default).
     The ordering of the dimensions in the inputs. channels_last corresponds to inputs with
     shape (batch_size, height, width, channels) while channels_first corresponds to inputs
     with shape (batch_size, channels, height, width).
@@ -284,11 +284,14 @@ class ResBlockDecBasic(nn.Module):
         out_channels : int
             Number of output channels.
         stride : int
-            Stride of the first convolutional layer.
+            Upsampling factor of the second convolutional layer (and of the shortcut); 1 keeps
+            the spatial size. The first convolutional layer always has stride 1.
         norm : str
-            Normalization layer to use. Options are "batch", "instance", "layer", and "group".
+            Normalization layer to use. Options are "batch", "instance", "layer", "rms", and "group".
+        last_layer : bool, optional
+            Not used; accepted because the decoder passes it to the last block of each stage.
         kernel_size : int, optional
-            Kernel size for convolutional layers. Default is None.
+            Kernel size for convolutional layers. Default is None (3).
         """
 
         super().__init__()
@@ -300,6 +303,7 @@ class ResBlockDecBasic(nn.Module):
             "batch": nn.BatchNorm2d,
             "instance": nn.InstanceNorm2d,
             "layer": LayerNorm,
+            "rms": RMSNorm,
             "group": nn.GroupNorm,
         })
 

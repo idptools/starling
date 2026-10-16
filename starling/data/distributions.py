@@ -49,7 +49,10 @@ class DiagonalGaussianDistribution(object):
 
     def kl(self, other=None):
         if self.deterministic:
-            return torch.Tensor([0.0])
+            # zeros shaped, typed and placed like the per-sample sums below: a
+            # bare torch.Tensor([0.0]) is a CPU tensor, which cannot be added to
+            # CUDA losses
+            return torch.zeros_like(self.mean).sum(dim=[1, 2, 3])
         else:
             if other is None:
                 return 0.5 * torch.sum(
@@ -68,7 +71,8 @@ class DiagonalGaussianDistribution(object):
 
     def nll(self, sample, dims=[1, 2, 3]):
         if self.deterministic:
-            return torch.Tensor([0.0])
+            # zeros shaped, typed and placed like the sum below (see kl)
+            return torch.zeros_like(self.mean).sum(dim=dims)
         logtwopi = np.log(2.0 * np.pi)
         return 0.5 * torch.sum(
             logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,

@@ -27,7 +27,6 @@
       MLP
       SequenceEncoder
       SinusoidalPosEmb
-      SpatialTransformer
       TransformerEncoder
    
    

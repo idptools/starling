@@ -1,3 +1,11 @@
+from typing import Final
+
+# Token used to pad batches of sequences to a common length. Its character, '0',
+# is in the vocabulary so decode() can recognise and drop padding, but it is
+# not a residue, so encode() rejects it.
+PADDING_TOKEN: Final[int] = 0
+
+
 class StarlingTokenizer:
     """Lightweight amino-acid tokenizer used across STARLING.
 
@@ -17,7 +25,8 @@ class StarlingTokenizer:
 
     Notes
     -----
-    * Unknown characters raise :class:`KeyError` during encoding.
+    * Unknown characters (including the padding character ``'0'``, lowercase
+      letters and non-ASCII characters) raise :class:`KeyError` during encoding.
     * Padding/reserved ``0`` tokens are stripped during decode.
     """
 
@@ -51,7 +60,9 @@ class StarlingTokenizer:
         # Build encode translation table (byte -> id). 255 = sentinel for "unknown".
         table = bytearray([255] * 256)
         for ch, idx in self.aa_to_int.items():
-            table[ord(ch)] = idx
+            # padding is not a residue, so '0' stays "unknown" for encode()
+            if idx != PADDING_TOKEN:
+                table[ord(ch)] = idx
         self._enc_table = bytes(table)
 
         # Build decode translation table (id -> ASCII byte), unknown -> '?'
@@ -60,12 +71,30 @@ class StarlingTokenizer:
             inv[idx] = ord(ch)
         self._dec_table = bytes(inv)
 
-    def encode(self, sequence: str):
+    def encode(self, sequence: str) -> list[int]:
         """
         Encode a string of amino acids into a list[int].
-        Raises ValueError if an unknown character is present.
+
+        Parameters
+        ----------
+        sequence : str
+            Amino acid sequence in upper-case one-letter codes.
+
+        Returns
+        -------
+        list of int
+            One token (1-20) per residue.
+
+        Raises
+        ------
+        KeyError
+            If the sequence contains anything other than the 20 amino acids,
+            including the padding character '0' and non-ASCII characters.
         """
-        b = sequence.encode("ascii")
+        try:
+            b = sequence.encode("ascii")
+        except UnicodeEncodeError as error:
+            raise KeyError(f"Unknown token '{sequence[error.start]}' at position {error.start}") from error
         # bytes of ids (0..255; 255 means unknown)
         enc = b.translate(self._enc_table)
         if 255 in enc:

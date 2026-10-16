@@ -16,6 +16,7 @@
       :toctree:
       :nosignatures:
    
+      build_theta_grid
       find_optimal_theta
       theta_scan
    

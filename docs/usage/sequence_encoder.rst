@@ -80,10 +80,26 @@ Control how embeddings are returned and saved:
     # Return a single embedding vector per sequence
     aggregated = sequence_encoder(sequence, ionic_strength=150, aggregate=True)
     
-    # Save embeddings to disk
+    # Save embeddings to disk instead of returning them: each sequence is
+    # written to results/embeddings/<name>.pt (the directory is created if
+    # needed) and the function returns None
     sequence_encoder(
         sequence,
-    ionic_strength=150,
+        ionic_strength=150,
         output_directory="results/embeddings"
     )
+
+Batching
+~~~~~~~~
+
+Sequences are sorted by length (longest first) before being split into batches
+of ``batch_size``, which keeps padding low. With ``bucket=True``, batches are
+also split wherever the length bucket (``L // bucket_size``, with
+``bucket_size`` a width in residues, default 32) changes, so no sequence is
+padded by ``bucket_size`` residues or more, at the cost of more, smaller
+batches:
+
+.. code-block:: python
+
+    embeddings = sequence_encoder("path/to/sequences.fasta", batch_size=64, bucket=True, bucket_size=32)
 

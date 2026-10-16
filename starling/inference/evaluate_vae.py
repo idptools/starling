@@ -11,10 +11,10 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from tabulate import tabulate
 from tqdm import tqdm
 
 from starling.models.vae import VAE
+from starling.utilities import MODEL_FLOAT32_MATMUL_PRECISION, float32_matmul_precision
 
 
 def int_to_seq(int_seq):
@@ -111,7 +111,30 @@ def load_hdf5_compressed(file_path, keys_to_load=None):
 
 
 def reconstruct(model, distance_maps):
-    recon_dm, _ = model(distance_maps)
+    """
+    Reconstruct distance maps by decoding the posterior mean of their latents.
+
+    Calling model(distance_maps) decodes a random draw from the posterior, which
+    makes the reported reconstruction error stochastic; decoding the mean gives a
+    deterministic reconstruction. Runs under torch.inference_mode, so no autograd
+    graph is built.
+
+    Parameters
+    ----------
+    model : VAE
+        Trained VAE in eval mode.
+    distance_maps : torch.Tensor
+        Distance maps of shape (batch, 1, height, width) on the model's device, in
+        Angstroms.
+
+    Returns
+    -------
+    np.ndarray
+        Reconstructed distance maps with singleton dimensions squeezed out.
+    """
+    with torch.inference_mode(), float32_matmul_precision(MODEL_FLOAT32_MATMUL_PRECISION):
+        latents = model.encode(distance_maps).mode()
+        recon_dm = model.decode(latents)
     recon_dm = recon_dm.detach().cpu().numpy().squeeze()
 
     return recon_dm
@@ -167,8 +190,10 @@ def main():
     args = parser.parse_args()
 
     # Load the VAE model
-    vae = VAE.load_from_checkpoint(args.vae, map_location=args.device)
-    vae.eval()
+    # Load on the CPU, then move: map_location on the GPU would put the whole
+    # checkpoint there first, optimizer state included
+    vae = VAE.load_from_checkpoint(args.vae, map_location="cpu")
+    vae.to(args.device).eval()
 
     # Read the input file
     paths = read_input_file(args.input)
@@ -275,6 +300,16 @@ def main():
     results_df.to_csv(args.outfile, index=True)
 
     summary = results_df.tail(2).reset_index(drop=False)
+
+    # tabulate is only used for this printed summary and is not a declared
+    # dependency, so it is imported here rather than at module import time
+    try:
+        from tabulate import tabulate
+    except ImportError as error:
+        raise ImportError(
+            "evaluate_vae needs the 'tabulate' package to print its summary table; "
+            "install it with: pip install tabulate"
+        ) from error
 
     formatted_summary = tabulate(
         summary, headers="keys", tablefmt="pipe", floatfmt=".4f", showindex=False

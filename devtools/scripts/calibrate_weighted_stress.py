@@ -257,9 +257,14 @@ def run(args, rows):
     started = time.perf_counter()
     source = archive_sources(args.output)
     torch.set_num_threads(1)
+    # no TF32 anywhere: the VAE is all convolutions, which follow
+    # cudnn.allow_tf32 (on by default), not the matmul flag
     torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     checkpoint_hash = sha256(args.vae)
-    vae = VAE.load_from_checkpoint(str(args.vae), map_location=args.device).eval().to(args.device)
+    # Load on the CPU, then move: map_location on the GPU would put the whole
+    # checkpoint there first, optimizer state included
+    vae = VAE.load_from_checkpoint(str(args.vae), map_location="cpu").eval().to(args.device)
     report = {
         "purpose": "candidate calibration, not release certification",
         "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
@@ -272,6 +277,8 @@ def run(args, rows):
         "source_hashes": {str(p.relative_to(source)): sha256(p) for p in sorted(source.rglob("*.py"))},
         "torch": torch.__version__, "numpy": np.__version__, "mdtraj": md.__version__,
         "cuda": torch.version.cuda, "device": args.device,
+        "tf32": {"cuda_matmul": torch.backends.cuda.matmul.allow_tf32,
+                 "cudnn": torch.backends.cudnn.allow_tf32},
         "gpu": torch.cuda.get_device_name() if args.device.startswith("cuda") else None,
         "frames_per_sequence": args.frames, "iterations": args.iterations,
         "family_counts": {split: dict(Counter(r["family"] for r in rows if r["split"] == split))

@@ -17,6 +17,7 @@ starling.search.store.SequenceStore
    
       ~SequenceStore.__init__
       ~SequenceStore.close
+      ~SequenceStore.close_discard
       ~SequenceStore.close_publish
       ~SequenceStore.decode_header
       ~SequenceStore.decode_seq
@@ -35,5 +36,11 @@ starling.search.store.SequenceStore
    
 
    
+   
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~SequenceStore.conn
    
    

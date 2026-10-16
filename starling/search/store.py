@@ -46,8 +46,8 @@ Basic Usage
 >>> # Prepare rows: (gid, len, hash8, seq_blob, shard, local_idx, header_blob)
 >>> rows = []
 >>> for gid, seq in enumerate(sequences):
-...     seq_blob = SequenceStore.encode_seq(seq, compress=True)
-...     header_blob = SequenceStore.encode_header(header, compress=True)
+...     seq_blob = SequenceStore.encode_seq(seq, use_zstd=True)
+...     header_blob = SequenceStore.encode_header(header, use_zstd=True)
 ...     hash8 = SequenceStore.hash8(seq)
 ...     rows.append((gid, len(seq), hash8, seq_blob, shard_id, local_idx, header_blob))
 >>>
@@ -131,6 +131,7 @@ Methods Reference
 * ``insert_rows(rows)``: Bulk insert rows
 * ``close_publish()``: Commit, optimize, and atomically publish
 * ``close()``: Close connection without publishing
+* ``close_discard()``: Close and delete the unpublished temp file (failed builds)
 
 **Reader Methods:**
 
@@ -143,9 +144,9 @@ Methods Reference
 **Static Methods:**
 
 * ``hash8(seq)``: Compute 8-byte hash of sequence
-* ``encode_seq(seq, compress)``: Encode sequence to BLOB
+* ``encode_seq(seq, use_zstd)``: Encode sequence to BLOB
 * ``decode_seq(blob)``: Decode BLOB to sequence
-* ``encode_header(header, compress)``: Encode header to BLOB
+* ``encode_header(header, use_zstd)``: Encode header to BLOB
 * ``decode_header(blob)``: Decode BLOB to header
 
 Threading and Concurrency
@@ -193,13 +194,14 @@ See Also
 --------
 * :class:`IndexBuilder`: Uses SequenceStore during build
 * :class:`SearchEngine`: Uses SequenceStore for filtering/metadata
-* :mod:`starling.search.cli`: Command-line interface
+* :mod:`starling.scripts.starling_search`: Command-line interface (``starling-search``)
 
 Notes
 -----
 * Batch operations are orders of magnitude faster than single gets
 * Length-based filtering is extremely fast due to indexing
-* Writer temp files are automatically cleaned up on publish
+* Writer temp files are automatically cleaned up on publish, or by ``close_discard()``
+  when a build fails
 """
 
 from __future__ import annotations
@@ -226,7 +228,7 @@ class SequenceStore:
             shard     INTEGER,
             local_idx INTEGER,
             header    BLOB              -- 1 byte flag + payload (0=plain UTF-8, 1=zstd, NULL if missing)
-    )
+        )
     """
 
     _live_path: str
@@ -394,6 +396,29 @@ class SequenceStore:
             self.conn.close()
         except Exception:
             pass
+
+    def close_discard(self) -> None:
+        """
+        Writers only: close the connection and delete the unpublished temp file.
+
+        This is the failure-path counterpart to ``close_publish()``. If a build
+        fails part-way we don't want an orphaned ``*.building.<pid>.<ts>`` file
+        left sitting next to the live database, so the writer removes its own
+        temp file. The live database (if one exists) is never touched.
+
+        Raises
+        ------
+        RuntimeError
+            If called on a reader store.
+        """
+        if not getattr(self, "_is_writer", False):
+            raise RuntimeError("close_discard() is only valid on a writer store")
+
+        self.close()
+
+        assert self._tmp_path is not None
+        if os.path.exists(self._tmp_path):
+            os.remove(self._tmp_path)
 
     def insert_rows(
         self,

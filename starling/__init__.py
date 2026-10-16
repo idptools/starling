@@ -33,6 +33,15 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
         - disable (bool): Temporarily disable compilation
         - options (dict): Backend-specific options like {"triton.cudagraphs": True}
 
+        ``torch.compile`` accepts ``mode`` or ``options`` but not both, so
+        setting one removes the other from the stored settings (including
+        the default ``mode="default"``).
+
+    Raises
+    ------
+    ValueError
+        If both ``mode`` and ``options`` are passed.
+
     Examples
     --------
     >>> import starling
@@ -57,13 +66,23 @@ def set_compilation_options(enabled=None, **torch_compile_kwargs):
     from starling import configs
     from starling.inference.generation import model_manager
 
+    # torch.compile raises if given both mode and options
+    if "mode" in torch_compile_kwargs and "options" in torch_compile_kwargs:
+        raise ValueError("torch.compile accepts either mode or options, not both")
+
     # Only update if values are provided
     if enabled is not None:
         configs.TORCH_COMPILATION["enabled"] = enabled
 
-    # Update any provided options
+    # Update any provided options; whichever of mode/options is set last
+    # replaces the other, since the stored defaults include mode="default"
+    stored_options = cast(dict[str, object], configs.TORCH_COMPILATION["options"])
+    if "options" in torch_compile_kwargs:
+        stored_options.pop("mode", None)
+    if "mode" in torch_compile_kwargs:
+        stored_options.pop("options", None)
     for key, value in torch_compile_kwargs.items():
-        cast(dict[str, object], configs.TORCH_COMPILATION["options"])[key] = value
+        stored_options[key] = value
 
     model_manager.clear()
 

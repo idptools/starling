@@ -75,7 +75,8 @@ DEFAULT_THERMALIZATION_STEPS: Final[int] = 250
 DEFAULT_BATCH_SIZE: Final[int] = 100
 
 # two non-bonded beads closer than this fraction of their sigma count as a
-# clash. Mpipi-GG salt bridges sit at ~0.7 sigma, so this is set below that
+# clash. Mpipi-GG salt bridges sit at ~0.8-0.9 sigma (Wang-Frenkel plus
+# Debye-Hueckel minimum at 150 mM), so this is set well below that
 DEFAULT_CLASH_FRACTION: Final[float] = 0.6
 
 # the per-conformation quantities reported by GeometryDiagnostics
@@ -103,10 +104,11 @@ class GeometryDiagnostics:
         Mean distance between sequence neighbours, in Angstroms.
 
     max_bond_deviation : np.ndarray
-        Largest |bond length - 3.81 A| in the conformation, in Angstroms.
+        Largest absolute deviation of a bond length from 3.81 A in the
+        conformation, in Angstroms.
 
     n_clashes : np.ndarray
-        Number of non-bonded pairs (|i - j| >= 2) closer than clash_fraction
+        Number of non-bonded pairs (``|i - j| >= 2``) closer than clash_fraction
         times their Wang-Frenkel sigma.
 
     min_contact_ratio : np.ndarray
@@ -484,7 +486,7 @@ def relax_conformations(
         STARLING's default ionic strength (150 mM).
 
     min_separation : int, optional
-        Residue pairs with |i - j| >= min_separation are restrained; closer
+        Residue pairs with ``|i - j| >= min_separation`` are restrained; closer
         pairs are left to the force field. Default 4.
 
     tolerance : float, optional
@@ -765,7 +767,9 @@ def relax_ensemble(
 
     **kwargs
         Any other keyword argument of relax_conformations() (for example
-        tolerance, min_separation, device or batch_size).
+        tolerance, min_separation, device or batch_size). device and
+        batch_size also apply to building the MDS structures, if the
+        ensemble does not have them yet.
 
     Returns
     -------
@@ -782,8 +786,12 @@ def relax_ensemble(
             ensemble.ionic_strength if ensemble.ionic_strength is not None else configs.DEFAULT_IONIC_STRENGTH
         )
 
+    # build any missing MDS structures on the device and in the batch size the
+    # relaxation was asked to use, rather than build_ensemble_trajectory's
+    # defaults (which would e.g. use cuda:0 when device='cpu' or 'cuda:1')
+    trajectory_options = {key: kwargs[key] for key in ("device", "batch_size") if key in kwargs}
     # SOURSOP/MDTraj coordinates are in nm
-    trajectory = ensemble.build_ensemble_trajectory(progress_bar=progress_bar)
+    trajectory = ensemble.build_ensemble_trajectory(progress_bar=progress_bar, **trajectory_options)
     coordinates = trajectory.traj.xyz.astype(np.float64) * configs.CONVERT_ANGSTROM_TO_NM
     distance_maps = ensemble.distance_maps()
 

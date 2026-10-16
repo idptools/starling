@@ -31,7 +31,6 @@
       :toctree:
       :nosignatures:
    
-      ConditionalSequential
       ResNet_Decoder
       ResNet_Encoder
    

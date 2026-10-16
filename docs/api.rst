@@ -29,6 +29,30 @@ weighted Torch SMACOF on CPU, CUDA, or MPS.
    structure.bme
    structure.bme_utils
    structure.coordinates
+   structure.weighted_stress
+
+Structure Relaxation (Mpipi-GG)
+-------------------------------
+
+:func:`starling.generate` with ``return_structures=True`` relaxes the
+reconstructed structures with the Mpipi-GG force field by default, restrained
+to their STARLING distance maps. Structures built later from the distance maps
+(``Ensemble.trajectory`` or ``Ensemble.build_ensemble_trajectory()``) are not
+relaxed; use
+:func:`starling.minimizer.relax_ensemble <starling.minimizer.relax.relax_ensemble>`
+to relax the structures of an ensemble you have loaded or built yourself.
+
+.. autosummary::
+   :toctree: autosummary
+
+   minimizer
+   minimizer.relax
+   minimizer.forcefield
+   minimizer.restraints
+   minimizer.fire
+   minimizer.langevin
+   minimizer.parameters
+   minimizer.potentials
 
 Frontend
 --------
@@ -108,7 +132,6 @@ Search & Indexing
    search.search_engine
    search.store
    search.builder
-   search.similarity_search
    search.search_utils
 
 Configuration & Utilities

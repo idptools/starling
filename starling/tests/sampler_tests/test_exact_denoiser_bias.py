@@ -27,6 +27,14 @@ in it (a strict xfail that starts passing fails the suite):
 Both are discretization errors: test_bias_vanishes_with_more_steps shows
 them shrinking towards zero as the step count rises. DDPM (1000 steps, the
 sampler the model was trained for) and PLMS-30 pass everything.
+
+DDIM with very few steps (1 to 10) also has to reproduce the mean. Its
+timestep grid used to start far below the noise level of the initial latents
+(timestep 1, 501, 801 or 901), which missed the mean by up to 3 standard
+deviations; it is now stretched to start in pure noise. With 10 to 50 steps
+that must not narrow the spread by more than 5% beyond what the old grid did.
+(With 2 to 5 steps the old grids' spread was partly the initial noise passed
+through as if it were signal, and the stretched grids narrow it further.)
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ from typing import Final
 import numpy as np
 import pytest
 
+from starling.samplers import sampler_utilities
 from starling.tests.sampler_tests.exact_denoiser import GaussianMixture, draw_samples
 
 # 250 latents of 24x24 = 144,000 independent samples per run, which pins a
@@ -54,6 +63,18 @@ TWO_MODES: Final = GaussianMixture(weights=(0.3, 0.7), means=(1.5, -1.0), stds=(
 
 # halfway between the two modes
 MODE_BOUNDARY: Final[float] = 0.25
+
+# For few-step DDIM. Even timestep 992, where every grid now starts, holds a
+# little signal (sqrt(alpha_bar) = 0.011), which leaves the mean of this
+# distribution ~1% of its std short; sampling error is ~0.3%. Before the grid
+# was stretched, 1, 2, 5 and 10 steps missed it by 3.3, 0.31, 0.21 and 0.13 std.
+FEW_STEP_GAUSSIAN: Final = GaussianMixture.gaussian(mean=1.0, std=0.3)
+FEW_STEP_MEAN_TOLERANCE: Final[float] = 0.03  # in units of the distribution's std
+
+# How much further from 1 the std ratio of few-step DDIM may be on the
+# stretched grid than on the legacy grid (measured: at most 0.03 further, for
+# 10 steps on the narrow Gaussian: 0.717 vs 0.748)
+FEW_STEP_SPREAD_TOLERANCE: Final[float] = 0.05
 
 # every sampler at the settings STARLING uses (DDIM-30 is the default)
 DEFAULT_SAMPLERS: Final[tuple[tuple[str, int], ...]] = (
@@ -142,6 +163,32 @@ def test_two_mode_weights_positions_and_widths_are_unbiased(sampler, steps):
         width_ratio = mode.std() / std
         assert abs(position_error) < MODE_POSITION_TOLERANCE, f"mode at {mean} shifted by {position_error:+.3f} std"
         assert abs(width_ratio - 1.0) < SPREAD_TOLERANCE, f"mode at {mean} has std ratio {width_ratio:.3f}"
+
+
+@pytest.mark.filterwarnings("ignore:DDIM with .* steps narrows the ensemble")
+@pytest.mark.parametrize("steps", [1, 2, 5, 10])
+def test_few_step_ddim_reproduces_the_mean(steps):
+    """Few-step DDIM starts in pure noise, so it gets the mean right (it still narrows the spread)."""
+    samples = draw_samples("ddim", steps, FEW_STEP_GAUSSIAN, N_CONFORMATIONS)
+    mean_error = (samples.mean() - FEW_STEP_GAUSSIAN.mean) / FEW_STEP_GAUSSIAN.std
+    assert abs(mean_error) < FEW_STEP_MEAN_TOLERANCE, f"mean off by {mean_error:+.4f} std"
+
+
+@pytest.mark.parametrize("distribution", [FEW_STEP_GAUSSIAN, NARROW_GAUSSIAN], ids=["mean-1", "narrow"])
+@pytest.mark.parametrize("steps", [10, 20, 25, 50])
+def test_few_step_ddim_spread_is_no_worse_than_on_the_legacy_grid(monkeypatch, steps, distribution):
+    """Stretching the grid to start in pure noise must not cost few-step DDIM more than 5% of spread."""
+    stretched = draw_samples("ddim", steps, distribution, N_CONFORMATIONS)
+
+    # the legacy grid is what ddim_timesteps() builds when no grid is stretched
+    monkeypatch.setattr(sampler_utilities, "MAX_START_SIGNAL_SCALE", float("inf"))
+    legacy = draw_samples("ddim", steps, distribution, N_CONFORMATIONS)
+
+    stretched_error = abs(stretched.std() / distribution.std - 1.0)
+    legacy_error = abs(legacy.std() / distribution.std - 1.0)
+    assert stretched_error <= legacy_error + FEW_STEP_SPREAD_TOLERANCE, (
+        f"std ratio off by {stretched_error:.3f} (legacy grid {legacy_error:.3f})"
+    )
 
 
 @pytest.mark.slow

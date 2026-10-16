@@ -9,7 +9,8 @@ References
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import warnings
+from typing import TYPE_CHECKING, Final
 
 import torch
 
@@ -25,6 +26,13 @@ from starling.samplers.sampler_utilities import (
 if TYPE_CHECKING:
     from starling.models.diffusion import DiffusionModel
     from starling.models.vae import VAE
+
+
+# Below this many steps DDIM's deterministic steps are so large that they pull
+# samples towards their mean: with an exact noise predictor the spread of
+# N(1, 0.3^2) came out at 0.05-0.57 of its true value with 2-5 steps and ~0.8
+# with 10 (see starling/tests/sampler_tests/test_exact_denoiser_bias.py)
+DDIM_FEW_STEPS_WARNING: Final[int] = 10
 
 
 class DDIMSampler(BaseSampler):
@@ -47,6 +55,7 @@ class DDIMSampler(BaseSampler):
         ionic_strength: float = configs.DEFAULT_IONIC_STRENGTH,
         ddim_discretize: str = UNIFORM_DISCRETIZATION,
         ddim_eta: float = 0.0,
+        generator: torch.Generator | None = None,
     ) -> None:
         """
         Set up a DDIM sampler.
@@ -67,6 +76,10 @@ class DDIMSampler(BaseSampler):
         ddim_eta : float, optional
             Interpolates between deterministic DDIM (0, default) and a process
             with DDPM's noise level (1); eta in Eq. 16 of [1].
+        generator : torch.Generator or None, optional
+            Generator on the model's device that every random number the
+            sampler draws comes from. Default None, which draws from torch's
+            global generator.
 
         Raises
         ------
@@ -74,8 +87,15 @@ class DDIMSampler(BaseSampler):
             If n_steps is not an integer between 1 and the number of training
             timesteps, or ddim_eta is outside [0, 1].
         """
-        super().__init__(ddpm_model, encoder_model, ionic_strength)
+        super().__init__(ddpm_model, encoder_model, ionic_strength, generator)
         check_step_count(n_steps, self.num_timesteps)
+        if n_steps < DDIM_FEW_STEPS_WARNING:
+            warnings.warn(
+                f"DDIM with {n_steps} steps narrows the ensemble: such large deterministic steps pull "
+                f"samples towards their mean. Use at least {DDIM_FEW_STEPS_WARNING} steps (30 is the "
+                "default), or DPM++ for fewer steps.",
+                stacklevel=2,
+            )
         if not 0.0 <= ddim_eta <= 1.0:
             raise ValueError("ddim_eta must be between 0 and 1")
 
@@ -85,9 +105,11 @@ class DDIMSampler(BaseSampler):
         # size of the fresh noise each step adds (sigma_t, Eq. 16 of [1])
         alpha_bar = self.alphas_cumprod[self.timesteps]
         next_alpha_bar = self.alphas_cumprod[self.next_timesteps]
-        self.noise_scales = (
+        # kept as Python floats, so checking whether a step adds noise does
+        # not force a GPU-to-CPU synchronization every step
+        self.noise_scales: list[float] = (
             ddim_eta * ((1 - next_alpha_bar) / (1 - alpha_bar) * (1 - alpha_bar / next_alpha_bar)).sqrt()
-        )
+        ).tolist()
 
     def denoising_step(
         self,
@@ -127,4 +149,5 @@ class DDIMSampler(BaseSampler):
             self.alphas_cumprod[timestep],
             self.alphas_cumprod[self.next_timesteps[step_index]],
             self.noise_scales[step_index],
+            generator=self.generator,
         )

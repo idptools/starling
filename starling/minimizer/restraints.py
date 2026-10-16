@@ -7,7 +7,7 @@ structure of each conformation where STARLING put it. We do this with flat-
 bottomed harmonic restraints on every pair of residues separated by at least
 min_separation positions in sequence:
 
-    U_ij = (k_pair / 2) max(0, |r_ij - r0_ij| - tolerance)^2
+    U_ij = (k_pair / 2) max(0, abs(r_ij - r0_ij) - tolerance)^2
 
 where r0_ij is the reference distance. Pairs closer together in sequence are
 left entirely to the force field. Inside the tolerance a restraint exerts no
@@ -52,7 +52,7 @@ class DistanceRestraints:
     Attributes
     ----------
     min_separation : int
-        Pairs with |i - j| >= min_separation are restrained.
+        Pairs with ``|i - j| >= min_separation`` are restrained.
 
     tolerance : float
         Half-width of the flat bottom in Angstroms.
@@ -96,7 +96,7 @@ class DistanceRestraints:
             Default None (no floor).
 
         min_separation : int, optional
-            Minimum sequence separation |i - j| of a restrained pair. Default
+            Minimum sequence separation ``|i - j|`` of a restrained pair. Default
             4, so bonds, i/i+2 and i/i+3 pairs are left to the force field.
 
         tolerance : float, optional

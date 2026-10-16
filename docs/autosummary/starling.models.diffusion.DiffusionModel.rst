@@ -181,6 +181,14 @@ starling.models.diffusion.DiffusionModel
       ~DiffusionModel.on_gpu
       ~DiffusionModel.strict_loading
       ~DiffusionModel.trainer
+      ~DiffusionModel.latent_space_scaling_factor
+      ~DiffusionModel.betas
+      ~DiffusionModel.alphas_cumprod
+      ~DiffusionModel.alphas_cumprod_prev
+      ~DiffusionModel.sqrt_recip_alphas
+      ~DiffusionModel.sqrt_alphas_cumprod
+      ~DiffusionModel.sqrt_one_minus_alphas_cumprod
+      ~DiffusionModel.posterior_variance
       ~DiffusionModel.training
    
    

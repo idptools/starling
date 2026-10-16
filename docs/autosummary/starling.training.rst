@@ -28,5 +28,6 @@
    :toctree:
    :recursive:
 
+   diffusion_train
    vae_train
 

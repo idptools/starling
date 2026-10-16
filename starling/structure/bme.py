@@ -9,6 +9,19 @@ data while minimizing the bias introduced (measured by relative entropy). This
 provides a principled way to integrate experimental constraints into molecular
 simulation ensembles.
 
+Specifically, the weights w minimise
+
+    L(w) = (1/2) * chi^2(w) + theta * D_KL(w || w0)
+
+where chi^2(w) = sum_i (<F_i>_w - F_i^exp)^2 / sigma_i^2, w0 are the initial
+weights and theta sets how strongly we stay close to them. This is the BME
+objective (m/2) * chi_r^2 - theta * S_rel of Bottaro, Bengtsen &
+Lindorff-Larsen, Methods Mol. Biol. 2112, 219-240 (2020), where their reduced
+chi_r^2 = chi^2 / m over the m observables and S_rel = -D_KL. It is solved
+through its Lagrange dual (see BME._objective_and_gradient), which gives w_k
+proportional to w0_k * exp(-sum_i lambda_i F_ik) with
+lambda_i = (<F_i> - F_i^exp) / (theta sigma_i^2).
+
 Key Classes
 -----------
 ExperimentalObservable : dataclass
@@ -29,8 +42,11 @@ The BME functionality is integrated into the Ensemble class and is the
 recommended way to use BME with STARLING.
 
 >>> # Using with Ensemble
+>>> import numpy as np
 >>> from starling import generate, load_ensemble
->>> ensemble = generate("GS"*30, conformations=200) # or load_ensemble("path/to/ensemble")
+>>> from starling.structure.bme import ExperimentalObservable
+>>> # or load_ensemble("path/to/ensemble.starling")
+>>> ensemble = generate("GS"*30, conformations=200, return_single_ensemble=True)
 >>> # Calculate observables
 >>> rg_values = ensemble.radius_of_gyration()
 >>> ete_values = ensemble.end_to_end_distance()
@@ -74,10 +90,10 @@ to observables not directly supported by STARLING.
 ... )
 >>>
 >>> # Calculated values from ensemble (n_frames x n_observables)
->>> calculated = np.random.randn(1000, 3) * 2 + np.array([24, 65, 0.25])
+>>> calculated = np.random.randn(1000, 2) * 2 + np.array([24, 65])
 >>>
 >>> # Create and fit BME model
->>> bme = BME([obs_rg, obs_ete, obs_helix], calculated, theta=0.5)
+>>> bme = BME([obs_rg, obs_ete], calculated, theta=0.5)
 >>> result = bme.fit(verbose=True)
 >>>
 >>> # Use optimized weights
@@ -86,7 +102,7 @@ to observables not directly supported by STARLING.
 
 from datetime import datetime
 import math
-from typing import Callable, Optional, Tuple, TypedDict, Union
+from typing import Callable, List, Optional, Tuple, TypedDict, Union
 
 import numpy as np
 from scipy.optimize import minimize
@@ -105,7 +121,7 @@ from starling.structure.bme_utils import (
 
 
 class ThetaScanKwargs(TypedDict, total=False):
-    theta_range: tuple[float, float] | np.ndarray
+    theta_range: tuple[float, float] | list[float] | np.ndarray
     n_points: int
     log_scale: bool
     max_iterations: int
@@ -132,6 +148,14 @@ class BME:
         theta automatically and ``fit(auto_theta=False)`` uses ``DEFAULT_THETA``.
     initial_weights : np.ndarray, optional
         Initial weights for ensemble frames. If None, uniform weights are used.
+
+    Notes
+    -----
+    The optimised weights minimise (1/2) * chi^2(w) + theta * D_KL(w || w0),
+    with chi^2 summed (not averaged) over the observables. This is the BME
+    objective of Bottaro, Bengtsen & Lindorff-Larsen (Methods Mol. Biol. 2112,
+    219-240, 2020) written without their reduced chi-squared. Larger theta
+    keeps the weights closer to the initial weights w0.
     """
 
     def __init__(
@@ -255,6 +279,12 @@ class BME:
         This implements the maximum entropy objective with Gaussian priors:
         L = lambda^T * O_exp + (theta/2) * lambda^T * Sigma^2 * lambda + log(Z)
 
+        This is the Lagrange dual of the primal BME objective
+        (1/2) * chi^2(w) + theta * D_KL(w || w0) (Bottaro et al., Methods Mol.
+        Biol. 2112, 219-240, 2020). At its minimum the gradient
+        vanishes, so lambda_i = (<O_calc,i> - O_exp,i) / (theta * sigma_i^2),
+        which is the stationarity condition of that primal objective.
+
         Parameters
         ----------
         lambdas : np.ndarray
@@ -324,7 +354,7 @@ class BME:
 
     def scan_theta(
         self,
-        theta_range: Union[Tuple[float, float], np.ndarray] = (0.01, 10.0),
+        theta_range: Union[Tuple[float, float], List[float], np.ndarray] = (0.01, 10.0),
         n_points: int = 15,
         log_scale: bool = True,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
@@ -343,10 +373,12 @@ class BME:
 
         Parameters
         ----------
-        theta_range : tuple[float, float] | np.ndarray, optional
-            - If a tuple (min_theta, max_theta) is provided, generate a grid of
-              size n_points within this range (logarithmic if log_scale=True).
-            - If a 1D array is provided, use it as the exact grid of theta values.
+        theta_range : tuple[float, float] | list[float] | np.ndarray, optional
+            - If a tuple (min_theta, max_theta) of length 2 is provided,
+              generate a grid of size n_points within this range (logarithmic
+              if log_scale=True). Both endpoints must be positive.
+            - If a list or 1D numpy array is provided, use it as the exact grid
+              of theta values. It must contain at least 2 values, all positive.
 
             Default is (0.01, 10.0).
         n_points : int, optional
@@ -385,6 +417,10 @@ class BME:
             - optimal_theta: selected θ value
             - optimal_idx: index of the selected θ
             - method: human-readable name of the knee selection method used
+
+            Failed fits are kept (with NaN chi-squared, phi and KL divergence)
+            but are never selected as the optimal θ; a RuntimeWarning lists
+            them, and a RuntimeError is raised if every fit failed.
 
         Notes
         -----
@@ -476,10 +512,12 @@ class BME:
             print(f"  Frames: {self.n_frames}")
             print(f"  Chi-squared initial: {chi_squared_initial:.4f}")
 
+        # "disp" is deliberately not passed: it is deprecated for L-BFGS-B in
+        # SciPy 1.16 (and removed in 1.18), and verbose output is printed here
         optimization_result = minimize(
             self._objective_and_gradient,
             self._lambdas,
-            options={"maxiter": max_iterations, "disp": verbose},
+            options={"maxiter": max_iterations},
             method=optimizer,
             jac=True,
             bounds=self._bounds,
@@ -502,7 +540,8 @@ class BME:
                     f"  Optimization successful (iterations: {optimization_result.nit})"
                 )
                 print(f"  Chi-squared final: {chi_squared_final:.4f}")
-                print(f"  Effective number of frames: {phi:.4f}")
+                print(f"  phi (effective fraction of frames): {phi:.4f}")
+                print(f"  Message: {optimization_result.message}")
 
             result = BMEResult(
                 weights=weights_opt,
@@ -560,6 +599,58 @@ class BME:
         auto_theta: bool = True,
         theta_scan_kwargs: ThetaScanKwargs | None = None,
     ) -> BMEResult:
+        """
+        Fit the BME weights, choosing theta manually or by a theta scan.
+
+        Theta is chosen in this order of precedence:
+
+        1. If ``theta`` is given here, it is used directly (no scan).
+        2. Otherwise, if ``auto_theta`` is True (the default) and no theta was
+           passed to the constructor, a theta scan (:meth:`scan_theta`) is run
+           and the fit at the selected (knee) theta is returned.
+        3. Otherwise the constructor theta is used, or ``DEFAULT_THETA`` if
+           none was given.
+
+        Parameters
+        ----------
+        max_iterations : int, optional
+            Maximum number of optimizer iterations for each single-theta fit.
+            Default DEFAULT_MAX_ITERATIONS.
+        optimizer : str, optional
+            Optimization method passed to scipy.optimize.minimize. Must support
+            ``jac=True`` and ``bounds``. Default DEFAULT_OPTIMIZER.
+        verbose : bool, optional
+            If True, print progress information. Default True.
+        theta : float, optional
+            Explicit, finite, positive theta. Overrides both ``auto_theta`` and
+            the constructor theta. Default None.
+        auto_theta : bool, optional
+            If True (default) and neither ``theta`` nor a constructor theta is
+            given, select theta automatically with a theta scan. If False, the
+            constructor theta (or ``DEFAULT_THETA``) is used.
+        theta_scan_kwargs : ThetaScanKwargs, optional
+            Keyword arguments forwarded to :meth:`scan_theta` in automatic mode
+            (e.g. ``theta_range``, where a tuple of length 2 is a (min, max)
+            range sampled with ``n_points`` values and a list or numpy array is
+            an explicit grid of at least 2 positive values). Defaults to a
+            15-point log-spaced scan over (0.01, 10.0).
+
+        Returns
+        -------
+        BMEResult
+            The fit result. If the single-theta optimization fails,
+            ``success`` is False, the weights are the initial weights and
+            chi-squared/phi are NaN. In automatic mode the selected fit is
+            always one that succeeded.
+
+        Raises
+        ------
+        ValueError
+            If ``theta`` is not finite and positive, or the theta scan
+            settings are invalid.
+        RuntimeError
+            If, in automatic mode, every fit in the theta scan failed.
+        """
         # 1) choose effective theta
         if theta is not None:
             if not math.isfinite(theta) or theta <= 0:
@@ -600,7 +691,7 @@ class BME:
                     f"[BME] Selected θ={self._theta:.4g} via {scan_result.method} "
                     f"(Chi_squared_init={self._result.chi_squared_initial:.3f}, "
                     f"Chi_squared_final={self._result.chi_squared_final:.3f}, "
-                    f"N_eff={self._result.phi:.3f})."
+                    f"phi={self._result.phi:.3f})."
                 )
             return self._result
 
