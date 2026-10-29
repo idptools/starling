@@ -1,6 +1,6 @@
 # STARLING throughput benchmarks
 
-These scripts measure how fast STARLING generates ensembles on your computer, in conformers per minute. Each one times `starling.generate()` end to end, from sequence in to ensemble out, in one of three modes:
+These scripts measure how fast STARLING generates ensembles on your computer, in conformers per minute. Each one times `starling.generate()` end-to-end, from sequence in to ensemble out, in one of three modes:
 
 | Script | Mode | What `generate()` is asked for |
 |---|---|---|
